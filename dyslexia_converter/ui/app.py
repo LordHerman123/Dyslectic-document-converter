@@ -23,6 +23,7 @@ from ..fonts import FONT_CHOICES, get_family
 from ..render import preview
 from ..settings import PRESET_DISCLAIMER, PRESETS, FormatSettings, SettingsStore
 from ..transform.spelling import CustomWords
+from .theme import make_theme, palette
 
 log = logging.getLogger("dyslexia_converter")
 
@@ -40,7 +41,7 @@ class ConverterApp:
         self.settings: FormatSettings = self.store.load_format() if self.store.has_saved_format() \
             else PRESETS["Standard"].copy()
         self.ai_settings = self.store.load_ai()
-        self.ui = {"text_scale": 1.0, "high_contrast": False, **self.store.load_ui()}
+        self.ui = {"text_scale": 1.0, "high_contrast": False, "dark_mode": False, **self.store.load_ui()}
         self.keystore = KeyStore()
         self.assistant = AIAssistant(self.ai_settings, self.keystore)
         self.custom_words = CustomWords()
@@ -85,9 +86,8 @@ class ConverterApp:
         items = getattr(self, "_notices", [])
         self.notice_list.controls.clear()
         for idx, (kind, message, action) in enumerate(items):
-            icon, color = {"warning": (ft.Icons.WARNING_AMBER, "#FFF4D6"),
-                           "action": (ft.Icons.TOUCH_APP, "#E3F0FF"),
-                           "info": (ft.Icons.INFO_OUTLINE, "#EEF3EA")}.get(kind, (ft.Icons.INFO_OUTLINE, "#EEF3EA"))
+            icon = {"warning": ft.Icons.WARNING_AMBER, "action": ft.Icons.TOUCH_APP}.get(kind, ft.Icons.INFO_OUTLINE)
+            color = self.pal.get(f"notice_{kind}", self.pal["notice_info"])
             controls: list[ft.Control] = [ft.Icon(icon, size=20),
                                           ft.Text(message, size=self.fs(13), expand=True, selectable=True)]
             if action:
@@ -137,7 +137,6 @@ class ConverterApp:
         p = self.page
         p.title = f"Dyslexia Converter {__version__}"
         p.padding = 0
-        p.theme_mode = ft.ThemeMode.LIGHT
         self.apply_theme()
 
         self.status = self.text("Open a PDF to start. Your original file is never changed.", 14,
@@ -149,11 +148,14 @@ class ConverterApp:
         self.mode_chip = ft.Container(content=self.text(self._mode_label(), 13, weight=ft.FontWeight.BOLD),
                                       padding=ft.Padding.symmetric(horizontal=10, vertical=4), border_radius=12,
                                       bgcolor=self._mode_color(), tooltip="Where your document content is processed")
+        self.dark_switch = ft.Switch(label="Dark mode", value=bool(self.ui.get("dark_mode")),
+                                     on_change=self.on_dark_mode, tooltip="Switch between light and dark app colours",
+                                     label_text_style=ft.TextStyle(size=self.fs(14)))
         header = ft.Container(
             content=ft.Row([
                 ft.Row([self.text("Dyslexia Converter", 22, weight=ft.FontWeight.BOLD), self.mode_chip],
                        spacing=12, wrap=True),
-                ft.Row([self.coffee_button(),
+                ft.Row([self.dark_switch, self.coffee_button(),
                         ft.FilledButton("Open PDF", icon=ft.Icons.FOLDER_OPEN, on_click=self.on_open,
                                         tooltip="Choose a PDF to convert")], spacing=8, wrap=True),
             ], spacing=12, wrap=True, alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
@@ -190,16 +192,28 @@ class ConverterApp:
 
     def coffee_button(self) -> ft.Control:
         """Optional donation link; opens PayPal in the browser. Nothing is sent from the app."""
-        return ft.OutlinedButton("Like the app? Buy me a coffee", icon=ft.Icons.COFFEE, url=DONATE_URL,
+        return ft.FilledTonalButton("Like the app? Buy me a coffee", icon=ft.Icons.COFFEE, url=DONATE_URL,
                                  tooltip="Opens PayPal in your web browser (optional)")
 
     def apply_theme(self) -> None:
-        hc = bool(self.ui.get("high_contrast"))
+        dark = bool(self.ui.get("dark_mode"))
+        self.pal = palette(dark, bool(self.ui.get("high_contrast")))
         # the app itself uses a bundled, highly legible font (works offline too)
         self.page.fonts = {"Atkinson": "fonts/AtkinsonHyperlegible-Regular.ttf"}
-        self.page.theme = ft.Theme(color_scheme_seed=ft.Colors.BROWN if not hc else ft.Colors.BLACK,
-                                   font_family="Atkinson")
-        self.page.bgcolor = ft.Colors.WHITE if hc else "#FDFCF5"
+        theme = make_theme(self.pal, "Atkinson")
+        self.page.theme = self.page.dark_theme = theme
+        self.page.theme_mode = ft.ThemeMode.DARK if dark else ft.ThemeMode.LIGHT
+        self.page.bgcolor = self.pal["bg"]
+
+    def restyle(self) -> None:
+        """Re-apply the palette to the few controls that carry their own colours."""
+        self.apply_theme()
+        self.mode_chip.bgcolor = self._mode_color()
+        self.font_note.color = self.pal["muted"]
+        for panel in (self.orig_panel, self.conv_panel):
+            panel.controls[1].border = ft.Border.all(1, self.pal["frame"])
+        self._render_notices()
+        self.page.update()
 
     def _mode_label(self) -> str:
         if self.ai_settings.mode == "ai_assisted":
@@ -207,7 +221,7 @@ class ConverterApp:
         return "Local-only" if (self.page.width or 1200) < 820 else "Local-only: nothing leaves this device"
 
     def _mode_color(self) -> str:
-        return "#F6E3B4" if self.ai_settings.mode == "ai_assisted" else "#DDEBD5"
+        return self.pal["chip_ai"] if self.ai_settings.mode == "ai_assisted" else self.pal["chip_local"]
 
     # ---------------------------------------------------------------- convert tab
     def slider(self, key: str, label: str, lo: float, hi: float, step: float, unit: str) -> ft.Control:
@@ -257,7 +271,7 @@ class ConverterApp:
         self.preset_dd = ft.Dropdown(label="Preset", value="", expand=True, text_size=self.fs(14),
                                      options=[ft.DropdownOption(key=p, text=p) for p in presets],
                                      on_select=self.on_preset)
-        self.font_note = self.text("", 12, color=ft.Colors.BROWN_700)
+        self.font_note = self.text("", 12, color=self.pal["muted"])
 
         def section(title: str, controls: list[ft.Control], expanded: bool = False) -> ft.Control:
             return ft.ExpansionTile(title=self.text(title, 16, weight=ft.FontWeight.BOLD), expanded=expanded,
@@ -378,10 +392,10 @@ class ConverterApp:
             ], alignment=ft.MainAxisAlignment.CENTER, spacing=2)
 
         self.orig_panel = ft.Column([nav("orig", self.orig_label),
-                                     ft.Container(self.orig_img, expand=True, border=ft.Border.all(1, "#33000000"))],
+                                     ft.Container(self.orig_img, expand=True, border=ft.Border.all(1, self.pal["frame"]))],
                                     expand=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
         self.conv_panel = ft.Column([nav("conv", self.conv_label),
-                                     ft.Container(self.conv_img, expand=True, border=ft.Border.all(1, "#33000000"))],
+                                     ft.Container(self.conv_img, expand=True, border=ft.Border.all(1, self.pal["frame"]))],
                                     expand=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
         export_buttons = [ft.OutlinedButton(label, icon=ft.Icons.DOWNLOAD, data=fmt, on_click=self.on_export,
                                             tooltip=f"Save as {label}") for fmt, label, _ in EXPORTS]
@@ -640,7 +654,9 @@ class ConverterApp:
             ft.Row([self.coffee_button()]),
             self.text("App display", 16, weight=ft.FontWeight.BOLD),
             ft.Row([scale, contrast], wrap=True),
-            self.text("The app text size and colours apply after restarting the app.", 12, italic=True),
+            self.text("The app text size applies after restarting the app. Colours change straight away. "
+                      "Dark mode only changes the app; your exported documents keep their own colours.", 12,
+                      italic=True),
         ], scroll=ft.ScrollMode.AUTO, spacing=10, expand=True), padding=16, expand=True)
 
     async def on_ui_scale(self, e):
@@ -651,8 +667,12 @@ class ConverterApp:
     async def on_contrast(self, e):
         self.ui["high_contrast"] = bool(e.control.value)
         self.store.save_ui(self.ui)
-        self.apply_theme()
-        self.page.update()
+        self.restyle()
+
+    async def on_dark_mode(self, e):
+        self.ui["dark_mode"] = bool(e.control.value)
+        self.store.save_ui(self.ui)
+        self.restyle()
 
     # ================================================================ dialogs
     async def confirm(self, title: str, message: str, yes: str, no: str) -> bool:
@@ -895,10 +915,13 @@ class ConverterApp:
 
 
 def _blank_png() -> bytes:
-    import pymupdf
-    pix = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 60, 85), 0)
-    pix.clear_with(0xFA)
-    return pix.tobytes("png")
+    import io
+
+    from PIL import Image
+    # transparent, so the empty preview takes the app's background (light or dark)
+    buf = io.BytesIO()
+    Image.new("RGBA", (60, 85), (0, 0, 0, 0)).save(buf, "PNG")
+    return buf.getvalue()
 
 
 def main(page: ft.Page) -> None:

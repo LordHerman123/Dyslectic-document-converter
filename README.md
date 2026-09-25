@@ -59,6 +59,7 @@ python -m dyslexia_converter chapter.pdf --pages 3-18 --move-citations -f printa
 | Preview | Original, converted, or both side by side, with page navigation. Changing a setting re-renders the preview without re-reading the PDF. |
 | Export | PDF, printable PDF (no tints or backgrounds, black text), DOCX, plain text and Markdown. PDFs are A4, keep selectable Unicode text and embed font subsets. Headings stay with the text that follows them, and paragraphs avoid widow and orphan lines. |
 | Settings | Presets: Standard, Spacious, High Readability, Compact print and My Settings. Settings are saved between sessions and can be reset to the defaults. |
+| App look | Warm autumn colours (cream, sand, caramel, terracotta), a Dark mode switch in the top bar, a high-contrast option and adjustable app text size. These only change the app, not your exported documents. |
 
 The **Standard** preset copies the look of the example conversions: a Verdana-like sans (DejaVu Sans) at
 13 pt, 1.6 line spacing, 14 pt between paragraphs, a left-aligned column about 15 cm wide on a cream page
