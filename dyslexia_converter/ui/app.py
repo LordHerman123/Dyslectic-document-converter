@@ -159,20 +159,23 @@ class ConverterApp:
         # longer messages (warnings, decisions waiting) go here: wrapped, scrollable, dismissable
         self.notice_list = ft.Column(spacing=4, scroll=ft.ScrollMode.AUTO)
         self.notices = ft.Container(self.notice_list, visible=False, height=0)
-        self.mode_chip = ft.Container(content=self.text(self._mode_label(), 13, weight=ft.FontWeight.BOLD),
-                                      padding=ft.Padding.symmetric(horizontal=10, vertical=4), border_radius=12,
-                                      bgcolor=self._mode_color(),
-                                      tooltip=t("Where your document content is processed"))
-        logo = ft.Image(src="icon.png", width=self.fs(38), height=self.fs(38), semantics_label="Logo")
+        # a status (not a button): small icon + text, on the right of the top bar
+        self.mode_icon = ft.Icon(self._mode_icon(), size=self.fs(18), color=self._mode_color())
+        self.mode_text = self.text(self._mode_label(), 13, color=self.pal["muted"])
+        self.mode_chip = ft.Row([self.mode_icon, self.mode_text], spacing=6, tight=True,
+                                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                                tooltip=t("Where your document content is processed"))
+        logo = ft.Image(src="logo_small.png", width=self.fs(38), height=self.fs(38), semantics_label="Logo",
+                        filter_quality=ft.FilterQuality.HIGH)
+        open_btn = ft.FilledButton(t("Open PDF"), icon=ft.Icons.FOLDER_OPEN, on_click=self.on_open,
+                                   tooltip=t("Choose a PDF to convert"))
         header = ft.Container(
-            content=ft.Row([
-                ft.Row([logo, self.text("Dyslexia Converter", 22, weight=ft.FontWeight.BOLD), self.mode_chip],
-                       spacing=10, wrap=True, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-                ft.Row([self.coffee_button(),
-                        ft.FilledButton(t("Open PDF"), icon=ft.Icons.FOLDER_OPEN, on_click=self.on_open,
-                                        tooltip=t("Choose a PDF to convert"))], spacing=8, wrap=True),
-            ], spacing=12, wrap=True, alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            ft.Row([
+                ft.Row([logo, self.text("Dyslexia Converter", 22, weight=ft.FontWeight.BOLD), open_btn,
+                        self.coffee_button()], spacing=12, wrap=True, expand=True,
+                       vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                self.mode_chip,  # pushed to the far right
+            ], spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
             padding=ft.Padding.symmetric(horizontal=16, vertical=10))
 
         narrow = (p.width or 1200) < 820
@@ -241,7 +244,7 @@ class ConverterApp:
     def restyle(self) -> None:
         """Re-apply the palette to the few controls that carry their own colours."""
         self.apply_theme()
-        self.mode_chip.bgcolor = self._mode_color()
+        self._update_mode_status()
         self.font_note.color = self.pal["muted"]
         for panel in (self.orig_panel, self.conv_panel):
             panel.controls[1].border = ft.Border.all(1, self.pal["frame"])
@@ -255,7 +258,16 @@ class ConverterApp:
             self.t("Local-only: nothing leaves this device")
 
     def _mode_color(self) -> str:
-        return self.pal["chip_ai"] if self.ai_settings.mode == "ai_assisted" else self.pal["chip_local"]
+        return self.pal["status_ai"] if self.ai_settings.mode == "ai_assisted" else self.pal["status_local"]
+
+    def _mode_icon(self) -> str:
+        return ft.Icons.CLOUD_OUTLINED if self.ai_settings.mode == "ai_assisted" else ft.Icons.LOCK_OUTLINE
+
+    def _update_mode_status(self) -> None:
+        self.mode_icon.icon = self._mode_icon()
+        self.mode_icon.color = self._mode_color()
+        self.mode_text.value = self._mode_label()
+        self.mode_text.color = self.pal["muted"]
 
     # ---------------------------------------------------------------- convert tab
     def slider(self, key: str, label: str, lo: float, hi: float, step: float, unit: str) -> ft.Control:
@@ -486,35 +498,95 @@ class ConverterApp:
             self.review_summary.value = t("No OCR was needed for this document.") if self.session else \
                 t("No scanned document loaded.")
             return
-        corr = self.session.document.corrections
-        pending = [c for c in corr if c.status == "pending"]
-        done = [c for c in corr if c.status in ("auto", "accepted")]
+        session = self.session
+        corr = session.document.corrections
+        pending = session.pending_corrections()
+        mine = [c for c in corr if c.source == "user"]
+        others = [c for c in corr if c.source != "user" and not session.replaced_by_user(c)]
+        done = [c for c in others if c.applied]
+        rejected = [c for c in others if c.status == "rejected"]
         mode = {"review": t("Review uncertain corrections"), "automatic": t("Automatic (high confidence only)"),
                 "disabled": t("Off")}.get(self.settings.ocr_correction, self.settings.ocr_correction)
         self.review_summary.value = t("{done} correction(s) applied, {pending} waiting for your review. Mode: {mode}.",
-                                      done=len(done), pending=len(pending), mode=mode)
-        for c in pending + done + [c for c in corr if c.status == "rejected"]:
-            before, after = self.session.correction_context(c)
-            status = {"pending": t("Waiting for review"), "auto": t("Applied automatically"),
-                      "accepted": t("Accepted"), "rejected": t("Rejected (original kept)")}[c.status]
+                                      done=len(done) + len(mine), pending=len(pending), mode=mode)
+        source_names = {"dictionary": t("dictionary"), "ai": "AI", "user": t("typed by you")}
+        for c in pending + mine + done + rejected:
+            before, word, after = session.correction_sentence(c)
             actions = []
-            if c.status in ("pending", "rejected"):
-                actions.append(ft.FilledButton(t("Accept"), data=c.id, on_click=self.on_accept))
-            if c.status in ("pending", "auto", "accepted"):
-                actions.append(ft.OutlinedButton(t("Reject") if c.status == "pending" else t("Undo"), data=c.id,
-                                                 on_click=self.on_reject))
-            actions.append(ft.TextButton(t("'{word}' is correct - add to dictionary", word=c.original),
-                                         data=c.original, on_click=self.on_add_word_from_review))
+            if c.source == "user":
+                status = t("Your correction")
+                actions.append(ft.OutlinedButton(t("Undo"), icon=ft.Icons.UNDO, data=c.id,
+                                                 on_click=self.on_remove_user_edit))
+            else:
+                status = {"pending": t("Waiting for review"), "auto": t("Applied automatically"),
+                          "accepted": t("Accepted"), "rejected": t("Rejected (original kept)")}[c.status]
+                if c.status in ("pending", "rejected"):
+                    actions.append(ft.FilledButton(t("Accept"), data=c.id, on_click=self.on_accept))
+                if c.status in ("pending", "auto", "accepted"):
+                    actions.append(ft.OutlinedButton(t("Reject") if c.status == "pending" else t("Undo"),
+                                                     data=c.id, on_click=self.on_reject))
+            # the pencil: retype the sentence yourself when neither the scan nor the suggestion is right
+            actions.append(ft.TextButton(t("Edit"), icon=ft.Icons.EDIT_OUTLINED, data=c.id,
+                                         tooltip=t("Type the text yourself"), on_click=self.on_edit_text))
+            if c.source != "user":
+                actions.append(ft.TextButton(t("'{word}' is correct - add to dictionary", word=c.original),
+                                             data=c.original, on_click=self.on_add_word_from_review))
+            info = status if c.source == "user" else \
+                t("Confidence {pct}%", pct=round(c.confidence * 100)) + f"  ·  {status}"
             self.review_list.controls.append(ft.Card(content=ft.Container(ft.Column([
                 ft.Row([self.text(c.original, 16, weight=ft.FontWeight.BOLD),
                         ft.Icon(ft.Icons.ARROW_FORWARD, size=18, tooltip=t("suggested")),
                         self.text(c.replacement, 16, weight=ft.FontWeight.BOLD),
-                        self.text(t("Confidence {pct}%", pct=round(c.confidence * 100)) + f"  ·  {status}  ·  "
-                                  f"{c.source}", 12)], wrap=True),
-                self.text(t("Original:") + " " + before, 13),
-                self.text(t("Suggested:") + " " + after, 13),
+                        self.text(info + "  ·  " + source_names.get(c.source, c.source), 12)], wrap=True),
+                self.text(t("In the text:"), 12, color=self.pal["muted"]),
+                # the whole sentence, with the uncertain word highlighted
+                ft.Text(spans=[
+                    ft.TextSpan(before),
+                    ft.TextSpan(word, style=ft.TextStyle(weight=ft.FontWeight.BOLD, bgcolor=self.pal["notice_warning"],
+                                                         decoration=ft.TextDecoration.UNDERLINE,
+                                                         decoration_color=self.pal["primary"])),
+                    ft.TextSpan(after)], size=self.fs(15), selectable=True),
                 ft.Row(actions, wrap=True),
             ], spacing=4), padding=12)))
+
+    def _correction(self, cid: str):
+        return next((c for c in self.session.document.corrections if c.id == cid), None) if self.session else None
+
+    async def on_edit_text(self, e):
+        """Let the user retype the sentence; only what they change is stored (and can be undone)."""
+        t = self.t
+        c = self._correction(e.control.data)
+        if c is None:
+            return
+        field = ft.TextField(value=self.session.editable_sentence(c), multiline=True, min_lines=3, max_lines=10,
+                             autofocus=True, text_size=self.fs(16), width=640)
+
+        async def save(_):
+            self.page.pop_dialog()
+            edit = self.session.edit_text(c, field.value or "")
+            if edit is None:
+                self.notify(t("Nothing was changed."))
+                return
+            self.refresh_review()
+            await self.rerender()
+            self.notify(t("Your correction was saved. You can undo it at any time."))
+
+        def cancel(_):
+            self.page.pop_dialog()
+
+        self.page.show_dialog(ft.AlertDialog(
+            modal=True, title=self.text(t("Correct the text"), 18, weight=ft.FontWeight.BOLD),
+            content=ft.Column([
+                self.text(t("Type the sentence as it should read. Only the words you change are replaced; the "
+                            "scan itself is not changed and you can undo this."), 13),
+                field], tight=True, spacing=12),
+            actions=[ft.TextButton(t("Cancel"), on_click=cancel),
+                     ft.FilledButton(t("Save"), icon=ft.Icons.CHECK, on_click=save)]))
+
+    async def on_remove_user_edit(self, e):
+        self.session.remove_user_edit(e.control.data)
+        self.refresh_review()
+        await self.rerender()
 
     # ---------------------------------------------------------------- map tab
     def build_map_tab(self) -> ft.Control:
@@ -597,8 +669,7 @@ class ConverterApp:
         self.ai_key_status.value = (self.t("A key is saved ({where}).", where=self.t(self.keystore.backend)) if has
                                     else self.t("No key saved for this provider."))
         if hasattr(self, "mode_chip"):
-            self.mode_chip.content.value = self._mode_label()
-            self.mode_chip.bgcolor = self._mode_color()
+            self._update_mode_status()
 
     async def on_ai_mode(self, e):
         mode = e.control.value

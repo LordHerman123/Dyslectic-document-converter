@@ -85,3 +85,58 @@ def test_words_from_other_languages_are_protected(tmp_path):
 def test_more_languages_detected():
     assert detect_language("il gatto è sul tetto e non per la casa della nonna che sono anche") == "it"
     assert detect_language("o gato não está com os cães para mais também que os outros") == "pt"
+
+
+def test_review_shows_the_whole_sentence():
+    """The OCR review shows the full sentence around a word (abbreviations don't end it)."""
+    from dyslexia_converter.model import Correction
+    from dyslexia_converter.pipeline import Session
+
+    text = "Intro sentence here. Smith et al. showed that the rnodel works, e.g. in tests. Next one!"
+
+    class Doc:
+        def block(self, _):
+            return type("B", (), {"text": text})
+
+    session = Session.__new__(Session)
+    session.document = Doc()
+    i = text.index("rnodel")
+    c = Correction.__new__(Correction)
+    c.block_id, c.start, c.end, c.original, c.replacement = 1, i, i + 6, "rnodel", "model"
+    assert session.correction_sentence(c) == ("Smith et al. showed that the ", "rnodel", " works, e.g. in tests.")
+
+
+def _session_with(tmp_path, text, word, replacement):
+    from dyslexia_converter.pipeline import Session
+
+    block = Block(id="b1", kind=BlockKind.PARAGRAPH, text=text, page=0)
+    doc = Document(source_path="scan.pdf", blocks=[block])
+    i = text.index(word)
+    doc.corrections = [Correction("c1", "b1", i, i + len(word), word, replacement, 0.6)]
+    return Session(doc, CustomWords(tmp_path / "words.txt")), doc, block
+
+
+def test_user_can_retype_a_badly_read_line(tmp_path):
+    text = "Suburbs have, after fifty years, become thoroughly diffe ent settings from what was planned. Next."
+    session, doc, block = _session_with(tmp_path, text, "ent", "cut")
+    suggestion = doc.corrections[0]
+    assert session.pending_corrections() == [suggestion]
+
+    edit = session.edit_text(suggestion, "Suburbs have, after fifty years, become thoroughly different settings "
+                                         "from what was planned.")
+    assert (edit.original, edit.replacement, edit.source, edit.status) == ("diffe ent", "different", "user",
+                                                                          "accepted")
+    assert "thoroughly different settings" in doc.display_text(block)
+    assert "cut" not in doc.display_text(block)
+    assert session.pending_corrections() == []          # the suggestion is replaced by the user's text
+    assert block.text == text                            # the scanned text itself is never changed
+
+    session.remove_user_edit(edit.id)                    # undo
+    assert doc.display_text(block) == text
+    assert session.pending_corrections() == [suggestion]
+
+
+def test_unchanged_edit_does_nothing(tmp_path):
+    session, doc, _ = _session_with(tmp_path, "One two thre four. Five.", "thre", "three")
+    assert session.edit_text(doc.corrections[0], "One two thre four.") is None
+    assert len(doc.corrections) == 1

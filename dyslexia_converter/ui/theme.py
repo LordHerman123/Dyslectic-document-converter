@@ -31,6 +31,8 @@ LIGHT = {
     "notice_info": "#EFE6DA",
     "chip_local": "#E4E7D3",    # soft sage
     "chip_ai": "#F2E3C4",
+    "status_local": "#4F7A4B",  # green lock: nothing leaves the device
+    "status_ai": "#A0782E",
     "frame": "#33000000",
 }
 
@@ -59,6 +61,8 @@ DARK = {
     "notice_info": "#3A2C2F",
     "chip_local": "#3B402E",
     "chip_ai": "#5A4620",
+    "status_local": "#A9C9A0",
+    "status_ai": "#E2C48A",
     "frame": "#44FFFFFF",
 }
 

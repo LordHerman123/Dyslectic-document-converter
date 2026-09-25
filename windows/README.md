@@ -8,7 +8,7 @@ Recipients don't need Python or Tesseract: both are included.
 | `build.py` | Packages the app with `flet pack` (PyInstaller), adds Tesseract + language data, writes the zip. |
 | `installer.iss` | Inno Setup script: turns the app folder into `DyslexiaConverter-<version>-setup.exe`. |
 | `app.ico`, `app.png` | Program icon (the "Dc" logo). Redraw them with `python windows/make_icon.py`. |
-| `make_icon.py`, `logo_font/` | Draws the logo (Playfair Display, SIL OFL; used for the logo only) and writes `app.ico`, `app.png` and the in-app `assets/icon.png`. |
+| `make_icon.py`, `logo_font/` | Draws the logo (Playfair Display "D" + Varela Round "c", both SIL OFL; used for the logo only) and writes `app.ico`, `app.png` and the in-app `assets/icon.png` + `assets/logo_small.png`. |
 | `README_FOR_USERS.txt` | Copied into the app folder as `README.txt` for recipients. |
 | `THIRD_PARTY_NOTICES.txt` | Licences of the included software (copied into `LICENSES/`). |
 
