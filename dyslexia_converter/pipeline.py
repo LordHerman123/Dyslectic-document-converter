@@ -9,6 +9,8 @@ setting changes without restarting the conversion.
 """
 from __future__ import annotations
 
+import re
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
@@ -21,6 +23,22 @@ from .settings import FormatSettings
 from .structure.detector import StructureDetector
 from .transform.spelling import (CustomWords, Dictionary, OcrCorrector, dehyphenator, detect_language,
                                  word_rejoiner)
+
+# end of a sentence: . ! ? (optionally followed by a closing quote/bracket) and then a space
+SENTENCE_END_RE = re.compile(r"[.!?][\"'”’)\]]*\s+")
+# a full stop after these is not the end of a sentence
+ABBREVIATIONS = {"al", "e.g", "i.e", "cf", "vs", "etc", "fig", "figs", "pp", "p", "vol", "no", "ed", "eds", "dr",
+                 "prof", "mr", "mrs", "ms", "st", "ca", "approx", "resp", "z.b", "bzw", "vgl", "bijv", "d.w.z"}
+
+
+def _sentence_ends(text: str, start: int = 0, end: Optional[int] = None):
+    """Positions where a sentence ends in text[start:end] (skips abbreviations and initials)."""
+    for m in SENTENCE_END_RE.finditer(text, start, len(text) if end is None else end):
+        word = re.search(r"(\S+)$", text[:m.start()])
+        w = word.group(1).lower().rstrip(".") if word else ""
+        if text[m.start()] == "." and (w in ABBREVIATIONS or (len(w) == 1 and w.isalpha())):
+            continue
+        yield m
 
 ProgressFn = Callable[[str, float], None]
 
@@ -49,7 +67,8 @@ class Session:
             old = previous.get((c.block_id, c.start, c.original))
             if old is not None and old.status in ("accepted", "rejected") and old.replacement == c.replacement:
                 c.status = old.status
-        doc.corrections = fresh
+        # text the user typed in themselves is always kept
+        doc.corrections = fresh + [c for c in doc.corrections if c.source == "user"]
 
     def set_correction(self, correction_id: str, status: str) -> None:
         for c in self.document.corrections:
@@ -61,19 +80,96 @@ class Session:
             c.status = "rejected"
 
     def pending_corrections(self) -> list[Correction]:
-        return [c for c in self.document.corrections if c.status == "pending"]
+        """Suggestions still waiting for a decision (not those already replaced by the user's own text)."""
+        user = [u for u in self.document.corrections if u.source == "user" and u.applied]
+        return [c for c in self.document.corrections
+                if c.status == "pending" and not any(c.overlaps(u) for u in user)]
 
-    def correction_context(self, c: Correction, width: int = 40) -> tuple[str, str]:
-        """(original snippet, corrected snippet) around a correction."""
+    def replaced_by_user(self, c: Correction) -> bool:
+        return c.source != "user" and any(c.overlaps(u) for u in self.document.corrections
+                                           if u.source == "user" and u.applied)
+
+    def sentence_span(self, c: Correction) -> tuple[int, int]:
+        """Start and end (in the block's original text) of the sentence around a correction."""
+        b = self.document.block(c.block_id)
+        text = b.text if b else ""
+        start = 0
+        for m in _sentence_ends(text, 0, c.start):
+            start = m.end()
+        m = next(_sentence_ends(text, c.end), None)
+        end = m.start() + 1 if m else len(text)
+        while start < c.start and text[start].isspace():
+            start += 1
+        return start, max(end, c.end)
+
+    def editable_sentence(self, c: Correction) -> str:
+        """The sentence around ``c`` as the user last left it (the scan's text plus their own edits)."""
         b = self.document.block(c.block_id)
         if b is None:
-            return c.original, c.replacement
-        a = max(0, c.start - width)
-        e = min(len(b.text), c.end + width)
-        before, after = b.text[a:c.start], b.text[c.end:e]
-        pre = "…" if a > 0 else ""
-        post = "…" if e < len(b.text) else ""
-        return (f"{pre}{before}{c.original}{after}{post}", f"{pre}{before}{c.replacement}{after}{post}")
+            return c.original
+        start, end = self.sentence_span(c)
+        text = b.text[start:end]
+        for u in sorted((u for u in self.document.corrections
+                         if u.source == "user" and u.block_id == c.block_id and start <= u.start and u.end <= end),
+                        key=lambda u: u.start, reverse=True):
+            text = text[:u.start - start] + u.replacement + text[u.end - start:]
+        return text
+
+    def edit_text(self, c: Correction, new_text: str) -> Optional[Correction]:
+        """The user retyped the sentence around ``c`` (as read from the scan).
+
+        Only the changed words are stored, as a correction of source "user"; the scanned text itself is kept,
+        so the edit can be undone. Returns the new correction, or None if nothing changed.
+        """
+        b = self.document.block(c.block_id)
+        if b is None:
+            return None
+        start, end = self.sentence_span(c)
+        old = b.text[start:end]
+        new = new_text.strip()
+        if not new or new == old:
+            return None
+        # keep only the part that differs, widened to whole words
+        a = 0
+        while a < min(len(old), len(new)) and old[a] == new[a]:
+            a += 1
+        z = 0
+        while z < min(len(old), len(new)) - a and old[-1 - z] == new[-1 - z]:
+            z += 1
+        while a > 0 and not old[a - 1].isspace():
+            a -= 1
+        while z > 0 and not old[len(old) - z].isspace():
+            z -= 1
+        edit = Correction(id=f"user-{uuid.uuid4().hex[:10]}", block_id=c.block_id, start=start + a,
+                          end=start + len(old) - z, original=old[a:len(old) - z],
+                          replacement=new[a:len(new) - z], confidence=1.0, status="accepted", source="user")
+        # an earlier edit of the same words is replaced by this one
+        self.document.corrections = [x for x in self.document.corrections
+                                     if not (x.source == "user" and x.overlaps(edit))] + [edit]
+        return edit
+
+    def remove_user_edit(self, correction_id: str) -> None:
+        """Undo text the user typed in; the scan's own text (and any suggestion) comes back."""
+        self.document.corrections = [c for c in self.document.corrections
+                                     if not (c.id == correction_id and c.source == "user")]
+
+    def correction_sentence(self, c: Correction, limit: int = 220) -> tuple[str, str, str]:
+        """(text before, the word, text after) for the whole sentence that contains a correction.
+
+        Very long sentences are shortened at a word boundary (marked with …) so the card stays readable.
+        """
+        b = self.document.block(c.block_id)
+        if b is None:
+            return "", c.original, ""
+        start, end = self.sentence_span(c)
+        before, after = b.text[start:c.start], b.text[c.end:end]
+        if len(before) > limit:
+            cut = before.find(" ", len(before) - limit)
+            before = "…" + before[cut + 1 if cut >= 0 else len(before) - limit:]
+        if len(after) > limit:
+            cut = after.rfind(" ", 0, limit)
+            after = after[:cut if cut > 0 else limit] + "…"
+        return before, c.original, after.rstrip()
 
     # --------------------------------------------------------------------- AI
     def run_ai(self, assistant, settings: FormatSettings, progress: Optional[ProgressFn] = None) -> str:

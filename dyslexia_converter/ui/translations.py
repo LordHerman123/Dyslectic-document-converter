@@ -446,9 +446,43 @@ T: dict[str, dict[str, str]] = {
     "suggested": {"nl": "voorgesteld", "fr": "proposé", "de": "vorgeschlagen", "es": "sugerido", "it": "suggerito"},
     "Confidence {pct}%": {"nl": "Zekerheid {pct}%", "fr": "Confiance {pct} %", "de": "Sicherheit {pct} %",
                           "es": "Confianza {pct} %", "it": "Affidabilità {pct}%"},
-    "Original:": {"nl": "Origineel:", "fr": "Original :", "de": "Original:", "es": "Original:", "it": "Originale:"},
-    "Suggested:": {"nl": "Voorstel:", "fr": "Proposition :", "de": "Vorschlag:", "es": "Sugerencia:",
-                   "it": "Proposta:"},
+    "Edit": {"nl": "Bewerken", "fr": "Modifier", "de": "Bearbeiten", "es": "Editar", "it": "Modifica"},
+    "Type the text yourself": {"nl": "Typ de tekst zelf", "fr": "Saisir le texte vous-même",
+                               "de": "Text selbst eingeben", "es": "Escribe el texto tú mismo",
+                               "it": "Scrivi tu il testo"},
+    "Correct the text": {"nl": "Tekst verbeteren", "fr": "Corriger le texte", "de": "Text korrigieren",
+                         "es": "Corregir el texto", "it": "Correggi il testo"},
+    "Type the sentence as it should read. Only the words you change are replaced; the scan itself is not changed "
+    "and you can undo this.": {
+        "nl": "Typ de zin zoals hij hoort te zijn. Alleen de woorden die je verandert worden vervangen; de scan zelf "
+              "verandert niet en je kunt dit ongedaan maken.",
+        "fr": "Saisissez la phrase telle qu'elle devrait être. Seuls les mots modifiés sont remplacés ; le scan "
+              "lui-même n'est pas modifié et vous pouvez annuler.",
+        "de": "Geben Sie den Satz so ein, wie er lauten soll. Nur die geänderten Wörter werden ersetzt; der Scan "
+              "selbst bleibt unverändert und Sie können das rückgängig machen.",
+        "es": "Escribe la frase como debería ser. Solo se sustituyen las palabras que cambies; el escaneo no se "
+              "modifica y puedes deshacerlo.",
+        "it": "Scrivi la frase come dovrebbe essere. Vengono sostituite solo le parole che cambi; la scansione non "
+              "viene modificata e puoi annullare."},
+    "Cancel": {"nl": "Annuleren", "fr": "Annuler", "de": "Abbrechen", "es": "Cancelar", "it": "Annulla"},
+    "Save": {"nl": "Opslaan", "fr": "Enregistrer", "de": "Speichern", "es": "Guardar", "it": "Salva"},
+    "Nothing was changed.": {"nl": "Er is niets veranderd.", "fr": "Rien n'a été modifié.",
+                             "de": "Es wurde nichts geändert.", "es": "No se ha cambiado nada.",
+                             "it": "Non è stato cambiato nulla."},
+    "Your correction was saved. You can undo it at any time.": {
+        "nl": "Je verbetering is opgeslagen. Je kunt ze altijd ongedaan maken.",
+        "fr": "Votre correction est enregistrée. Vous pouvez l'annuler à tout moment.",
+        "de": "Ihre Korrektur wurde gespeichert. Sie können sie jederzeit rückgängig machen.",
+        "es": "Tu corrección se ha guardado. Puedes deshacerla cuando quieras.",
+        "it": "La tua correzione è stata salvata. Puoi annullarla in qualsiasi momento."},
+    "Your correction": {"nl": "Jouw verbetering", "fr": "Votre correction", "de": "Ihre Korrektur",
+                        "es": "Tu corrección", "it": "La tua correzione"},
+    "typed by you": {"nl": "door jou getypt", "fr": "saisi par vous", "de": "von Ihnen eingegeben",
+                     "es": "escrito por ti", "it": "scritto da te"},
+    "dictionary": {"nl": "woordenboek", "fr": "dictionnaire", "de": "Wörterbuch", "es": "diccionario",
+                   "it": "dizionario"},
+    "In the text:": {"nl": "In de tekst:", "fr": "Dans le texte :", "de": "Im Text:", "es": "En el texto:",
+                     "it": "Nel testo:"},
     "'{word}' added to your dictionary.": {
         "nl": "'{word}' is toegevoegd aan je woordenboek.",
         "fr": "« {word} » a été ajouté à votre dictionnaire.",

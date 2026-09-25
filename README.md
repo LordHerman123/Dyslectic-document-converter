@@ -13,7 +13,7 @@ API key. When it's on, it only sees small snippets that the local rules couldn't
 
 ## Download for Windows (version 1.3)
 
-Get `DyslexiaConverter-1.3.0-setup.exe` (installer) or `DyslexiaConverter-1.3.0-windows.zip` (unzip and
+Get `DyslexiaConverter-1.3.1-setup.exe` (installer) or `DyslexiaConverter-1.3.1-windows.zip` (unzip and
 double-click `DyslexiaConverter.exe`) from the repository's **Releases** page. Text recognition (Tesseract)
 is included; nothing else needs to be installed. How the Windows build is made: [windows/README.md](windows/README.md).
 
@@ -46,7 +46,7 @@ python -m dyslexia_converter chapter.pdf --pages 3-18 --move-citations -f printa
 | PDF input | Checks each page for selectable text, scanned images, or both. Reports whether OCR was used. Password-protected PDFs get a clear error. Optional page range. |
 | OCR | Tesseract (English, Dutch, German, French, Spanish, Italian, Portuguese — whichever language packs are installed). Rebuilds lines, paragraphs, headings and reading order. Pictures and ruled tables on scanned pages are kept as images. |
 | Book scans & photocopies | Pages made of image tiles, with or without a copier's hidden text layer, are recognised as scans. Each scan is cleaned before reading: two-page spreads are split at the gutter, gutter shadows and uneven lighting are flattened, dark scanner borders are removed, each page is straightened (deskewed), and sideways or upside-down scans are turned the right way up. Words broken across lines or pages are rejoined. Book running headers ("12 CHAPTER TITLE" / "Section 13") are removed, section headings and epigraphs are recognised, and numbered photo captions stay with their picture. Pages are OCR'd in parallel at 225 dpi, and the result is saved on this device, so reopening the same PDF takes well under a second. Without Tesseract, the scanner's own text layer is used when there is one; pages where that text is garbled are shown as pictures of the original, with a note. |
-| OCR correction | Uses local dictionaries (pyspellchecker: English, Dutch, German, French, Spanish, Italian, Portuguese) plus the typical OCR mix-ups (`rn`→`m`, `l`→`i`, `0`→`o`, …). Only high-confidence fixes are applied automatically. Modes: Automatic, Review (Accept/Reject in the app) and Off. Names, abbreviations, identifiers, British/American spellings, words that are correct in another of these languages (such as a quoted French term) and your own dictionary words are left alone. |
+| OCR correction | Uses local dictionaries (pyspellchecker: English, Dutch, German, French, Spanish, Italian, Portuguese) plus the typical OCR mix-ups (`rn`→`m`, `l`→`i`, `0`→`o`, …). Only high-confidence fixes are applied automatically. Modes: Automatic, Review (Accept/Reject in the app) and Off. The review shows the whole sentence around each word, with the word highlighted. If neither the scan nor the suggestion is right (for example a word split in two, like “diffe ent”), the pencil (Edit) lets you retype the sentence; only the words you change are stored, as your own correction, and Undo brings back the scanned text. Names, abbreviations, identifiers, British/American spellings, words that are correct in another of these languages (such as a quoted French term) and your own dictionary words are left alone. |
 | Structure | Title, authors, numbered and unnumbered headings with levels, paragraphs (rejoined across columns and pages), bullet and numbered lists, captions linked to their figure or table, footnotes, references and running headers/footers. All of this uses simple rules based on font size, weight, typeface, position, white space and numbering. The PDF's own bookmarks are used when present. |
 | Reading order | Multi-column aware (recursive XY-cut): column 1 is read before column 2, and full-width titles and figures stay in place. |
 | Tables | Ruled tables and caption-anchored tables without rules are rebuilt as real tables that repeat the header row and can split across pages. If a table can't be rebuilt reliably, it's kept as a picture of the original. |
@@ -59,7 +59,7 @@ python -m dyslexia_converter chapter.pdf --pages 3-18 --move-citations -f printa
 | Preview | Original, converted, or both side by side, with page navigation. Changing a setting re-renders the preview without re-reading the PDF. |
 | Export | PDF, printable PDF (no tints or backgrounds, black text), DOCX, plain text and Markdown. PDFs are A4, keep selectable Unicode text and embed font subsets. Headings stay with the text that follows them, and paragraphs avoid widow and orphan lines. |
 | Settings | Presets: Standard, Spacious, High Readability, Compact print and My Settings. Settings are saved between sessions and can be reset to the defaults. |
-| App settings | A Settings tab with the app language (English, Nederlands, Français, Deutsch, Español, Italiano; the device language is used at first start), dark mode, high-contrast colours and app text size. These change straight away, even with a document open, and only affect the app, not your exported documents. The tab also shows where Tesseract was found, lets you clear saved OCR results, and shows where your settings are stored. The look is a warm autumn palette (cream, sand, caramel, terracotta) with the "DC" logo. |
+| App settings | A Settings tab with the app language (English, Nederlands, Français, Deutsch, Español, Italiano; the device language is used at first start), dark mode, high-contrast colours and app text size. These change straight away, even with a document open, and only affect the app, not your exported documents. The tab also shows where Tesseract was found, lets you clear saved OCR results, and shows where your settings are stored. The look is burgundy & champagne on warm cream (a dark wine colour in dark mode), matching the "Dc" logo. |
 | Document language | Detected automatically from each PDF's text and shown next to *Detect automatically*. You can pick English, Dutch, German, French, Spanish, Italian or Portuguese yourself if the guess is wrong: it sets the dictionary for OCR, OCR corrections and rejoining split words. Words the converter adds to a document (Contents, Notes, `[Note 1]`, the "About this version" note) follow the document's language, e.g. *Inhoud*, *Noten*, `[Noot 1]`. The author's text is never translated. |
 
 The **Standard** preset copies the look of the example conversions: a Verdana-like sans (DejaVu Sans) at
@@ -115,7 +115,7 @@ dyslexia_converter/
   cli.py                command line
   ui/app.py             Flet app (desktop / web / Android)
   ui/i18n.py            app languages; ui/translations.py holds every text in all six languages
-  ui/theme.py           autumn light and dark colours
+  ui/theme.py           burgundy & champagne light and dark colours
 tests/                  pytest suite (generates its own sample PDFs, incl. a scanned one)
 ```
 

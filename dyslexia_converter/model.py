@@ -100,11 +100,21 @@ class Correction:
     replacement: str
     confidence: float  # 0..1
     status: str = "pending"  # pending / auto / accepted / rejected
-    source: str = "dictionary"  # dictionary / ai / user
+    source: str = "dictionary"  # dictionary / ai / user (typed in by the user)
 
     @property
     def applied(self) -> bool:
         return self.status in ("auto", "accepted")
+
+    def overlaps(self, other: "Correction") -> bool:
+        return self.block_id == other.block_id and self.start < other.end and other.start < self.end
+
+
+def effective_corrections(corrections: list[Correction]) -> list[Correction]:
+    """The corrections to apply: a correction the user typed in replaces any suggestion on the same text."""
+    applied = [c for c in corrections if c.applied]
+    user = [c for c in applied if c.source == "user"]
+    return [c for c in applied if c.source == "user" or not any(c.overlaps(u) for u in user)]
 
 
 @dataclass
@@ -161,7 +171,7 @@ class Document:
 
 def apply_corrections(text: str, corrections: list[Correction]) -> str:
     out = text
-    for c in sorted((c for c in corrections if c.applied), key=lambda c: c.start, reverse=True):
+    for c in sorted(effective_corrections(corrections), key=lambda c: c.start, reverse=True):
         if out[c.start:c.end] == c.original:
             out = out[: c.start] + c.replacement + out[c.end:]
     return out
@@ -169,7 +179,7 @@ def apply_corrections(text: str, corrections: list[Correction]) -> str:
 
 def map_styles(styles: list[StyleRange], text: str, corrections: list[Correction]) -> list[StyleRange]:
     """Shift style ranges so they stay aligned after corrections are applied."""
-    applied = sorted((c for c in corrections if c.applied and text[c.start:c.end] == c.original),
+    applied = sorted((c for c in effective_corrections(corrections) if text[c.start:c.end] == c.original),
                      key=lambda c: c.start)
     if not applied:
         return styles
