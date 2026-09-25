@@ -73,3 +73,15 @@ def test_words_broken_without_hyphen_are_rejoined():
     join = word_rejoiner(Dictionary(["en"]))
     assert join("describ", "ing") and join("particu", "larly")
     assert not join("the", "forest") and not join("state", "tax")
+
+
+def test_words_from_other_languages_are_protected(tmp_path):
+    c = corrector(tmp_path)
+    for w in ("aune", "pinte", "rentes", "Weltanschauung", "gemeente"):
+        assert c.suggest(w, "x " + w, 2, Counter()) is None, w
+    assert c.suggest("cornputer", "x cornputer", 2, Counter())[0] == "computer"  # OCR errors still fixed
+
+
+def test_more_languages_detected():
+    assert detect_language("il gatto è sul tetto e non per la casa della nonna che sono anche") == "it"
+    assert detect_language("o gato não está com os cães para mais também que os outros") == "pt"

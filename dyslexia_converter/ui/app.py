@@ -245,7 +245,8 @@ class ConverterApp:
             section("Scanned documents (OCR)", [
                 ft.Row([self.dropdown("ocr_language", "Document language",
                                       [("auto", "Detect automatically"), ("en", "English"), ("nl", "Dutch"),
-                                       ("de", "German"), ("fr", "French"), ("es", "Spanish")])]),
+                                       ("de", "German"), ("fr", "French"), ("es", "Spanish"),
+                                       ("it", "Italian"), ("pt", "Portuguese")])]),
                 ft.Row([self.dropdown("ocr_correction", "OCR correction",
                                       [("review", "Review uncertain corrections"),
                                        ("automatic", "Automatic (high confidence only)"),

@@ -38,7 +38,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--move-citations", action="store_true", help="replace author-year citations by [n]")
     ap.add_argument("--keep-footnotes", action="store_true", help="do not move footnotes to the end")
     ap.add_argument("--ocr-correction", choices=["automatic", "review", "disabled"])
-    ap.add_argument("--language", choices=["auto", "en", "nl", "de", "fr", "es"])
+    ap.add_argument("--language", choices=["auto", "en", "nl", "de", "fr", "es", "it", "pt"])
     ap.add_argument("--pages", help="page range to convert, e.g. 3-12")
     ap.add_argument("--no-ocr", action="store_true")
     args = ap.parse_args(argv)

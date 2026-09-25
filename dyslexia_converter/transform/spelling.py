@@ -25,7 +25,8 @@ from rapidfuzz.distance import Levenshtein
 from ..model import Block, BlockKind, Correction, Document
 from ..settings import app_data_dir
 
-SUPPORTED_LANGUAGES = {"en": "English", "nl": "Dutch", "de": "German", "fr": "French", "es": "Spanish"}
+SUPPORTED_LANGUAGES = {"en": "English", "nl": "Dutch", "de": "German", "fr": "French", "es": "Spanish",
+                       "it": "Italian", "pt": "Portuguese"}
 
 # (wrong, right) substrings typical for OCR, with low substitution cost
 OCR_CONFUSIONS = [
@@ -41,6 +42,8 @@ STOPWORDS = {
     "de": {"der", "die", "und", "das", "ist", "nicht", "mit", "den", "von", "zu", "ein", "eine", "auf"},
     "fr": {"le", "la", "les", "et", "des", "est", "une", "dans", "que", "pour", "pas", "sur", "du"},
     "es": {"el", "la", "los", "las", "y", "que", "es", "en", "una", "por", "para", "con", "del"},
+    "it": {"il", "lo", "gli", "le", "di", "che", "non", "per", "una", "sono", "della", "nel", "anche"},
+    "pt": {"os", "as", "um", "uma", "que", "não", "para", "com", "por", "dos", "das", "mais", "também"},
 }
 
 
@@ -125,6 +128,18 @@ class Dictionary:
                         stem.endswith("i") and self._in_dict(stem[:-1] + "y")):
                     return True
         return False
+
+    def foreign_known(self, word: str) -> bool:
+        """True if the word is valid in one of the other common languages (loaded on first use).
+
+        Academic texts quote French, German, Latin-rooted terms and so on; such words
+        are correct as written and must not be "corrected" into the document language.
+        """
+        w = word.lower().replace("\u2019", "'")
+        if len(w) < 4:
+            return False
+        others = [l for l in SUPPORTED_LANGUAGES if l not in self.languages]
+        return any(w in _spellchecker(l) for l in others)
 
     def frequency(self, word: str) -> float:
         w = word.lower()
@@ -238,6 +253,8 @@ class OcrCorrector:
         d = self.dictionary
         if d.known(token) or self._protected(token, text, pos, doc_counts):
             return None
+        if d.foreign_known(token):
+            return None  # a correct word in another language (e.g. a quoted French term)
         if is_spelling_variant(token, d):
             return None  # e.g. "optimised" is a correct British spelling of "optimized"
         if re.search(r"\w['\u2019]\w", token) and not re.search(r"[0-9|!]", token):

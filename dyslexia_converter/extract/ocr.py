@@ -46,7 +46,7 @@ class OcrEngine(Protocol):
     def recognize(self, png: bytes, languages: list[str]) -> OcrResult: ...
 
 
-LANG_CODES = {"en": "eng", "nl": "nld", "de": "deu", "fr": "fra", "es": "spa"}
+LANG_CODES = {"en": "eng", "nl": "nld", "de": "deu", "fr": "fra", "es": "spa", "it": "ita", "pt": "por"}
 
 
 class TesseractEngine:
