@@ -17,11 +17,13 @@ from .. import pipeline
 from ..ai.assistant import PRIVACY_NOTICE, AIAssistant, ConsentRequired
 from ..ai.keystore import KeyStore, install_log_redaction, redact
 from ..ai.providers import PROVIDERS, AIError
-from ..extract.ocr import default_engine
+from .. import DONATE_URL, __version__
+from ..extract.ocr import default_engine, find_tesseract
 from ..fonts import FONT_CHOICES, get_family
 from ..render import preview
 from ..settings import PRESET_DISCLAIMER, PRESETS, FormatSettings, SettingsStore
 from ..transform.spelling import CustomWords
+from .theme import make_theme, palette
 
 log = logging.getLogger("dyslexia_converter")
 
@@ -39,7 +41,7 @@ class ConverterApp:
         self.settings: FormatSettings = self.store.load_format() if self.store.has_saved_format() \
             else PRESETS["Standard"].copy()
         self.ai_settings = self.store.load_ai()
-        self.ui = {"text_scale": 1.0, "high_contrast": False, **self.store.load_ui()}
+        self.ui = {"text_scale": 1.0, "high_contrast": False, "dark_mode": False, **self.store.load_ui()}
         self.keystore = KeyStore()
         self.assistant = AIAssistant(self.ai_settings, self.keystore)
         self.custom_words = CustomWords()
@@ -64,9 +66,68 @@ class ConverterApp:
         return ft.Text(value, size=self.fs(size), **kw)
 
     def notify(self, message: str, error: bool = False) -> None:
+        if error or len(message) > 90:
+            # long or important messages stay visible in the notices panel instead of a pop-up
+            self._notices = [("warning" if error else "info", message, None)] + getattr(self, "_notices", [])
+            self._render_notices()
+            self.page.update()
+            return
         self.page.show_dialog(ft.SnackBar(ft.Text(message, size=self.fs(15)),
                                           bgcolor=ft.Colors.RED_700 if error else None,
                                           duration=ft.Duration(seconds=6 if error else 4)))
+
+    # ---------------------------------------------------------------- notices
+    def set_notices(self, notices: list[tuple[str, str, Optional[tuple[str, Callable]]]]) -> None:
+        """Show (kind, message, optional (button label, handler)) notices below the header."""
+        self._notices = list(notices)
+        self._render_notices()
+
+    def _render_notices(self) -> None:
+        items = getattr(self, "_notices", [])
+        self.notice_list.controls.clear()
+        for idx, (kind, message, action) in enumerate(items):
+            icon = {"warning": ft.Icons.WARNING_AMBER, "action": ft.Icons.TOUCH_APP}.get(kind, ft.Icons.INFO_OUTLINE)
+            color = self.pal.get(f"notice_{kind}", self.pal["notice_info"])
+            controls: list[ft.Control] = [ft.Icon(icon, size=20),
+                                          ft.Text(message, size=self.fs(13), expand=True, selectable=True)]
+            if action:
+                label, handler = action
+                controls.append(ft.FilledButton(label, on_click=handler))
+            controls.append(ft.IconButton(ft.Icons.CLOSE, tooltip="Dismiss", data=idx, on_click=self._dismiss))
+            self.notice_list.controls.append(ft.Container(
+                ft.Row(controls, vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=8),
+                bgcolor=color, border_radius=8, padding=ft.Padding.symmetric(horizontal=10, vertical=4)))
+        self.notices.visible = bool(items)
+        # grow with the content up to a limit; beyond that the list scrolls
+        self.notices.height = min(150, 52 * len(items)) if items else 0
+
+    def _dismiss(self, e) -> None:
+        idx = e.control.data
+        if 0 <= idx < len(getattr(self, "_notices", [])):
+            del self._notices[idx]
+        self._render_notices()
+        self.page.update()
+
+    def _review_notice(self) -> Optional[tuple[str, str, Optional[tuple[str, Callable]]]]:
+        if not self.session:
+            return None
+        pending = len(self.session.pending_corrections())
+        if not pending:
+            return None
+
+        async def open_review(e):
+            self.tabs.selected_index = self.review_tab_index
+            self.page.update()
+
+        words = "word needs" if pending == 1 else "words need"
+        return ("action", f"{pending} {words} your decision: OCR wasn't sure how to read them.",
+                ("Review now", open_review))
+
+    def update_review_notice(self) -> None:
+        notices = [n for n in getattr(self, "_notices", []) if n[0] != "action"]
+        rn = self._review_notice()
+        self._notices = ([rn] if rn else []) + notices
+        self._render_notices()
 
     async def in_thread(self, fn: Callable, *args):
         return await asyncio.to_thread(fn, *args)
@@ -74,22 +135,29 @@ class ConverterApp:
     # ================================================================ build
     def build(self) -> None:
         p = self.page
-        p.title = "Dyslexia Converter"
+        p.title = f"Dyslexia Converter {__version__}"
         p.padding = 0
-        p.theme_mode = ft.ThemeMode.LIGHT
         self.apply_theme()
 
-        self.status = self.text("Open a PDF to start. Your original file is never changed.", 14)
+        self.status = self.text("Open a PDF to start. Your original file is never changed.", 14,
+                                max_lines=1, overflow=ft.TextOverflow.ELLIPSIS)
         self.progress = ft.ProgressBar(value=0, visible=False)
+        # longer messages (warnings, decisions waiting) go here: wrapped, scrollable, dismissable
+        self.notice_list = ft.Column(spacing=4, scroll=ft.ScrollMode.AUTO)
+        self.notices = ft.Container(self.notice_list, visible=False, height=0)
         self.mode_chip = ft.Container(content=self.text(self._mode_label(), 13, weight=ft.FontWeight.BOLD),
                                       padding=ft.Padding.symmetric(horizontal=10, vertical=4), border_radius=12,
                                       bgcolor=self._mode_color(), tooltip="Where your document content is processed")
+        self.dark_switch = ft.Switch(label="Dark mode", value=bool(self.ui.get("dark_mode")),
+                                     on_change=self.on_dark_mode, tooltip="Switch between light and dark app colours",
+                                     label_text_style=ft.TextStyle(size=self.fs(14)))
         header = ft.Container(
             content=ft.Row([
                 ft.Row([self.text("Dyslexia Converter", 22, weight=ft.FontWeight.BOLD), self.mode_chip],
                        spacing=12, wrap=True),
-                ft.FilledButton("Open PDF", icon=ft.Icons.FOLDER_OPEN, on_click=self.on_open,
-                                tooltip="Choose a PDF to convert"),
+                ft.Row([self.dark_switch, self.coffee_button(),
+                        ft.FilledButton("Open PDF", icon=ft.Icons.FOLDER_OPEN, on_click=self.on_open,
+                                        tooltip="Choose a PDF to convert")], spacing=8, wrap=True),
             ], spacing=12, wrap=True, alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER),
             padding=ft.Padding.symmetric(horizontal=16, vertical=10))
@@ -106,6 +174,7 @@ class ConverterApp:
                 ft.Container(preview_panel, expand=True, padding=8)], expand=True,
                 vertical_alignment=ft.CrossAxisAlignment.STRETCH))]
         self.preview_tab_index = 1 if narrow else 0
+        self.review_tab_index = len(convert)
         tabs = convert + [
             ("OCR review", ft.Icons.SPELLCHECK, self.build_review_tab()),
             ("Document map", ft.Icons.ACCOUNT_TREE, self.build_map_tab()),
@@ -117,17 +186,34 @@ class ConverterApp:
                 ft.TabBar(tabs=[ft.Tab(label=t, icon=i) for t, i, _ in tabs], scrollable=True),
                 ft.TabBarView(controls=[c for _, _, c in tabs], expand=True),
             ], expand=True, spacing=0))
-        p.add(ft.Column([header, ft.Container(ft.Column([self.status, self.progress], spacing=4),
+        p.add(ft.Column([header, ft.Container(ft.Column([self.status, self.progress, self.notices], spacing=4),
                                               padding=ft.Padding.symmetric(horizontal=16)),
                          self.tabs], expand=True, spacing=4))
 
+    def coffee_button(self) -> ft.Control:
+        """Optional donation link; opens PayPal in the browser. Nothing is sent from the app."""
+        return ft.FilledTonalButton("Like the app? Buy me a coffee", icon=ft.Icons.COFFEE, url=DONATE_URL,
+                                 tooltip="Opens PayPal in your web browser (optional)")
+
     def apply_theme(self) -> None:
-        hc = bool(self.ui.get("high_contrast"))
+        dark = bool(self.ui.get("dark_mode"))
+        self.pal = palette(dark, bool(self.ui.get("high_contrast")))
         # the app itself uses a bundled, highly legible font (works offline too)
         self.page.fonts = {"Atkinson": "fonts/AtkinsonHyperlegible-Regular.ttf"}
-        self.page.theme = ft.Theme(color_scheme_seed=ft.Colors.BROWN if not hc else ft.Colors.BLACK,
-                                   font_family="Atkinson")
-        self.page.bgcolor = ft.Colors.WHITE if hc else "#FDFCF5"
+        theme = make_theme(self.pal, "Atkinson")
+        self.page.theme = self.page.dark_theme = theme
+        self.page.theme_mode = ft.ThemeMode.DARK if dark else ft.ThemeMode.LIGHT
+        self.page.bgcolor = self.pal["bg"]
+
+    def restyle(self) -> None:
+        """Re-apply the palette to the few controls that carry their own colours."""
+        self.apply_theme()
+        self.mode_chip.bgcolor = self._mode_color()
+        self.font_note.color = self.pal["muted"]
+        for panel in (self.orig_panel, self.conv_panel):
+            panel.controls[1].border = ft.Border.all(1, self.pal["frame"])
+        self._render_notices()
+        self.page.update()
 
     def _mode_label(self) -> str:
         if self.ai_settings.mode == "ai_assisted":
@@ -135,7 +221,7 @@ class ConverterApp:
         return "Local-only" if (self.page.width or 1200) < 820 else "Local-only: nothing leaves this device"
 
     def _mode_color(self) -> str:
-        return "#F6E3B4" if self.ai_settings.mode == "ai_assisted" else "#DDEBD5"
+        return self.pal["chip_ai"] if self.ai_settings.mode == "ai_assisted" else self.pal["chip_local"]
 
     # ---------------------------------------------------------------- convert tab
     def slider(self, key: str, label: str, lo: float, hi: float, step: float, unit: str) -> ft.Control:
@@ -185,7 +271,7 @@ class ConverterApp:
         self.preset_dd = ft.Dropdown(label="Preset", value="", expand=True, text_size=self.fs(14),
                                      options=[ft.DropdownOption(key=p, text=p) for p in presets],
                                      on_select=self.on_preset)
-        self.font_note = self.text("", 12, color=ft.Colors.BROWN_700)
+        self.font_note = self.text("", 12, color=self.pal["muted"])
 
         def section(title: str, controls: list[ft.Control], expanded: bool = False) -> ft.Control:
             return ft.ExpansionTile(title=self.text(title, 16, weight=ft.FontWeight.BOLD), expanded=expanded,
@@ -306,10 +392,10 @@ class ConverterApp:
             ], alignment=ft.MainAxisAlignment.CENTER, spacing=2)
 
         self.orig_panel = ft.Column([nav("orig", self.orig_label),
-                                     ft.Container(self.orig_img, expand=True, border=ft.Border.all(1, "#33000000"))],
+                                     ft.Container(self.orig_img, expand=True, border=ft.Border.all(1, self.pal["frame"]))],
                                     expand=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
         self.conv_panel = ft.Column([nav("conv", self.conv_label),
-                                     ft.Container(self.conv_img, expand=True, border=ft.Border.all(1, "#33000000"))],
+                                     ft.Container(self.conv_img, expand=True, border=ft.Border.all(1, self.pal["frame"]))],
                                     expand=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
         export_buttons = [ft.OutlinedButton(label, icon=ft.Icons.DOWNLOAD, data=fmt, on_click=self.on_export,
                                             tooltip=f"Save as {label}") for fmt, label, _ in EXPORTS]
@@ -342,6 +428,7 @@ class ConverterApp:
         ], expand=True), padding=16, expand=True)
 
     def refresh_review(self) -> None:
+        self.update_review_notice()
         self.review_list.controls.clear()
         if not self.session or not self.session.document.ocr_used:
             self.review_summary.value = "No OCR was needed for this document." if self.session else \
@@ -365,7 +452,9 @@ class ConverterApp:
             actions.append(ft.TextButton(f"'{c.original}' is correct - add to dictionary", data=c.original,
                                          on_click=self.on_add_word_from_review))
             self.review_list.controls.append(ft.Card(content=ft.Container(ft.Column([
-                ft.Row([self.text(f"{c.original} → {c.replacement}", 16, weight=ft.FontWeight.BOLD),
+                ft.Row([self.text(c.original, 16, weight=ft.FontWeight.BOLD),
+                        ft.Icon(ft.Icons.ARROW_FORWARD, size=18, tooltip="suggested"),
+                        self.text(c.replacement, 16, weight=ft.FontWeight.BOLD),
                         self.text(f"Confidence {round(c.confidence * 100)}%  ·  {status}  ·  {c.source}",
                                   12)], wrap=True),
                 self.text("Original: " + before, 13),
@@ -542,6 +631,12 @@ class ConverterApp:
         contrast = ft.Switch(label="High-contrast app colours", value=bool(self.ui.get("high_contrast")),
                              on_change=self.on_contrast)
         return ft.Container(ft.Column([
+            self.text(f"Dyslexia Converter {__version__}", 20, weight=ft.FontWeight.BOLD),
+            self.text("Text recognition (OCR): " + (f"Tesseract - {find_tesseract()}" if find_tesseract() else
+                                                     "Tesseract not found. Scanned pages fall back to the text the "
+                                                     "scanner stored. Get it at "
+                                                     "https://github.com/UB-Mannheim/tesseract/wiki"), 12,
+                      selectable=True),
             self.text("How it works", 18, weight=ft.FontWeight.BOLD),
             self.text("1. Open a PDF. Text is extracted locally; scanned pages are read with OCR.\n"
                       "2. Headings, lists, tables, figures, footnotes and references are detected with "
@@ -553,9 +648,15 @@ class ConverterApp:
                       "text. Your original PDF is never modified or overwritten.", 14),
             self.text("About the presets and fonts", 16, weight=ft.FontWeight.BOLD),
             self.text(PRESET_DISCLAIMER + " No single font is best for every reader with dyslexia.", 14),
+            self.text("Support", 16, weight=ft.FontWeight.BOLD),
+            self.text("The app is free. If it helps you, you can buy the maker a coffee. This is completely "
+                      "optional and changes nothing in the app.", 14),
+            ft.Row([self.coffee_button()]),
             self.text("App display", 16, weight=ft.FontWeight.BOLD),
             ft.Row([scale, contrast], wrap=True),
-            self.text("The app text size and colours apply after restarting the app.", 12, italic=True),
+            self.text("The app text size applies after restarting the app. Colours change straight away. "
+                      "Dark mode only changes the app; your exported documents keep their own colours.", 12,
+                      italic=True),
         ], scroll=ft.ScrollMode.AUTO, spacing=10, expand=True), padding=16, expand=True)
 
     async def on_ui_scale(self, e):
@@ -566,8 +667,12 @@ class ConverterApp:
     async def on_contrast(self, e):
         self.ui["high_contrast"] = bool(e.control.value)
         self.store.save_ui(self.ui)
-        self.apply_theme()
-        self.page.update()
+        self.restyle()
+
+    async def on_dark_mode(self, e):
+        self.ui["dark_mode"] = bool(e.control.value)
+        self.store.save_ui(self.ui)
+        self.restyle()
 
     # ================================================================ dialogs
     async def confirm(self, title: str, message: str, yes: str, no: str) -> bool:
@@ -651,17 +756,15 @@ class ConverterApp:
         self.orig_count = preview.page_count(self.source_path)
         self.orig_page = (self._page_range() or (1, 1))[0] - 1
         self.conv_page = 0
-        kind = {"text": "selectable text", "scanned": "scanned pages (OCR used)",
+        scanner_text = any(p.text_source == "scanner" for p in d.pages)
+        kind = {"text": "selectable text",
+                "scanned": "scanned pages (" + ("the scanner's stored text was used" if scanner_text
+                                                else "text read with OCR") + ")",
                 "mixed": "a mix of text and scanned pages (OCR used where needed)"}[d.pdf_type]
-        msg = f"{name}: {kind}. Language: {d.language}."
-        if d.warnings:
-            msg += " " + " ".join(d.warnings)
-        self.busy(False, msg)
+        self.busy(False, f"{name}: {kind}. Language: {d.language}.")
+        self._notices = [("warning", w, None) for w in d.warnings]
         self.refresh_review()
         await self.rerender()
-        pending = len(self.session.pending_corrections())
-        if pending:
-            self.notify(f"{pending} uncertain OCR correction(s) are waiting in 'OCR review'.")
 
     async def on_preset(self, e):
         name = e.control.value
@@ -812,10 +915,13 @@ class ConverterApp:
 
 
 def _blank_png() -> bytes:
-    import pymupdf
-    pix = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 60, 85), 0)
-    pix.clear_with(0xFA)
-    return pix.tobytes("png")
+    import io
+
+    from PIL import Image
+    # transparent, so the empty preview takes the app's background (light or dark)
+    buf = io.BytesIO()
+    Image.new("RGBA", (60, 85), (0, 0, 0, 0)).save(buf, "PNG")
+    return buf.getvalue()
 
 
 def main(page: ft.Page) -> None:

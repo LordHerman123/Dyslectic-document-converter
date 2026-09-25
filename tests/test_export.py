@@ -112,3 +112,15 @@ def test_unicode_is_preserved(tmp_path):
     c.save()
     out = pdf_text(pipeline.load(src).export("pdf", FormatSettings(font="Atkinson Hyperlegible")))
     assert "Greek αβγ and math ≤ ∞, Dutch ëï, ĳsland." in out
+
+
+def test_padded_paragraph_never_overflows_a_page():
+    """Regression: a one-line boxed quote at the foot of a page made ReportLab fail."""
+    from dyslexia_converter.render.compose import Run
+    from dyslexia_converter.render.pdf_writer import _styles, RichParagraph
+
+    st = _styles(FormatSettings(), printable=False)["quote"]
+    p = RichParagraph([Run("erience.")], st)
+    _, h = p.wrap(400, 800)
+    assert p.split(400, h - 1) == []  # does not fit: move it, never claim it fits
+    assert p.split(400, h + 1) == [p]

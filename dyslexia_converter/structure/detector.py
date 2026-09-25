@@ -322,8 +322,8 @@ class StructureDetector:
                     text = text[:-1]
                 elif text.endswith(("-", "/", "–")) and not text.endswith(" -"):
                     pass  # keep compound hyphen, no space
-                elif l.source == "ocr" and self._lost_hyphen(text, l.text):
-                    pass  # "describ" + "ing": OCR dropped the hyphen at the line end
+                elif l.source == "ocr" and self._lost_hyphen(text, l.text) is not None:
+                    text = self._lost_hyphen(text, l.text)  # "describ" + "ing": OCR lost the hyphen
                 else:
                     text += " "
             base = len(text)
@@ -334,10 +334,14 @@ class StructureDetector:
                 styles.append(StyleRange(base, base + len(l.text), bold=True))
         return text, styles, conf
 
-    def _lost_hyphen(self, text: str, nxt: str) -> bool:
-        left = re.search(r"([A-Za-z]+)$", text)
+    def _lost_hyphen(self, text: str, nxt: str) -> Optional[str]:
+        """If OCR lost or misread a line-end hyphen ("describ" / "singu." + "larly"),
+        return ``text`` ready to be joined without a space; otherwise None."""
+        m = re.search(r"([A-Za-z]+)([.,:~=\u00bb]?)$", text)
         right = re.match(r"([a-z]+)", nxt)
-        return bool(left and right and self.rejoin(left.group(1), right.group(1)))
+        if m and right and self.rejoin(m.group(1), right.group(1)):
+            return text[: len(text) - len(m.group(2))]
+        return None
 
     def _para_block(self, p: _Para, body_size: float) -> Block:
         text, styles, conf = self._join_lines(p.lines)
@@ -393,7 +397,8 @@ class StructureDetector:
                 if left and right and self.dehyphenate(left.group(1), right.group(1)):
                     last_para.text = last_para.text[:-1]  # word hyphenated across a page break
                     sep = ""
-                elif b.source == "ocr" and self._lost_hyphen(last_para.text, b.text):
+                elif b.source == "ocr" and self._lost_hyphen(last_para.text, b.text) is not None:
+                    last_para.text = self._lost_hyphen(last_para.text, b.text)
                     sep = ""
                 base = len(last_para.text) + len(sep)
                 last_para.text += sep + b.text
@@ -427,6 +432,8 @@ class StructureDetector:
                 continue
             if sum(ch.isalpha() for ch in text) < 3 or text[:1].islower():
                 continue  # fragments and sentence continuations are never headings
+            if _looks_garbled(text):
+                continue  # OCR noise is never a heading
             ends_sentence = text.endswith((".", ",", ";")) and not NUMBERED_HEADING_RE.match(text + " x")
             bigger = b.font_size >= bs * (1.25 if b.source == "ocr" else 1.12) or (
                 b.source == "text" and b.font_size >= bs * 1.07 and nlines == 1 and len(words) <= 10)
@@ -647,6 +654,18 @@ class StructureDetector:
                     j += 1
                 out.insert(j, cap)
         return out
+
+
+def _looks_garbled(text: str) -> bool:
+    """Text full of stray symbols or letter salad, as produced by bad OCR."""
+    if not text:
+        return True
+    odd = sum(1 for ch in text if not (ch.isalnum() or ch.isspace() or ch in ".,;:'\"()-\u2013\u2014\u2018\u2019\u201c\u201d?!&/"))
+    if odd / len(text) > 0.04 or "^" in text:
+        return True
+    words = re.findall(r"[A-Za-z]+", text)
+    # very long 'words' mean spaces were lost: "monotonicschemesofcentralized"
+    return any(len(w) > 22 for w in words)
 
 
 def _title_case(text: str) -> bool:

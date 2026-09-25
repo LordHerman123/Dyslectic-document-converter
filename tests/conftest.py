@@ -1,5 +1,4 @@
 import hashlib
-import shutil
 from pathlib import Path
 
 import pytest
@@ -43,4 +42,6 @@ def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-needs_tesseract = pytest.mark.skipif(shutil.which("tesseract") is None, reason="Tesseract not installed")
+from dyslexia_converter.extract.ocr import find_tesseract  # noqa: E402
+
+needs_tesseract = pytest.mark.skipif(find_tesseract() is None, reason="Tesseract not installed")

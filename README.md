@@ -11,7 +11,13 @@ Your original PDF is only ever read, never modified.
 Everything works **locally and without AI**. AI is an optional extra that you turn on with your own
 API key. When it's on, it only sees small snippets that the local rules couldn't decide.
 
-## Quick start
+## Download for Windows (version 1.2)
+
+Get `DyslexiaConverter-1.2.0-setup.exe` (installer) or `DyslexiaConverter-1.2.0-windows.zip` (unzip and
+double-click `DyslexiaConverter.exe`) from the repository's **Releases** page. Text recognition (Tesseract)
+is included; nothing else needs to be installed. How the Windows build is made: [windows/README.md](windows/README.md).
+
+## Quick start (from source)
 
 ```bash
 pip install -r requirements.txt
@@ -39,7 +45,7 @@ python -m dyslexia_converter chapter.pdf --pages 3-18 --move-citations -f printa
 |---|---|
 | PDF input | Checks each page for selectable text, scanned images, or both. Reports whether OCR was used. Password-protected PDFs get a clear error. Optional page range. |
 | OCR | Tesseract (English, Dutch, German, French, Spanish, Italian, Portuguese — whichever language packs are installed). Rebuilds lines, paragraphs, headings and reading order. Pictures and ruled tables on scanned pages are kept as images. |
-| Book scans & photocopies | Pages made of image tiles, with or without a copier's hidden text layer, are recognised as scans. Each scan is cleaned before reading: two-page spreads are split at the gutter, gutter shadows and uneven lighting are flattened, dark scanner borders are removed, each page is straightened (deskewed), and sideways or upside-down scans are turned the right way up. Words broken across lines or pages are rejoined. Book running headers ("12 CHAPTER TITLE" / "Section 13") are removed, section headings and epigraphs are recognised, and numbered photo captions stay with their picture. Pages are OCR'd in parallel. Without Tesseract, the scanner's own text layer is used when there is one. |
+| Book scans & photocopies | Pages made of image tiles, with or without a copier's hidden text layer, are recognised as scans. Each scan is cleaned before reading: two-page spreads are split at the gutter, gutter shadows and uneven lighting are flattened, dark scanner borders are removed, each page is straightened (deskewed), and sideways or upside-down scans are turned the right way up. Words broken across lines or pages are rejoined. Book running headers ("12 CHAPTER TITLE" / "Section 13") are removed, section headings and epigraphs are recognised, and numbered photo captions stay with their picture. Pages are OCR'd in parallel at 225 dpi, and the result is saved on this device, so reopening the same PDF takes well under a second. Without Tesseract, the scanner's own text layer is used when there is one; pages where that text is garbled are shown as pictures of the original, with a note. |
 | OCR correction | Uses local dictionaries (pyspellchecker: English, Dutch, German, French, Spanish, Italian, Portuguese) plus the typical OCR mix-ups (`rn`→`m`, `l`→`i`, `0`→`o`, …). Only high-confidence fixes are applied automatically. Modes: Automatic, Review (Accept/Reject in the app) and Off. Names, abbreviations, identifiers, British/American spellings, words that are correct in another of these languages (such as a quoted French term) and your own dictionary words are left alone. |
 | Structure | Title, authors, numbered and unnumbered headings with levels, paragraphs (rejoined across columns and pages), bullet and numbered lists, captions linked to their figure or table, footnotes, references and running headers/footers. All of this uses simple rules based on font size, weight, typeface, position, white space and numbering. The PDF's own bookmarks are used when present. |
 | Reading order | Multi-column aware (recursive XY-cut): column 1 is read before column 2, and full-width titles and figures stay in place. |
@@ -53,6 +59,7 @@ python -m dyslexia_converter chapter.pdf --pages 3-18 --move-citations -f printa
 | Preview | Original, converted, or both side by side, with page navigation. Changing a setting re-renders the preview without re-reading the PDF. |
 | Export | PDF, printable PDF (no tints or backgrounds, black text), DOCX, plain text and Markdown. PDFs are A4, keep selectable Unicode text and embed font subsets. Headings stay with the text that follows them, and paragraphs avoid widow and orphan lines. |
 | Settings | Presets: Standard, Spacious, High Readability, Compact print and My Settings. Settings are saved between sessions and can be reset to the defaults. |
+| App look | Warm autumn colours (cream, sand, caramel, terracotta), a Dark mode switch in the top bar, a high-contrast option and adjustable app text size. These only change the app, not your exported documents. |
 
 The **Standard** preset copies the look of the example conversions: a Verdana-like sans (DejaVu Sans) at
 13 pt, 1.6 line spacing, 14 pt between paragraphs, a left-aligned column about 15 cm wide on a cream page

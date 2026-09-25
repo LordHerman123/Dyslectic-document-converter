@@ -1,0 +1,22 @@
+Third-party software included in the Windows build of Dyslexia Converter
+========================================================================
+
+Tesseract OCR               Apache License 2.0     https://github.com/tesseract-ocr/tesseract
+  Windows build             UB Mannheim            https://github.com/UB-Mannheim/tesseract/wiki
+  Language data             Apache License 2.0     https://github.com/tesseract-ocr/tessdata
+PyMuPDF / MuPDF             GNU AGPL 3.0           https://github.com/pymupdf/PyMuPDF
+                            (commercial licences from Artifex; the source code of this
+                            application is available at its GitHub repository)
+ReportLab                   BSD                    https://www.reportlab.com
+python-docx                 MIT                    https://github.com/python-openxml/python-docx
+pyspellchecker              MIT                    https://github.com/barrust/pyspellchecker
+RapidFuzz                   MIT                    https://github.com/rapidfuzz/RapidFuzz
+Pillow                      MIT-CMU (HPND)         https://python-pillow.org
+NumPy                       BSD                    https://numpy.org
+pytesseract                 Apache License 2.0     https://github.com/madmaze/pytesseract
+httpx                       BSD                    https://www.python-httpx.org
+Flet / Flutter              Apache License 2.0     https://flet.dev
+Python                      PSF License            https://www.python.org
+Fonts                       see the LICENSE-*.txt files in this folder
+                            (Atkinson Hyperlegible: SIL OFL 1.1; OpenDyslexic: Bitstream Vera
+                            licence; DejaVu Sans: Bitstream Vera / public domain; Liberation Sans: SIL OFL)

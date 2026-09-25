@@ -111,6 +111,13 @@ class RichParagraph(Flowable):
         self._fonts = {(b, i): register_font(style.family, b, i) for b in (False, True) for i in (False, True)}
         self._fallback = {(b, i): register_font(FALLBACK_FAMILY, b, i) for b in (False, True) for i in (False, True)}
 
+    def __repr__(self) -> str:
+        text = "".join(r.text for r in self.runs)
+        return f"<RichParagraph {text[:60]!r} lines={len(self._lines or [])} first={self._first}>"
+
+    def identity(self, maxLen=None) -> str:
+        return repr(self)
+
     # ----------------------------------------------------------- measurement
     @property
     def pad_top(self) -> float:
@@ -245,10 +252,11 @@ class RichParagraph(Flowable):
     def split(self, availWidth, availHeight):
         self.wrap(availWidth, availHeight)
         lead = self.style.leading
-        fit = int((availHeight - self.pad_top) // lead)
-        total = len(self._lines)
-        if fit >= total:
+        if self.height <= availHeight + 1e-6:
             return [self]
+        # the first part keeps the top padding; its bottom padding moves to the second part
+        fit = min(len(self._lines) - 1, int((availHeight - self.pad_top) // lead))
+        total = len(self._lines)
         if fit < 2 or total < 4:
             return []  # avoid orphans: move whole paragraph
         if total - fit < 2:

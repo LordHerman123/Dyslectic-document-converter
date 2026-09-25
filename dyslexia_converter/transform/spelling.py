@@ -33,7 +33,7 @@ OCR_CONFUSIONS = [
     ("rn", "m"), ("m", "rn"), ("l", "i"), ("i", "l"), ("1", "l"), ("1", "i"), ("l", "1"), ("0", "o"),
     ("o", "0"), ("5", "s"), ("8", "B"), ("cl", "d"), ("vv", "w"), ("ii", "u"), ("li", "h"), ("I", "l"),
     ("l", "I"), ("c", "e"), ("e", "c"), ("n", "u"), ("u", "n"), ("h", "b"), ("f", "t"), ("t", "f"),
-    ("fi", "ﬁ"), ("|", "l"), ("!", "l"), ("€", "e"), ("é", "e"), ("tl", "d"), ("ri", "n"), ("in", "m"),
+    ("y", "v"), ("v", "y"), ("iy", "ry"), ("fi", "ﬁ"), ("|", "l"), ("!", "l"), ("€", "e"), ("é", "e"), ("tl", "d"), ("ri", "n"), ("in", "m"),
 ]
 TOKEN_RE = re.compile(r"[^\W_]+(?:['’\-][^\W_]+)*", re.UNICODE)
 STOPWORDS = {
@@ -100,6 +100,7 @@ class Dictionary:
         self.languages = [l for l in languages if l in SUPPORTED_LANGUAGES] or ["en"]
         self.checkers = [_spellchecker(l) for l in self.languages]
         self.custom = custom
+        self._cand_cache: dict[str, set[str]] = {}
 
     def _in_dict(self, w: str) -> bool:
         return any(w in c for c in self.checkers)
@@ -146,12 +147,19 @@ class Dictionary:
         return max((c.word_usage_frequency(w) for c in self.checkers), default=0.0)
 
     def candidates(self, word: str) -> set[str]:
+        """Known words one edit away (insert, delete, replace or swap one letter).
+
+        Two-edit guesses are slow to compute and almost never confident enough to
+        use, so they are left out; typical OCR mix-ups are handled by ``ocr_variants``.
+        """
         w = word.lower()
+        key = w
+        if key in self._cand_cache:
+            return self._cand_cache[key]
         out: set[str] = set()
         for c in self.checkers:
-            cands = c.candidates(w) if len(w) <= 18 else None
-            if cands:
-                out |= {x for x in cands if x != w}
+            out |= {x for x in c.known(c.edit_distance_1(w)) if x != w}
+        self._cand_cache[key] = out
         return out
 
 
@@ -201,6 +209,10 @@ PREFIXES = ("non", "de", "un", "re", "pre", "anti", "counter", "over", "under", 
             "inter", "multi", "semi", "co", "mis", "proto", "pseudo", "quasi", "neo", "hyper", "micro", "macro")
 SUFFIXES = ("s", "es", "ed", "ing", "er", "ers", "ly", "ness", "ism", "isms", "ist", "ists", "ity", "ities", "al",
             "ally", "ation", "ations", "ize", "izes", "ized", "izer", "izers", "ise", "ised", "able", "ment", "ments")
+
+WORD_ENDINGS = {"tion", "tions", "sion", "sions", "ment", "ments", "ness", "ity", "ities", "ing", "ings", "ly",
+                "ally", "ous", "ive", "ives", "ance", "ence", "ure", "ures", "ism", "ist", "ists", "able", "ible",
+                "ical", "ated", "ation", "ations", "tive", "tial", "cial", "ture", "tures"}
 
 TRUNCATION_ENDINGS = ("e", "le", "ing", "ed", "es", "er", "ion", "ions", "ity", "al", "ly", "able", "ation", "ment")
 
@@ -255,6 +267,14 @@ class OcrCorrector:
             return None
         if d.foreign_known(token):
             return None  # a correct word in another language (e.g. a quoted French term)
+        low_t = token.lower()
+        if low_t in WORD_ENDINGS:
+            return None  # the end of a word split across lines ("...tion"): nothing to correct
+        if len(low_t) >= 6 and any(d.known(low_t[:i]) and d.known(low_t[i:])
+                                   for i in range(2, len(low_t) - 1) if len(low_t[:i]) > 1 and len(low_t[i:]) > 1
+                                   and (len(low_t[:i]) > 2 or low_t[:i] in ("a", "an", "to", "of", "in", "on", "at", "is", "it", "be", "by", "or", "as", "we"))
+                                   and (len(low_t[i:]) > 2 or low_t[i:] in ("to", "of", "in", "on", "at", "is", "it", "be", "by", "or", "as", "an", "we"))):
+            return None  # two words run together ("triesto" = "tries to"): not a misspelling to replace
         if is_spelling_variant(token, d):
             return None  # e.g. "optimised" is a correct British spelling of "optimized"
         if re.search(r"\w['\u2019]\w", token) and not re.search(r"[0-9|!]", token):
