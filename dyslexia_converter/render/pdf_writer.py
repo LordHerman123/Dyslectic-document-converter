@@ -511,48 +511,59 @@ def _table_flowable(item: RItem, s: FormatSettings, col_w: float, max_h: float, 
     tab = item.table
     rows = tab.rows if tab else []
     n_cols = max((len(r) for r in rows), default=0)
-    size = max(9.0, s.font_size * 0.8)
-    min_col = 1.6 * cm
-    usable = tab is not None and tab.reliable and s.table_mode != "image" and n_cols and n_cols * min_col <= col_w
+    usable = tab is not None and tab.reliable and s.table_mode != "image" and n_cols >= 1
     reg = register_font(s.font, False, False)
     bold = register_font(s.font, True, False)
-    if not usable:
+
+    def picture(note: str) -> tuple[Flowable, str]:
         if tab is not None and tab.fallback_image is not None:
             fake = RItem("image", image=tab.fallback_image, natural_width=item.natural_width)
-            return _image_flowable(fake, col_w, max_h), "Table shown as an image of the original."
+            return _image_flowable(fake, col_w, max_h), note
         return Spacer(1, 1), ""
-    ink = s.ink_saving or printable
-    cell = ParagraphStyle("cell", fontName=reg, fontSize=size, leading=size * 1.45, alignment=TA_LEFT,
-                          textColor=colors.black if ink else colors.HexColor(s.text_color))
-    head = ParagraphStyle("head", parent=cell, fontName=bold)
-    pad = 12  # cell padding left + right
-    lengths = [max((len(r[i]) if i < len(r) else 0) for r in rows) for i in range(n_cols)]
 
-    def longest_word(i: int) -> float:
-        return max((pdfmetrics.stringWidth(w, bold if ri == 0 else reg, size)
-                     for ri, r in enumerate(rows) if i < len(r) for w in r[i].split()), default=0) + pad
+    if not usable:
+        return picture("Table shown as an image of the original.")
+    header_rows = max(1, min(tab.header_rows, len(rows) - 1)) if len(rows) > 1 else 1
+    bold_cells = tab.bold_cells or set()
+    pad = 10  # cell padding left + right
 
-    mins = [max(min_col * 0.6, longest_word(i)) for i in range(n_cols)]
+    def is_bold(ri: int, ci: int) -> bool:
+        return ri < header_rows or (ri, ci) in bold_cells
+
+    def longest_word(i: int, size: float) -> float:
+        return max((pdfmetrics.stringWidth(w, bold if is_bold(ri, i) else reg, size)
+                    for ri, r in enumerate(rows) if i < len(r) for w in r[i].split()), default=0) + pad
+
+    # wide tables (many columns of numbers) get a smaller font before they fall back to a picture
+    size = max(9.0, s.font_size * 0.8)
+    while True:
+        mins = [max(0.9 * cm if n_cols <= 6 else 0.6 * cm, longest_word(i, size)) for i in range(n_cols)]
+        if sum(mins) <= col_w or size <= 7.0:
+            break
+        size -= 0.5
     if sum(mins) > col_w:
-        if tab is not None and tab.fallback_image is not None:
-            fake = RItem("image", image=tab.fallback_image, natural_width=item.natural_width)
-            return _image_flowable(fake, col_w, max_h), "Table shown as an image of the original (too wide)."
-        mins = [col_w / n_cols] * n_cols
+        return picture("Table shown as an image of the original (too wide).")
+    lengths = [max((len(r[i]) if i < len(r) else 0) for r in rows) for i in range(n_cols)]
     weights = [math.sqrt(max(3, l)) for l in lengths]
     spare = col_w - sum(mins)
     widths = [m + spare * w / sum(weights) for m, w in zip(mins, weights)]
+    ink = s.ink_saving or printable
+    cell = ParagraphStyle("cell", fontName=reg, fontSize=size, leading=size * 1.45, alignment=TA_LEFT,
+                          textColor=colors.black if ink else colors.HexColor(s.text_color))
+    strong = ParagraphStyle("strong", parent=cell, fontName=bold)
 
     def esc(t: str) -> str:
         return t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-    data = [[Paragraph(esc(r[i]) if i < len(r) else "", head if ri == 0 else cell) for i in range(n_cols)]
+    data = [[Paragraph(esc(r[i]) if i < len(r) else "", strong if is_bold(ri, i) else cell) for i in range(n_cols)]
             for ri, r in enumerate(rows)]
-    t = Table(data, colWidths=widths, repeatRows=1, hAlign="LEFT")
+    t = Table(data, colWidths=widths, repeatRows=header_rows, hAlign="LEFT")
     style = [("GRID", (0, 0), (-1, -1), 0.5, TABLE_GRID if not ink else colors.grey),
              ("VALIGN", (0, 0), (-1, -1), "TOP"),
-             ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 5)]
+             ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+             ("LEFTPADDING", (0, 0), (-1, -1), 5), ("RIGHTPADDING", (0, 0), (-1, -1), 5)]
     if not ink:
-        style.append(("BACKGROUND", (0, 0), (-1, 0), TABLE_HEAD))
+        style.append(("BACKGROUND", (0, 0), (-1, header_rows - 1), TABLE_HEAD))
     t.setStyle(TableStyle(style))
     return t, ""
 

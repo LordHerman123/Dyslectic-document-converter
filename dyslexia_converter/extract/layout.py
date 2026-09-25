@@ -30,6 +30,30 @@ def _gaps(intervals: list[tuple[float, float]], min_gap: float) -> list[tuple[fl
     return gaps
 
 
+def _rows_left_to_right(items: list[T], bbox_of) -> list[T]:
+    """Top to bottom, and left to right within a row: things side by side (figure panels) that start
+    a point higher or lower are still read in order."""
+    rows: list[list[T]] = []
+    for it in sorted(items, key=lambda it: (bbox_of(it)[1], bbox_of(it)[0])):
+        b = bbox_of(it)
+        h = b[3] - b[1]
+        for row in rows:
+            r = bbox_of(row[0])
+            overlap = min(r[3], b[3]) - max(r[1], b[1])
+            side_by_side = all(bbox_of(o)[2] <= b[0] + 1 or b[2] <= bbox_of(o)[0] + 1 for o in row)
+            tall = h >= 20 and r[3] - r[1] >= 20  # pictures and tables; text lines keep top-to-bottom order
+            if tall and side_by_side and overlap > 0.6 * min(h, r[3] - r[1]) \
+                    and abs(r[1] - b[1]) < 0.25 * max(h, r[3] - r[1]):
+                row.append(it)
+                break
+        else:
+            rows.append([it])
+    out: list[T] = []
+    for row in rows:
+        out += sorted(row, key=lambda it: bbox_of(it)[0])
+    return out
+
+
 def reading_order(items: Sequence[T], bbox_of=lambda it: it.bbox) -> list[T]:
     items = list(items)
     if len(items) <= 1:
@@ -39,7 +63,7 @@ def reading_order(items: Sequence[T], bbox_of=lambda it: it.bbox) -> list[T]:
 
 def _xycut(items: list[T], bbox_of, depth: int) -> list[T]:
     if len(items) <= 1 or depth > 40:
-        return sorted(items, key=lambda it: (bbox_of(it)[1], bbox_of(it)[0]))
+        return _rows_left_to_right(items, bbox_of)
     boxes = [bbox_of(it) for it in items]
 
     # 1) vertical gutter -> columns
@@ -82,4 +106,4 @@ def _xycut(items: list[T], bbox_of, depth: int) -> list[T]:
                 out += _xycut(band, bbox_of, depth + 1)
             return out
 
-    return sorted(items, key=lambda it: (bbox_of(it)[1], bbox_of(it)[0]))
+    return _rows_left_to_right(items, bbox_of)

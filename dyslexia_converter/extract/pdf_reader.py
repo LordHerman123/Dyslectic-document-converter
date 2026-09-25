@@ -712,6 +712,19 @@ def _merge_same_baseline(lines: list[RawLine]) -> list[RawLine]:
 
 # --------------------------------------------------------------------------- figures
 
+def _clear_of_text(clip: Rect, rect: Rect, lines: list[RawLine]) -> Rect:
+    """Shrink a picture's margin so it does not cut into a text line just above or below it."""
+    x0, y0, x1, y1 = clip
+    for l in lines:
+        if overlap_ratio(l.bbox, rect) > 0.5 or l.x1 <= x0 or l.x0 >= x1:
+            continue
+        if l.y1 <= rect[1] + 1 and l.y1 > y0:
+            y0 = l.y1
+        elif l.y0 >= rect[3] - 1 and l.y0 < y1:
+            y1 = l.y0
+    return (x0, y0, x1, y1)
+
+
 def _figures(page: pymupdf.Page, doc: pymupdf.Document, lines: list[RawLine],
              exclude: list[Rect], repeated_xrefs: set[int]) -> list[RawFigure]:
     prect = tuple(page.rect)
@@ -796,7 +809,7 @@ def _figures(page: pymupdf.Page, doc: pymupdf.Document, lines: list[RawLine],
             except Exception:
                 img = None
         if img is None:
-            img = render_clip(page, _expand(rect, 2))
+            img = render_clip(page, _clear_of_text(_expand(rect, 2), rect, lines))
         small = (rect[2] - rect[0]) < 40 and (rect[3] - rect[1]) < 40
         # journal logos / "check for updates" badges near the top of the first page
         logo = (page.number == 0 and rect[3] < prect[3] * 0.3 and _area(rect) < 0.05 * parea
@@ -1021,12 +1034,18 @@ def _tables(page: pymupdf.Page) -> list[RawTable]:
         found = page.find_tables()
     except Exception:
         return out
+    try:
+        drawings = page.get_drawings()
+    except Exception:
+        drawings = []
     for tab in found.tables:
         try:
             rows = tab.extract()
         except Exception:
             rows = []
         rect = tuple(tab.bbox)
+        if _looks_like_chart(drawings, rect):
+            continue  # gridlines of a chart, not a table
         cells = [c for r in rows for c in r]
         n_rows = len(rows)
         n_cols = max((len(r) for r in rows), default=0)
@@ -1040,6 +1059,156 @@ def _tables(page: pymupdf.Page) -> list[RawTable]:
 
 
 TABLE_CAPTION_RE = re.compile(r"^\s*(table|tab\.?|tabel)\s*[\dIVX]+", re.I)
+
+
+def _horizontal_rules(drawings: list[dict]) -> list[Rect]:
+    out = []
+    for d in drawings:
+        r = d["rect"]
+        if r.height <= 1.6 and r.width >= 40:
+            out.append((r.x0, (r.y0 + r.y1) / 2, r.x1, (r.y0 + r.y1) / 2))
+    return out
+
+
+def _looks_like_chart(drawings: list[dict], rect: Rect) -> bool:
+    """A chart has curves, markers and filled shapes inside; a table only straight rules."""
+    other = 0
+    for d in drawings:
+        r = d["rect"]
+        if overlap_ratio(tuple(r), rect) <= 0.8:
+            continue
+        if any(it[0] in ("c", "qu") for it in d.get("items", [])):
+            other += 1
+        elif not (r.height <= 1.6 or r.width <= 1.6) and d.get("fill") is None:
+            other += 1
+        elif sum(1 for it in d.get("items", []) if it[0] == "l") > 6:
+            other += 1  # a polyline: a plotted series
+    return other > 2
+
+
+def _rule_tables(page: pymupdf.Page, existing: list[RawTable]) -> list[RawTable]:
+    """Tables drawn with horizontal rules only (LaTeX booktabs: top rule, mid rule, bottom rule)."""
+    try:
+        drawings = page.get_drawings()
+    except Exception:
+        return []
+    rules = sorted(_horizontal_rules(drawings), key=lambda r: r[1])
+    groups: list[list[Rect]] = []
+    for r in rules:
+        for g in reversed(groups):
+            # same table: booktabs rules share both edges and follow each other within a table's height
+            if abs(g[-1][0] - r[0]) < 4 and abs(g[-1][2] - r[2]) < 4 and r[1] - g[-1][1] < 220:
+                g.append(r)
+                break
+        else:
+            groups.append([r])
+    words = page.get_text("words")
+    try:
+        span_bold = [(tuple(sp["bbox"]), _is_bold_font(sp["font"], sp["flags"]), is_math_font(sp["font"]))
+                     for b in page.get_text("dict")["blocks"] for l in b.get("lines", []) for sp in l["spans"]
+                     if sp["text"].strip()]
+    except Exception:
+        span_bold = []
+    out: list[RawTable] = []
+    for g in groups:
+        # drop duplicates (thick rules are drawn as two lines)
+        ys: list[Rect] = []
+        for r in g:
+            if not ys or r[1] - ys[-1][1] > 2.5:
+                ys.append(r)
+        if len(ys) < 2:
+            continue
+        top, bottom = ys[0][1], ys[-1][1]
+        x0, x1 = min(r[0] for r in ys), max(r[2] for r in ys)
+        rect = (x0 - 2, top - 1, x1 + 2, bottom + 1)
+        if bottom - top < 12 or any(overlap_ratio(rect, t.bbox) > 0.3 for t in existing + out):
+            continue
+        if _looks_like_chart(drawings, rect):
+            continue
+        inside = [w for w in words if x0 - 2 <= (w[0] + w[2]) / 2 <= x1 + 2 and top < (w[1] + w[3]) / 2 < bottom]
+        if len(inside) < 4:
+            continue
+        # rows by vertical position
+        inside.sort(key=lambda w: ((w[1] + w[3]) / 2, w[0]))
+        rows: list[list] = []
+        for w in inside:
+            cy = (w[1] + w[3]) / 2
+            if rows and abs(cy - rows[-1][0]) < 0.45 * (w[3] - w[1]):
+                rows[-1][1].append(w)
+            else:
+                rows.append([cy, [w]])
+        if len(rows) < 2:
+            continue
+        # header rows: those above the second rule (booktabs mid rule)
+        mid = ys[1][1] if len(ys) >= 3 else top
+        header_rows = sum(1 for cy, _ in rows if cy < mid) if len(ys) >= 3 else 1
+        body = [ws for cy, ws in rows if cy >= mid] or [ws for _, ws in rows]
+        # column boundaries: white space shared by (nearly) all body rows
+        grid_x0, grid_x1 = int(x0) - 2, int(x1) + 3
+        covered = [0] * (grid_x1 - grid_x0)
+        for ws in body:
+            seen = [False] * len(covered)
+            for w in ws:
+                for x in range(max(0, int(w[0]) - grid_x0), min(len(covered), int(w[2]) + 1 - grid_x0)):
+                    seen[x] = True
+            for i, v in enumerate(seen):
+                covered[i] += v
+        limit = max(1, int(len(body) * 0.1))
+        cuts, run = [], None
+        for i, c in enumerate(covered):
+            if c < limit:
+                run = i if run is None else run
+            else:
+                if run is not None and i - run >= 3 and run > 0:
+                    cuts.append(grid_x0 + (run + i) / 2)
+                run = None
+        n_cols = len(cuts) + 1
+        if n_cols < 2 or n_cols > 20:
+            continue
+
+        def col_of(w) -> int:
+            cx = (w[0] + w[2]) / 2
+            return sum(1 for c in cuts if cx > c)
+
+        cells: list[list[str]] = []
+        bold_cells: set = set()
+        math_chars = total_chars = 0
+        for ri, (_cy, ws) in enumerate(rows):
+            row = [""] * n_cols
+            for w in sorted(ws, key=lambda w: w[0]):
+                ci = col_of(w)
+                row[ci] = (row[ci] + " " + w[4]).strip()
+                box = (w[0], w[1], w[2], w[3])
+                for sb, bold, math in span_bold:
+                    if overlap_ratio(box, sb) > 0.6:
+                        total_chars += len(w[4])
+                        math_chars += len(w[4]) if math else 0
+                        if bold and ri >= header_rows:
+                            bold_cells.add((ri, ci))
+                        break
+            cells.append(row)
+        # columns that stay empty (the space around a vertical separator) are dropped
+        keep = [ci for ci in range(n_cols) if any(r[ci] for r in cells)]
+        if len(keep) < 2:
+            continue
+        remap = {old: new for new, old in enumerate(keep)}
+        cells = [[r[ci] for ci in keep] for r in cells]
+        bold_cells = {(ri, remap[ci]) for ri, ci in bold_cells if ci in remap}
+        n_cols = len(keep)
+        # a row whose first cell is empty continues the row above (a wrapped cell), unless it has numbers
+        merged: list[list[str]] = []
+        for ri, row in enumerate(cells):
+            if merged and not row[0] and sum(1 for c in row if c) <= 2 and ri >= header_rows and \
+                    not any(re.match(r"^[\d.,±%-]+$", c) for c in row if c):
+                merged[-1] = [(a + " " + b).strip() for a, b in zip(merged[-1], row)]
+            else:
+                merged.append(row)
+        filled = sum(1 for r in merged for c in r if c) / max(1, len(merged) * n_cols)
+        # formulas in cells read better as the original picture
+        reliable = filled > 0.45 and math_chars <= 0.1 * max(1, total_chars)
+        out.append(RawTable(rect, TableData(merged, render_clip(page, _expand(rect, 2)), reliable,
+                                            header_rows=max(1, header_rows), bold_cells=bold_cells)))
+    return out
 
 
 def _caption_tables(page: pymupdf.Page, lines: list[RawLine], existing: list[RawTable]) -> list[RawTable]:
@@ -1529,6 +1698,7 @@ def read_pdf(path: str, ocr_engine: Optional[OcrEngine] = None, languages: Optio
             else:
                 all_lines = _text_lines(page, vno)
                 rp.tables = _tables(page)
+                rp.tables += _rule_tables(page, rp.tables)
                 rp.tables += _caption_tables(page, all_lines, rp.tables)
                 table_rects = [t.bbox for t in rp.tables]
                 lines = [l for l in all_lines if not any(overlap_ratio(l.bbox, t) > 0.6 for t in table_rects)]

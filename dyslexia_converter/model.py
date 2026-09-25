@@ -68,6 +68,8 @@ class TableData:
     # reconstructed reliably, so contents are never corrupted.
     fallback_image: Optional[ImageData] = None
     reliable: bool = True
+    header_rows: int = 1
+    bold_cells: set = field(default_factory=set)  # {(row, column)} set in bold in the original (best scores)
 
 
 @dataclass

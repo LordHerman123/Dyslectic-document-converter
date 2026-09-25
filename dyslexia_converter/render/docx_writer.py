@@ -146,7 +146,7 @@ def build_docx(result: ComposeResult, s: FormatSettings, title: str = "", author
                         run = cp.add_run(row[ci] if ci < len(row) else "")
                         run.font.size = Pt(max(9.0, s.font_size * 0.8))
                         run.font.name = s.font
-                        run.bold = ri == 0
+                        run.bold = ri < max(1, tab.header_rows) or (ri, ci) in (tab.bold_cells or set())
                         cp.paragraph_format.line_spacing = 1.2
                         cp.paragraph_format.space_after = Pt(2)
                 d.add_paragraph()

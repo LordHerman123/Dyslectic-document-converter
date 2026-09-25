@@ -639,18 +639,35 @@ class StructureDetector:
                 if t.page != cap.page or t.id in {c.caption_for for c in blocks if c.caption_for}:
                     continue
                 horiz = overlap_ratio((cap.bbox[0], 0, cap.bbox[2], 1), (t.bbox[0], 0, t.bbox[2], 1))
-                d = min(abs(cap.bbox[1] - t.bbox[3]), abs(t.bbox[1] - cap.bbox[3]))
+                below_target = cap.bbox[1] >= t.bbox[3] - 3
+                d = abs(cap.bbox[1] - t.bbox[3]) if below_target else abs(t.bbox[1] - cap.bbox[3])
                 if horiz < 0.2:
                     d += 200
                 if is_table == (t.kind == BlockKind.TABLE):
                     d -= 20
+                # figure captions usually sit below their figure, table captions above their table
+                if not is_table and not below_target:
+                    d += 40
+                if is_table and below_target:
+                    d += 15
                 if d < best_d:
                     best, best_d = t, d
             if best is not None and best_d < 150:
                 cap.caption_for = best.id
         # move each caption next to its target: figures -> caption after, tables -> caption before
-        out = [b for b in blocks if not (b.kind == BlockKind.CAPTION and b.caption_for)]
+        # a figure caption that already follows its figure (and its other panels) stays where it is
+        position = {b.id: i for i, b in enumerate(blocks)}
+        by_id = {b.id: b for b in blocks}
+        staying = set()
         for cap in [b for b in blocks if b.kind == BlockKind.CAPTION and b.caption_for]:
+            t = by_id.get(cap.caption_for)
+            if t is not None and t.kind == BlockKind.IMAGE and position[cap.id] > position[t.id] \
+                    and cap.bbox[1] >= t.bbox[3] - 3 and cap.page == t.page \
+                    and all(b.page == cap.page and b.kind != BlockKind.HEADING
+                            for b in blocks[position[t.id]:position[cap.id]]):
+                staying.add(cap.id)
+        out = [b for b in blocks if not (b.kind == BlockKind.CAPTION and b.caption_for) or b.id in staying]
+        for cap in [b for b in blocks if b.kind == BlockKind.CAPTION and b.caption_for and b.id not in staying]:
             idx = next(i for i, b in enumerate(out) if b.id == cap.caption_for)
             target = out[idx]
             if target.kind == BlockKind.TABLE:
