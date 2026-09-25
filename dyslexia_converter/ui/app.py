@@ -17,7 +17,8 @@ from .. import pipeline
 from ..ai.assistant import PRIVACY_NOTICE, AIAssistant, ConsentRequired
 from ..ai.keystore import KeyStore, install_log_redaction, redact
 from ..ai.providers import PROVIDERS, AIError
-from ..extract.ocr import default_engine
+from .. import __version__
+from ..extract.ocr import default_engine, find_tesseract
 from ..fonts import FONT_CHOICES, get_family
 from ..render import preview
 from ..settings import PRESET_DISCLAIMER, PRESETS, FormatSettings, SettingsStore
@@ -134,7 +135,7 @@ class ConverterApp:
     # ================================================================ build
     def build(self) -> None:
         p = self.page
-        p.title = "Dyslexia Converter"
+        p.title = f"Dyslexia Converter {__version__}"
         p.padding = 0
         p.theme_mode = ft.ThemeMode.LIGHT
         self.apply_theme()
@@ -610,6 +611,12 @@ class ConverterApp:
         contrast = ft.Switch(label="High-contrast app colours", value=bool(self.ui.get("high_contrast")),
                              on_change=self.on_contrast)
         return ft.Container(ft.Column([
+            self.text(f"Dyslexia Converter {__version__}", 20, weight=ft.FontWeight.BOLD),
+            self.text("Text recognition (OCR): " + (f"Tesseract - {find_tesseract()}" if find_tesseract() else
+                                                     "Tesseract not found. Scanned pages fall back to the text the "
+                                                     "scanner stored. Get it at "
+                                                     "https://github.com/UB-Mannheim/tesseract/wiki"), 12,
+                      selectable=True),
             self.text("How it works", 18, weight=ft.FontWeight.BOLD),
             self.text("1. Open a PDF. Text is extracted locally; scanned pages are read with OCR.\n"
                       "2. Headings, lists, tables, figures, footnotes and references are detected with "

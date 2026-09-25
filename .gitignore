@@ -8,3 +8,5 @@ dist/
 tests/fixtures/
 *_readable.*
 *_printable.pdf
+selftest/
+*.spec

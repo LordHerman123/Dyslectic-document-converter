@@ -9,7 +9,9 @@ from __future__ import annotations
 import io
 import os
 import shutil
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional, Protocol
 
 
@@ -49,11 +51,59 @@ class OcrEngine(Protocol):
 LANG_CODES = {"en": "eng", "nl": "nld", "de": "deu", "fr": "fra", "es": "spa", "it": "ita", "pt": "por"}
 
 
+def _app_dirs() -> list[Path]:
+    """Folders of the running app (the packaged .exe folder, or the source checkout)."""
+    dirs = []
+    if getattr(sys, "frozen", False):
+        dirs.append(Path(sys.executable).resolve().parent)
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            dirs.append(Path(meipass))
+    dirs.append(Path(__file__).resolve().parents[2])
+    return dirs
+
+
+def find_tesseract() -> Optional[str]:
+    """Locate the Tesseract program.
+
+    Order: a copy bundled with the app (``tesseract/`` next to the .exe),
+    ``DYSLEXIA_CONVERTER_TESSERACT``, the system PATH, then the usual install
+    folders (the Windows installer does not always add itself to PATH).
+    """
+    exe = "tesseract.exe" if os.name == "nt" else "tesseract"
+    for d in _app_dirs():
+        for sub in ("tesseract", "Tesseract-OCR", "_internal/tesseract"):
+            cand = d / sub / exe
+            if cand.is_file():
+                tessdata = cand.parent / "tessdata"
+                if tessdata.is_dir():
+                    os.environ["TESSDATA_PREFIX"] = str(tessdata)  # use the bundled language data
+                return str(cand)
+    env = os.environ.get("DYSLEXIA_CONVERTER_TESSERACT")
+    if env and Path(env).is_file():
+        return env
+    found = shutil.which("tesseract")
+    if found:
+        return found
+    candidates = []
+    if os.name == "nt":
+        for var in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"):
+            base = os.environ.get(var)
+            if base:
+                candidates += [Path(base) / "Tesseract-OCR" / exe, Path(base) / "Programs" / "Tesseract-OCR" / exe]
+    else:
+        candidates += [Path("/opt/homebrew/bin/tesseract"), Path("/usr/local/bin/tesseract"), Path("/usr/bin/tesseract")]
+    for cand in candidates:
+        if cand.is_file():
+            return str(cand)
+    return None
+
+
 class TesseractEngine:
     name = "Tesseract"
 
     def __init__(self, cmd: Optional[str] = None):
-        self._cmd = cmd
+        self._cmd = cmd or find_tesseract()
         # Pages are OCR'd in parallel; one thread per Tesseract process avoids
         # the heavy slowdown of several multi-threaded Tesseracts competing.
         os.environ.setdefault("OMP_THREAD_LIMIT", "1")
@@ -63,10 +113,10 @@ class TesseractEngine:
             import pytesseract
         except ImportError:
             return False
-        if self._cmd:
+        if self._cmd and Path(self._cmd).is_file():
             pytesseract.pytesseract.tesseract_cmd = self._cmd
             return True
-        return shutil.which("tesseract") is not None
+        return False
 
     def languages(self) -> list[str]:
         import pytesseract

@@ -1,0 +1,88 @@
+name: Windows release
+
+# Builds DyslexiaConverter for Windows with Tesseract included.
+# - pull requests / manual runs: build + self-test, files available as workflow artifacts
+# - tags v*: the same, then attached to the GitHub release for that tag
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - "dyslexia_converter/**"
+      - "windows/**"
+      - "main.py"
+      - "requirements.txt"
+      - ".github/workflows/windows-release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Tesseract (to bundle) and Inno Setup (installer)
+        run: choco install tesseract innosetup -y --no-progress
+
+      - name: Install Python packages
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller "flet-cli>=1.0,<2" "flet-desktop>=1.0,<2" pytest
+
+      - name: Run tests
+        run: python -m pytest -q
+
+      - name: Build app folder and zip
+        run: python windows/build.py
+
+      - name: Self-test the packaged .exe (converts a scanned PDF with the bundled Tesseract)
+        shell: pwsh
+        run: |
+          python tests/make_samples.py selftest
+          $env:PATH = "C:\Windows\System32;C:\Windows"   # make sure only the bundled Tesseract can be used
+          $p = Start-Process -FilePath "dist\DyslexiaConverter\DyslexiaConverter.exe" `
+               -ArgumentList "--selftest","selftest\sample_scanned.pdf","selftest\out.pdf","selftest\report.txt" `
+               -Wait -PassThru
+          Get-Content selftest\report.txt
+          if ($p.ExitCode -ne 0) { throw "self-test failed" }
+          if (-not (Select-String -Path selftest\report.txt -Pattern "DyslexiaConverter\\tesseract" -Quiet)) {
+            throw "the bundled Tesseract was not used"
+          }
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          $version = python -c "import dyslexia_converter as d; print(d.__version__)"
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$version" "/DSourceDir=..\dist\DyslexiaConverter" windows\installer.iss
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DyslexiaConverter-windows
+          path: |
+            dist/*.zip
+            dist/*-setup.exe
+          retention-days: 30
+
+      - name: Attach to GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Dyslexia Converter ${{ github.ref_name }}
+          files: |
+            dist/*.zip
+            dist/*-setup.exe
+          body: |
+            **Download:** `DyslexiaConverter-…-setup.exe` (installer, no administrator rights needed)
+            or `DyslexiaConverter-…-windows.zip` (unzip and double-click `DyslexiaConverter.exe`).
+            Text recognition (Tesseract) is included; nothing else needs to be installed.
+
+            Windows may show "Windows protected your PC" the first time (the program is not code-signed):
+            click **More info → Run anyway**.
