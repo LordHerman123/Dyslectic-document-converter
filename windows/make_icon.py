@@ -1,9 +1,10 @@
-"""Draw the app logo ("DC" on a terracotta tile, autumn palette) and write every size the app needs.
+"""Draw the app logo ("Dc" in Playfair Display on a white tile, burgundy border, champagne line).
 
     python windows/make_icon.py
 
 Writes windows/app.png (256 px), windows/app.ico (16-256 px) and dyslexia_converter/assets/icon.png
-(used by the window and the header).
+(used by the window and the header). The font is in windows/logo_font (SIL Open Font License); it is
+only used to draw the logo and is not shipped with the app.
 """
 from __future__ import annotations
 
@@ -12,40 +13,39 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 ROOT = Path(__file__).resolve().parents[1]
-FONT = ROOT / "dyslexia_converter" / "assets" / "fonts" / "AtkinsonHyperlegible-Bold.ttf"
+FONT = ROOT / "windows" / "logo_font" / "PlayfairDisplay-ExtraBold.woff"
 
-TILE = "#A0654E"       # terracotta
-TILE_EDGE = "#8A5441"
-LETTERS = "#F7F0E6"    # cream
-LINES = "#E2B56A"      # caramel
+TILE = "#FFFBF5"       # warm white
+BORDER = "#7A2E3A"     # burgundy
+LETTERS = "#4A1C24"    # deep burgundy
+LINE = "#D8B26E"       # champagne
 
 
 def draw(size: int = 1024) -> Image.Image:
     s = size
     im = Image.new("RGBA", (s, s), (0, 0, 0, 0))
     d = ImageDraw.Draw(im)
-    pad = round(s * 0.04)
-    radius = round(s * 0.22)
-    d.rounded_rectangle((pad, pad, s - pad, s - pad), radius=radius, fill=TILE_EDGE)
-    inset = round(s * 0.018)
-    d.rounded_rectangle((pad + inset, pad + inset, s - pad - inset, s - pad - inset),
-                        radius=radius - inset, fill=TILE)
+    pad, radius, border = round(s * 0.04), round(s * 0.2), round(s * 0.045)
+    d.rounded_rectangle((pad, pad, s - pad, s - pad), radius=radius, fill=BORDER)
+    d.rounded_rectangle((pad + border, pad + border, s - pad - border, s - pad - border),
+                        radius=radius - border, fill=TILE)
 
-    font = ImageFont.truetype(str(FONT), round(s * 0.46))
-    text = "DC"
-    box = d.textbbox((0, 0), text, font=font)
+    # largest size at which "Dc" fits the tile
+    pt = round(s * 0.52)
+    font = ImageFont.truetype(str(FONT), pt)
+    while True:
+        box = d.textbbox((0, 0), "Dc", font=font)
+        if box[2] - box[0] <= s * 0.62 and box[3] - box[1] <= s * 0.40:
+            break
+        pt -= 8
+        font = ImageFont.truetype(str(FONT), pt)
     w, h = box[2] - box[0], box[3] - box[1]
-    x = (s - w) / 2 - box[0]
-    y = s * 0.40 - h / 2 - box[1]
-    d.text((x, y), text, font=font, fill=LETTERS)
+    d.text(((s - w) / 2 - box[0], s * 0.62 - h - box[1]), "Dc", font=font, fill=LETTERS)
 
-    # three "lines of text", like a page laid out for easy reading
-    lw = round(s * 0.05)
-    top = round(s * 0.66)
-    for i, frac in enumerate((0.56, 0.44, 0.32)):
-        half = s * frac / 2
-        yy = top + i * round(s * 0.085)
-        d.rounded_rectangle((s / 2 - half, yy, s / 2 + half, yy + lw), radius=lw // 2, fill=LINES)
+    # one line underneath, like a line of text
+    lw, top = round(s * 0.055), round(s * 0.70)
+    half = max(w * 0.55, s * 0.28)
+    d.rounded_rectangle((s / 2 - half, top, s / 2 + half, top + lw), radius=lw // 2, fill=LINE)
     return im
 
 

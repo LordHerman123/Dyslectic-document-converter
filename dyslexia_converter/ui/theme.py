@@ -1,4 +1,4 @@
-"""App colours: a warm autumn palette (cream, sand, caramel, terracotta) with a dark 'espresso' variant.
+"""App colours: burgundy & champagne on warm cream, with a dark 'wine' variant (matches the logo).
 
 Only the app's own screens use these. Exported documents keep their own colours (settings.py).
 """
@@ -7,67 +7,67 @@ from __future__ import annotations
 import flet as ft
 
 LIGHT = {
-    "bg": "#F5EFE6",            # cream
-    "surface": "#FBF7F1",
-    "surface_low": "#F2EADF",
-    "surface_mid": "#ECE1D3",
-    "surface_high": "#E4D6C4",  # sand
-    "text": "#4A3328",          # dark brown
-    "muted": "#7A5E4E",
-    "primary": "#A0654E",       # terracotta
+    "bg": "#FBF6EE",            # warm cream
+    "surface": "#FFFCF7",
+    "surface_low": "#F7EFE4",
+    "surface_mid": "#F1E6D7",
+    "surface_high": "#E9DAC6",  # champagne sand
+    "text": "#3F1A21",          # deep burgundy-brown
+    "muted": "#7A5058",
+    "primary": "#7A2E3A",       # burgundy
     "on_primary": "#FFFFFF",
-    "primary_container": "#EBD3C6",
-    "on_primary_container": "#4A2A1E",
-    "secondary": "#C9953F",     # caramel / mustard
-    "on_secondary": "#33230A",
-    "secondary_container": "#F1DDB5",
-    "on_secondary_container": "#4A3510",
-    "tertiary": "#8C7A68",      # taupe
+    "primary_container": "#F0D9DC",
+    "on_primary_container": "#4A1C24",
+    "secondary": "#C9A15A",     # champagne gold
+    "on_secondary": "#2E2210",
+    "secondary_container": "#F2E3C4",
+    "on_secondary_container": "#4A3814",
+    "tertiary": "#8C6B5E",
     "on_tertiary": "#FFFFFF",
-    "outline": "#B39C88",
-    "outline_variant": "#DCCDBB",
-    "notice_warning": "#F3DDB0",
-    "notice_action": "#EBD3C6",
-    "notice_info": "#E8DFD2",
-    "chip_local": "#DFE2CB",    # soft sage
-    "chip_ai": "#F1DDB5",
+    "outline": "#B99A8E",
+    "outline_variant": "#E3D3C3",
+    "notice_warning": "#F2E3C4",
+    "notice_action": "#F0D9DC",
+    "notice_info": "#EFE6DA",
+    "chip_local": "#E4E7D3",    # soft sage
+    "chip_ai": "#F2E3C4",
     "frame": "#33000000",
 }
 
 DARK = {
-    "bg": "#231B17",            # espresso
-    "surface": "#2B221D",
-    "surface_low": "#2F2520",
-    "surface_mid": "#362B25",
-    "surface_high": "#40332B",
-    "text": "#F0E6DA",
-    "muted": "#CDB9A7",
-    "primary": "#E0A882",       # light terracotta
-    "on_primary": "#3A1F14",
-    "primary_container": "#6E4636",
-    "on_primary_container": "#F6DDD0",
-    "secondary": "#DDB36A",     # caramel
-    "on_secondary": "#33250C",
-    "secondary_container": "#5A4420",
-    "on_secondary_container": "#F5E3BF",
-    "tertiary": "#C4B3A1",
-    "on_tertiary": "#2E241D",
-    "outline": "#8D7A6B",
-    "outline_variant": "#4E3F36",
-    "notice_warning": "#4F3E1E",
-    "notice_action": "#553729",
-    "notice_info": "#3A302A",
-    "chip_local": "#3D4230",
-    "chip_ai": "#5A4420",
+    "bg": "#1F1517",            # dark wine
+    "surface": "#271B1E",
+    "surface_low": "#2C1F22",
+    "surface_mid": "#342528",
+    "surface_high": "#3E2D31",
+    "text": "#F3E7DC",
+    "muted": "#D2BCB2",
+    "primary": "#E3A3AE",       # soft rose
+    "on_primary": "#4A1C24",
+    "primary_container": "#6B2733",
+    "on_primary_container": "#F8DDE1",
+    "secondary": "#E2C48A",     # champagne
+    "on_secondary": "#33260E",
+    "secondary_container": "#5A4620",
+    "on_secondary_container": "#F5E6C4",
+    "tertiary": "#C9ADA2",
+    "on_tertiary": "#2E2020",
+    "outline": "#8E747A",
+    "outline_variant": "#4F3A3F",
+    "notice_warning": "#4F3F1E",
+    "notice_action": "#5A2A33",
+    "notice_info": "#3A2C2F",
+    "chip_local": "#3B402E",
+    "chip_ai": "#5A4620",
     "frame": "#44FFFFFF",
 }
 
-# high contrast: plain white/black with a strong brown accent
+# high contrast: plain white/black with a strong burgundy accent
 HC_LIGHT = {**LIGHT, "bg": "#FFFFFF", "surface": "#FFFFFF", "surface_low": "#FFFFFF", "surface_mid": "#F4F4F4",
-            "surface_high": "#EAEAEA", "text": "#000000", "muted": "#222222", "primary": "#5A2E1E",
+            "surface_high": "#EAEAEA", "text": "#000000", "muted": "#222222", "primary": "#6B1F2B",
             "outline": "#000000", "outline_variant": "#555555", "frame": "#FF000000"}
 HC_DARK = {**DARK, "bg": "#000000", "surface": "#000000", "surface_low": "#000000", "surface_mid": "#141414",
-           "surface_high": "#202020", "text": "#FFFFFF", "muted": "#EEEEEE", "primary": "#F2C29A",
+           "surface_high": "#202020", "text": "#FFFFFF", "muted": "#EEEEEE", "primary": "#F2B8C2",
            "outline": "#FFFFFF", "outline_variant": "#AAAAAA", "frame": "#FFFFFFFF"}
 
 
