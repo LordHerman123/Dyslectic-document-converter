@@ -563,6 +563,13 @@ def build_pdf(result: ComposeResult, s: FormatSettings, title: str = "", author:
             last = i + 1 >= len(items) or items[i + 1].kind != "box_paragraph"
             st = replace(st, pad_bottom=s.font_size * 0.9 if last else st.pad_bottom,
                          extend_bg_below=not last, space_after=s.paragraph_spacing * (1.4 if last else 0.6))
+        elif kind == "quote":
+            # consecutive quote paragraphs (a quotation and its "-Author" line) share one box
+            first = i == 0 or items[i - 1].kind != "quote"
+            last = i + 1 >= len(items) or items[i + 1].kind != "quote"
+            st = replace(st, pad_top=None if first else s.font_size * 0.2,
+                         pad_bottom=None if last else s.font_size * 0.2, extend_bg_below=not last,
+                         space_after=s.paragraph_spacing * (1.2 if last else 0.4))
         marker = it.marker
         story.append(RichParagraph(it.runs, st, marker=marker, keep_with_next=it.keep_with_next))
         i += 1

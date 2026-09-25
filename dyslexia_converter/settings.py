@@ -52,6 +52,8 @@ class FormatSettings:
     ocr_correction: str = "review"  # automatic / review / disabled
     ocr_confidence_threshold: float = 0.9
     correct_selectable_text: bool = False
+    split_spreads: bool = True  # scans with two book pages side by side
+    scan_text_source: str = "auto"  # auto (own OCR after clean-up) / text_layer (scanner's OCR, faster)
 
     # Output
     page_tint: str = "cream"  # none / cream / blue (screen PDFs only)

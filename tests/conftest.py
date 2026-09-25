@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from make_samples import make_paper, make_scanned
+from make_samples import make_book_spread, make_paper, make_scan_with_text_layer, make_scanned
 
 
 @pytest.fixture(autouse=True)
@@ -23,6 +23,9 @@ def samples(tmp_path_factory):
     d = tmp_path_factory.mktemp("samples")
     make_paper(d / "sample_paper.pdf")
     make_scanned(d / "sample_paper.pdf", d / "sample_scanned.pdf", dpi=150)
+    make_book_spread(d / "book_spread.pdf")
+    make_book_spread(d / "book_spread_upside_down.pdf", rotation=270)
+    make_scan_with_text_layer(d / "sample_scanned.pdf", d / "scan_with_text_layer.pdf", d / "sample_paper.pdf")
     return d
 
 

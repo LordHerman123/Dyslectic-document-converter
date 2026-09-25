@@ -4,12 +4,15 @@ The original PDF is opened read-only and is never modified.
 """
 from __future__ import annotations
 
+import concurrent.futures
 import io
+import os
 import re
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
+import numpy as np
 import pymupdf
 
 from ..model import ImageData, OcrWordConfidence, PageInfo, Rect, StyleRange, TableData
@@ -126,15 +129,59 @@ def render_clip(page: pymupdf.Page, rect: Rect, dpi: int = FIGURE_DPI) -> ImageD
 
 # --------------------------------------------------------------------------- detection
 
+def image_boxes(page: pymupdf.Page, **kw) -> list[tuple[Rect, dict]]:
+    """Image placements in page coordinates (rotated pages included)."""
+    m = page.rotation_matrix
+    out = []
+    for info in page.get_image_info(**kw):
+        r = pymupdf.Rect(info["bbox"]) * m if page.rotation else pymupdf.Rect(info["bbox"])
+        out.append((tuple(r), info))
+    return out
+
+
+def image_coverage(page: pymupdf.Page, grid: int = 40) -> float:
+    """Fraction of the page covered by images (union, so tiled scans count once)."""
+    rect = page.rect
+    if rect.width <= 0 or rect.height <= 0:
+        return 0.0
+    covered = [[False] * grid for _ in range(grid)]
+    for bbox, _info in image_boxes(page):
+        x0, y0, x1, y1 = _intersect(bbox, tuple(rect))
+        if x1 <= x0 or y1 <= y0:
+            continue
+        gx0 = int((x0 - rect.x0) / rect.width * grid)
+        gx1 = int(np.ceil((x1 - rect.x0) / rect.width * grid))
+        gy0 = int((y0 - rect.y0) / rect.height * grid)
+        gy1 = int(np.ceil((y1 - rect.y0) / rect.height * grid))
+        for gy in range(max(0, gy0), min(grid, gy1)):
+            row = covered[gy]
+            for gx in range(max(0, gx0), min(grid, gx1)):
+                row[gx] = True
+    return sum(sum(r) for r in covered) / (grid * grid)
+
+
+def has_invisible_text(page: pymupdf.Page) -> bool:
+    """True when the page carries an OCR text layer (text drawn invisibly over a scan)."""
+    try:
+        spans = page.get_texttrace()
+    except Exception:
+        return False
+    invisible = sum(len(s.get("chars", ())) for s in spans if s.get("type") == 3)
+    total = sum(len(s.get("chars", ())) for s in spans)
+    return total > 0 and invisible > 0.8 * total
+
+
 def classify_page(page: pymupdf.Page) -> str:
-    """Return "text", "scanned" or "mixed" for one page."""
+    """Return "text", "scanned" or "mixed" for one page.
+
+    A page whose area is (almost) entirely covered by images is a scan, even
+    when a scanner or copier added an invisible OCR text layer on top.
+    """
     text = page.get_text("text")
     chars = len(re.sub(r"\s", "", text))
-    page_area = _area(tuple(page.rect))
-    img_area = 0.0
-    for info in page.get_image_info():
-        img_area += _area(_intersect(tuple(info["bbox"]), tuple(page.rect)))
-    coverage = img_area / page_area if page_area else 0
+    coverage = image_coverage(page)
+    if coverage > 0.7 and (chars < 25 or has_invisible_text(page)):
+        return "scanned"
     if chars < 25 and coverage > 0.3:
         return "scanned"
     if chars < 25 and coverage <= 0.3:
@@ -162,11 +209,17 @@ def _text_lines(page: pymupdf.Page, pno: int) -> list[RawLine]:
             bold_chars = italic_chars = 0
             fonts = Counter()
             max_size = 0.0
+            prev_x1 = None
             for span in line["spans"]:
                 t = span["text"]
                 if not t:
                     continue
-                t = t.replace(" ", " ")
+                t = t.replace("\u00a0", " ")
+                # word-per-span text layers (common in scanner OCR) carry no space characters
+                if (prev_x1 is not None and text and not text[-1].isspace() and not t[0].isspace()
+                        and span["bbox"][0] - prev_x1 > span["size"] * 0.15):
+                    text += " "
+                prev_x1 = span["bbox"][2]
                 start = len(text)
                 text += t
                 size, flags, font = span["size"], span["flags"], span["font"]
@@ -245,8 +298,8 @@ def _figures(page: pymupdf.Page, doc: pymupdf.Document, lines: list[RawLine],
     prect = tuple(page.rect)
     parea = _area(prect)
     regions: list[list] = []  # [rect, xref or 0]
-    for info in page.get_image_info(xrefs=True):
-        r = _intersect(tuple(info["bbox"]), prect)
+    for bbox, info in image_boxes(page, xrefs=True):
+        r = _intersect(bbox, prect)
         if r[2] - r[0] < 12 or r[3] - r[1] < 12:
             continue
         if info.get("xref") in repeated_xrefs:
@@ -427,11 +480,11 @@ def _caption_tables(page: pymupdf.Page, lines: list[RawLine], existing: list[Raw
 
 # --------------------------------------------------------------------------- OCR pages
 
-def _ocr_page(page: pymupdf.Page, pno: int, engine: OcrEngine, languages: list[str]) -> tuple[list[RawLine], list[RawFigure]]:
-    pix = page.get_pixmap(dpi=OCR_DPI, alpha=False)
-    png = pix.tobytes("png")
+def _ocr_image(png: bytes, dpi: int, width_pt: float, height_pt: float, pno: int, engine: OcrEngine,
+               languages: list[str], crop: Callable[[Rect], ImageData]) -> tuple[list[RawLine], list[RawFigure]]:
+    """OCR one image and return lines/figures in points relative to that image."""
     res = engine.recognize(png, languages)
-    scale = 72.0 / OCR_DPI
+    scale = 72.0 / dpi
     groups: dict[tuple[int, int, int], list] = {}
     for w in res.words:
         groups.setdefault((w.block, w.paragraph, w.line), []).append(w)
@@ -449,15 +502,71 @@ def _ocr_page(page: pymupdf.Page, pno: int, engine: OcrEngine, languages: list[s
         y0 = min(w.bbox[1] for w in words) * scale
         x1 = max(w.bbox[2] for w in words) * scale
         y1 = max(w.bbox[3] for w in words) * scale
-        estimates = sorted(_estimate_font_size(w.text, (w.bbox[3] - w.bbox[1]) * scale) for w in words
-                           if len(w.text) >= 2 or w.text.isalnum())
+        # estimate from ordinary words; superscripts and symbols distort the ink height
+        plain = [w for w in words if re.fullmatch(r"[A-Za-z][a-z]+[.,;:]?", w.text)] or \
+            [w for w in words if len(w.text) >= 2 or w.text.isalnum()]
+        estimates = sorted(_estimate_font_size(w.text, (w.bbox[3] - w.bbox[1]) * scale) for w in plain)
         size = estimates[len(estimates) // 2] if estimates else _estimate_font_size(text, y1 - y0)
         lines.append(RawLine(text=text, bbox=(x0, y0, x1, y1), size=round(size * 2) / 2, page=pno,
                              source="ocr", block_no=bn * 1000 + par, conf=conf))
-    figures: list[RawFigure] = []
-    page_area = _area(tuple(page.rect))
+    lines = [l for l in lines if not _is_ocr_noise(l)]
     regions = [tuple(v * scale for v in r.bbox) for r in res.regions]
-    regions += _scan_graphic_regions(png, lines, page.rect.width, page.rect.height)
+    regions += _scan_graphic_regions(png, lines, width_pt, height_pt)
+    from PIL import Image
+
+    gray = np.asarray(Image.open(io.BytesIO(png)).convert("L"))
+    regions = [r for r in regions if _plausible_scan_figure(r, lines, width_pt, height_pt, gray, dpi)]
+    figures = _figures_from_regions(regions, lines, width_pt * height_pt, crop)
+    fig_rects = [f.bbox for f in figures]
+    lines = [l for l in lines if not any(overlap_ratio(l.bbox, f) > 0.6 for f in fig_rects)]
+    return lines, figures
+
+
+def _plausible_scan_figure(r: Rect, lines: list[RawLine], width: float, height: float,
+                           gray: Optional[np.ndarray] = None, dpi: int = OCR_DPI) -> bool:
+    """Reject 'figures' that are really text, page-edge shadows or page curl."""
+    w, h = r[2] - r[0], r[3] - r[1]
+    if w < 40 or h < 30:
+        return False
+    touches_lr = r[0] < width * 0.03 or r[2] > width * 0.97
+    touches_tb = r[1] < height * 0.03 or r[3] > height * 0.97
+    if touches_lr and w < width * 0.12:
+        return False  # dark strip along the left/right edge (gutter, book edge)
+    if touches_tb and h < height * 0.1:
+        return False  # strip along the top/bottom edge (page curl, scanner lid)
+    # share of the region covered by recognised text lines: paragraphs are dense, pictures are not
+    text_area = sum(_area(_intersect(l.bbox, r)) for l in lines
+                    if overlap_ratio(l.bbox, r) > 0.5 and len(l.text) >= 15)
+    limit = 0.12 if (touches_lr or touches_tb) else 0.25
+    if text_area / (w * h) >= limit:
+        return False
+    if gray is not None:
+        # pictures and diagrams contain real ink; edge shadows leave a mostly blank area
+        k = dpi / 72.0
+        crop = gray[max(0, int(r[1] * k)):int(r[3] * k), max(0, int(r[0] * k)):int(r[2] * k)]
+        if crop.size:
+            m = max(2, int(min(crop.shape) * 0.08))  # ignore a band along the region border
+            inner = crop[m:-m, m:-m] if min(crop.shape) > 3 * m else crop
+            ink = float((inner < 170).mean()) if inner.size else 0.0
+            if ink < (0.06 if (touches_lr or touches_tb) else 0.015):
+                return False
+    return True
+
+
+def _is_ocr_noise(line: RawLine) -> bool:
+    """Speckles, page-edge shadows and bleed-through read as random characters."""
+    text = line.text.strip()
+    letters = sum(ch.isalnum() for ch in text)
+    if letters == 0:
+        return True
+    good = [c.confidence for c in line.conf if c.confidence >= 0]
+    mean_conf = sum(good) / len(good) if good else 100
+    return (letters <= 3 and mean_conf < 40) or (mean_conf < 25 and letters < 12)
+
+
+def _figures_from_regions(regions: list[Rect], lines: list[RawLine], page_area: float,
+                          crop: Callable[[Rect], ImageData]) -> list[RawFigure]:
+    figures: list[RawFigure] = []
     for r in regions:
         if _area(r) < 0.015 * page_area or _area(r) > 0.9 * page_area:
             continue
@@ -475,10 +584,112 @@ def _ocr_page(page: pymupdf.Page, pno: int, engine: OcrEngine, languages: list[s
         if y1 - y0 < 20:
             continue
         r = (x0, y0, x1, y1)
-        figures.append(RawFigure(r, render_clip(page, (x0 - 2, y0, x1 + 2, y1))))
+        figures.append(RawFigure(r, crop((x0 - 2, y0, x1 + 2, y1))))
+    return figures
+
+
+def _ocr_page(page: pymupdf.Page, pno: int, engine: OcrEngine, languages: list[str]) -> tuple[list[RawLine], list[RawFigure]]:
+    """OCR a page as it is (used for mixed pages that are not full scans)."""
+    pix = page.get_pixmap(dpi=OCR_DPI, alpha=False)
+    return _ocr_image(pix.tobytes("png"), OCR_DPI, page.rect.width, page.rect.height, pno, engine, languages,
+                      lambda r: render_clip(page, r))
+
+
+def _photo_crop(photo, dpi: int) -> Callable[[Rect], ImageData]:
+    def crop(r: Rect) -> ImageData:
+        k = dpi / 72.0
+        box = (max(0, int(r[0] * k)), max(0, int(r[1] * k)), min(photo.width, int(r[2] * k)),
+               min(photo.height, int(r[3] * k)))
+        part = photo.crop(box)
+        # figures are stored at up to 200 dpi, like figures from text PDFs
+        f = min(1.0, FIGURE_DPI / dpi)
+        if f < 1:
+            part = part.resize((max(1, int(part.width * f)), max(1, int(part.height * f))))
+        buf = io.BytesIO()
+        part.save(buf, format="PNG")
+        return ImageData(buf.getvalue(), "png", part.width, part.height)
+    return crop
+
+
+def _scan_pages(rendered, source_page: int, engine: OcrEngine, languages: list[str],
+                split_spreads: bool) -> list[RawPage]:
+    """Clean a rendered scan (split spreads, flatten, deskew) and OCR each book page.
+
+    Runs in a worker thread: it only uses the rendered image, never the PDF.
+    Page numbers are assigned by the caller.
+    """
+    out = _scan_image_pages(rendered, source_page, engine, languages, split_spreads)
+    if _poor_ocr(out) and hasattr(engine, "orientation"):
+        # sideways or upside-down scan: ask the OCR engine which way is up and try again
+        buf = io.BytesIO()
+        rendered.save(buf, format="PNG")
+        turn = engine.orientation(buf.getvalue())
+        if turn:
+            rendered = rendered.rotate(-turn, expand=True)
+            retry = _scan_image_pages(rendered, source_page, engine, languages, split_spreads)
+            if _ocr_quality(retry) > _ocr_quality(out):
+                out = retry
+    return out
+
+
+def _scan_image_pages(rendered, source_page: int, engine: OcrEngine, languages: list[str],
+                      split_spreads: bool) -> list[RawPage]:
+    from .scan import prepare_page
+
+    out: list[RawPage] = []
+    for sp in prepare_page(rendered, OCR_DPI, split_spreads=split_spreads):
+        info = PageInfo(-1, sp.width_pt, sp.height_pt, "scanned", ocr_used=True, source_page=source_page,
+                        side=sp.side, skew=sp.skew)
+        lines, figures = _ocr_image(sp.png(), OCR_DPI, sp.width_pt, sp.height_pt, -1, engine, languages,
+                                    _photo_crop(sp.photo, OCR_DPI))
+        out.append(RawPage(info, lines, figures))
+    return out
+
+
+def _ocr_quality(pages: list[RawPage]) -> float:
+    """Mean word confidence (0..100) weighted by the amount of text."""
+    confs = [c.confidence for p in pages for l in p.lines for c in l.conf if c.confidence >= 0]
+    return sum(confs) / len(confs) if confs else 0.0
+
+
+def _poor_ocr(pages: list[RawPage]) -> bool:
+    words = sum(len(l.conf) for p in pages for l in p.lines)
+    return words < 15 or _ocr_quality(pages) < 55
+
+
+def _word_lines(page: pymupdf.Page, pno: int) -> list[RawLine]:
+    """Lines rebuilt from word boxes: scanner text layers often lack real space characters."""
+    groups: dict[tuple[int, int], list] = {}
+    for x0, y0, x1, y1, word, bno, lno, _wno in page.get_text("words"):
+        groups.setdefault((bno, lno), []).append((x0, y0, x1, y1, word))
+    lines: list[RawLine] = []
+    for (bno, _lno), words in groups.items():
+        words.sort(key=lambda w: w[0])
+        text = " ".join(w[4] for w in words).strip()
+        if not text:
+            continue
+        heights = sorted(w[3] - w[1] for w in words)
+        size = round(heights[len(heights) // 2] / 1.15 * 2) / 2
+        bbox = (min(w[0] for w in words), min(w[1] for w in words), max(w[2] for w in words),
+                max(w[3] for w in words))
+        # recognised text: it is checked against the dictionary like our own OCR
+        lines.append(RawLine(text=text, bbox=bbox, size=size, page=pno, source="ocr", block_no=bno))
+    return _merge_same_baseline(lines)
+
+
+def _text_layer_scan_page(page: pymupdf.Page, pno: int) -> tuple[list[RawLine], list[RawFigure]]:
+    """Use the invisible OCR text layer a scanner added (when we cannot OCR ourselves)."""
+    from PIL import Image
+
+    lines = _word_lines(page, pno)
+    dpi = 150
+    pix = page.get_pixmap(dpi=dpi, alpha=False)
+    png = pix.tobytes("png")
+    photo = Image.open(io.BytesIO(png)).convert("RGB")
+    regions = _scan_graphic_regions(png, lines, page.rect.width, page.rect.height)
+    figures = _figures_from_regions(regions, lines, page.rect.width * page.rect.height, _photo_crop(photo, dpi))
     fig_rects = [f.bbox for f in figures]
-    lines = [l for l in lines if not any(overlap_ratio(l.bbox, f) > 0.6 for f in fig_rects)]
-    return lines, figures
+    return [l for l in lines if not any(overlap_ratio(l.bbox, f) > 0.6 for f in fig_rects)], figures
 
 
 def _estimate_font_size(text: str, height: float) -> float:
@@ -545,10 +756,18 @@ def _scan_graphic_regions(png: bytes, lines: list[RawLine], width: float, height
 # --------------------------------------------------------------------------- main entry
 
 def read_pdf(path: str, ocr_engine: Optional[OcrEngine] = None, languages: Optional[list[str]] = None,
-             progress: Optional[ProgressFn] = None, pages: Optional[tuple[int, int]] = None) -> RawDocument:
-    """Read a PDF. ``pages`` is an optional 1-based inclusive (first, last) range."""
+             progress: Optional[ProgressFn] = None, pages: Optional[tuple[int, int]] = None,
+             split_spreads: bool = True, prefer_text_layer: bool = False) -> RawDocument:
+    """Read a PDF. ``pages`` is an optional 1-based inclusive (first, last) range.
+
+    Scanned pages are cleaned (two-page spreads split, shadows removed,
+    straightened) and OCR'd; each book page becomes its own page. Without an
+    OCR engine, or when ``prefer_text_layer`` is set, an existing invisible
+    text layer from the scanner is used instead.
+    """
     page_range = pages
     doc = pymupdf.open(path)  # opened read-only; never saved back
+    pool: Optional[concurrent.futures.ThreadPoolExecutor] = None
     try:
         if doc.needs_pass:
             raise ValueError("This PDF is password-protected. Please unlock it first.")
@@ -566,15 +785,39 @@ def read_pdf(path: str, ocr_engine: Optional[OcrEngine] = None, languages: Optio
 
         ocr_langs = languages or ["en"]
         first, last = (1, n) if page_range is None else (max(1, page_range[0]), min(n, page_range[1]))
+        workers = max(1, min(4, (os.cpu_count() or 2)))
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=workers)
+        pending: list[concurrent.futures.Future] = []
         for pno, page in enumerate(doc):
             if not first <= pno + 1 <= last:
                 continue
             if progress:
                 progress(f"Reading page {pno + 1} of {n}", pno / max(1, n))
             kind = classify_page(page)
-            info = PageInfo(pno, page.rect.width, page.rect.height, kind)
+            vno = len(pages)  # pages of the output (a two-page spread becomes two pages)
+            info = PageInfo(vno, page.rect.width, page.rect.height, kind, source_page=pno)
             rp = RawPage(info)
-            if kind in ("scanned", "mixed"):
+            text_layer = kind == "scanned" and has_invisible_text(page)
+            if kind == "scanned" and text_layer and (ocr_engine is None or prefer_text_layer):
+                rp.lines, rp.figures = _text_layer_scan_page(page, vno)
+                info.ocr_used = True
+                if ocr_engine is None:
+                    warnings.append(f"Page {pno + 1}: used the scanner's own text layer (no OCR engine installed).")
+            elif kind == "scanned" and ocr_engine is not None:
+                # render here (PyMuPDF is not thread-safe); clean-up + OCR run in parallel
+                from PIL import Image
+
+                pix = page.get_pixmap(dpi=OCR_DPI, alpha=False, colorspace=pymupdf.csRGB)
+                rendered = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+                del pix
+                running = [f for f in pending if not f.done()]
+                if len(running) >= workers * 2:  # bound memory: wait for a free slot
+                    concurrent.futures.wait(running, return_when=concurrent.futures.FIRST_COMPLETED)
+                fut = pool.submit(_scan_pages, rendered, pno, ocr_engine, ocr_langs, split_spreads)
+                pending.append(fut)
+                pages.append(fut)  # placeholder, resolved below
+                continue
+            elif kind in ("scanned", "mixed"):
                 if ocr_engine is None:
                     warnings.append(f"Page {pno + 1} is scanned but no OCR engine is available; "
                                     "the page is kept as an image.")
@@ -582,15 +825,15 @@ def read_pdf(path: str, ocr_engine: Optional[OcrEngine] = None, languages: Optio
                 else:
                     if progress:
                         progress(f"Running OCR on page {pno + 1} of {n}", pno / max(1, n))
-                    lines, figs = _ocr_page(page, pno, ocr_engine, ocr_langs)
+                    lines, figs = _ocr_page(page, vno, ocr_engine, ocr_langs)
                     if kind == "mixed":
-                        text_lines = _text_lines(page, pno)
+                        text_lines = _text_lines(page, vno)
                         lines = text_lines + [l for l in lines
                                               if not any(overlap_ratio(l.bbox, t.bbox) > 0.3 for t in text_lines)]
                     rp.lines, rp.figures = lines, figs
                     info.ocr_used = True
             else:
-                all_lines = _text_lines(page, pno)
+                all_lines = _text_lines(page, vno)
                 rp.tables = _tables(page)
                 rp.tables += _caption_tables(page, all_lines, rp.tables)
                 table_rects = [t.bbox for t in rp.tables]
@@ -599,7 +842,26 @@ def read_pdf(path: str, ocr_engine: Optional[OcrEngine] = None, languages: Optio
                 fig_rects = [f.bbox for f in rp.figures]
                 rp.lines = [l for l in lines if not any(overlap_ratio(l.bbox, f) > 0.6 for f in fig_rects)]
             pages.append(rp)
+        # resolve the scanned pages that were OCR'd in parallel, then number all pages
+        flat: list[RawPage] = []
+        done = 0
+        for item in pages:
+            if isinstance(item, concurrent.futures.Future):
+                flat.extend(item.result())
+                done += 1
+                if progress:
+                    progress(f"Cleaned and read {done} of {len(pending)} scanned page(s)",
+                             done / max(1, len(pending)))
+            else:
+                flat.append(item)
+        for idx, rp in enumerate(flat):
+            rp.info.number = idx
+            for l in rp.lines:
+                l.page = idx
+        pages = flat
         toc = [(lvl, title.strip(), pg) for lvl, title, pg, *_ in doc.get_toc(simple=True)] if doc.get_toc() else []
         return RawDocument(pages, meta.get("title") or "", meta.get("author") or "", toc, warnings)
     finally:
+        if pool is not None:
+            pool.shutdown(wait=True, cancel_futures=True)
         doc.close()

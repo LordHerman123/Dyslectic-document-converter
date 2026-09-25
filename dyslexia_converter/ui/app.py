@@ -25,6 +25,9 @@ from ..transform.spelling import CustomWords
 
 log = logging.getLogger("dyslexia_converter")
 
+# settings that change how the PDF is read, not just how it is laid out
+RELOAD_KEYS = {"split_spreads", "scan_text_source", "ocr_language"}
+
 EXPORTS = [("pdf", "PDF", "pdf"), ("printable_pdf", "Printable PDF", "pdf"), ("docx", "Word (DOCX)", "docx"),
            ("txt", "Plain text", "txt"), ("md", "Markdown", "md")]
 
@@ -159,7 +162,7 @@ class ConverterApp:
     def switch(self, key: str, label: str, help_text: str = "") -> ft.Control:
         async def changed(e):
             setattr(self.settings, key, bool(e.control.value))
-            await self.settings_changed()
+            await self.settings_changed(reload=key in RELOAD_KEYS)
 
         sw = ft.Switch(label=label, value=getattr(self.settings, key), on_change=changed,
                        label_text_style=ft.TextStyle(size=self.fs(14)), tooltip=help_text or label)
@@ -169,7 +172,7 @@ class ConverterApp:
     def dropdown(self, key: str, label: str, options: list[tuple[str, str]]) -> ft.Dropdown:
         async def changed(e):
             setattr(self.settings, key, e.control.value)
-            await self.settings_changed()
+            await self.settings_changed(reload=key in RELOAD_KEYS)
 
         d = ft.Dropdown(label=label, value=str(getattr(self.settings, key)), expand=True,
                         options=[ft.DropdownOption(key=k, text=t) for k, t in options], on_select=changed,
@@ -242,13 +245,21 @@ class ConverterApp:
             section("Scanned documents (OCR)", [
                 ft.Row([self.dropdown("ocr_language", "Document language",
                                       [("auto", "Detect automatically"), ("en", "English"), ("nl", "Dutch"),
-                                       ("de", "German"), ("fr", "French"), ("es", "Spanish")])]),
+                                       ("de", "German"), ("fr", "French"), ("es", "Spanish"),
+                                       ("it", "Italian"), ("pt", "Portuguese")])]),
                 ft.Row([self.dropdown("ocr_correction", "OCR correction",
                                       [("review", "Review uncertain corrections"),
                                        ("automatic", "Automatic (high confidence only)"),
                                        ("disabled", "Off")])]),
+                self.switch("split_spreads", "Split two-page book scans into single pages"),
+                ft.Row([self.dropdown("scan_text_source", "Text of scanned pages",
+                                      [("auto", "Clean up and read the scan (best quality)"),
+                                       ("text_layer", "Use the scanner's own text layer (faster)")])]),
+                self.text("Scans are straightened, gutter shadows and dark borders are removed, and two-page "
+                          "spreads are split before the text is read.", 12),
                 self.text("OCR: " + ("Tesseract found" if default_engine() else
-                                     "not available - install Tesseract to convert scanned PDFs"), 12),
+                                     "not available - install Tesseract to convert scanned PDFs. Scans that "
+                                     "already contain a text layer can still be converted."), 12),
             ]),
             section("Pages to convert", [
                 ft.Row([
@@ -680,7 +691,11 @@ class ConverterApp:
         await self.settings_changed(recompute=True)
         self.notify("Default settings restored.")
 
-    async def settings_changed(self, recompute: bool = False) -> None:
+    async def settings_changed(self, recompute: bool = False, reload: bool = False) -> None:
+        if reload and self.source_path:
+            self.font_note.value = get_family(self.settings.font).substitute_note
+            await self.load_document()
+            return
         self.font_note.value = get_family(self.settings.font).substitute_note
         if self.session and self.session.document.ocr_used and recompute:
             self.session.recompute_corrections(self.settings)

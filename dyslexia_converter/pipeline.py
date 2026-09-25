@@ -19,7 +19,8 @@ from .model import Correction, Document
 from .render.compose import ComposeResult, compose
 from .settings import FormatSettings
 from .structure.detector import StructureDetector
-from .transform.spelling import CustomWords, Dictionary, OcrCorrector, dehyphenator, detect_language
+from .transform.spelling import (CustomWords, Dictionary, OcrCorrector, dehyphenator, detect_language,
+                                 word_rejoiner)
 
 ProgressFn = Callable[[str, float], None]
 
@@ -144,6 +145,16 @@ def _languages(doc: Document, settings: FormatSettings) -> list[str]:
     return [doc.language]
 
 
+def _text_layer_sample(path: str, max_pages: int = 6) -> str:
+    import pymupdf
+
+    try:
+        with pymupdf.open(path) as d:
+            return " ".join(d[i].get_text() for i in range(min(max_pages, d.page_count)))
+    except Exception:
+        return ""
+
+
 def load(path: str | Path, settings: Optional[FormatSettings] = None, ocr_engine: Optional[OcrEngine] = None,
          progress: Optional[ProgressFn] = None, custom_words: Optional[CustomWords] = None,
          use_ocr: bool = True, pages: Optional[tuple[int, int]] = None) -> Session:
@@ -152,10 +163,16 @@ def load(path: str | Path, settings: Optional[FormatSettings] = None, ocr_engine
     path = str(path)
     engine = (ocr_engine or default_engine()) if use_ocr else None
     ocr_langs = ["en", "nl"] if settings.ocr_language == "auto" else [settings.ocr_language]
+    if settings.ocr_language == "auto":
+        # a text layer (e.g. from the scanner) tells us the language, so OCR can use just that one
+        hint = _text_layer_sample(path)
+        if len(hint) > 300:
+            ocr_langs = [detect_language(hint)]
     if engine is not None:
         available = engine.languages()
         ocr_langs = [l for l in ocr_langs if l in available] or ["en"]
-    raw = read_pdf(path, engine, ocr_langs, progress, pages)
+    raw = read_pdf(path, engine, ocr_langs, progress, pages, split_spreads=settings.split_spreads,
+                   prefer_text_layer=settings.scan_text_source == "text_layer")
 
     sample = " ".join(l.text for p in raw.pages[:5] for l in p.lines)
     language = settings.ocr_language if settings.ocr_language != "auto" else detect_language(sample)
@@ -164,7 +181,7 @@ def load(path: str | Path, settings: Optional[FormatSettings] = None, ocr_engine
 
     if progress:
         progress("Detecting document structure", 0.9)
-    doc = StructureDetector(dehyphenator(dictionary)).detect(raw, path)
+    doc = StructureDetector(dehyphenator(dictionary), word_rejoiner(dictionary)).detect(raw, path)
     doc.language = language
     if any(p.info.kind != "text" for p in raw.pages) and engine is None:
         doc.warnings.append("No OCR engine found. Install Tesseract to convert scanned pages.")

@@ -49,4 +49,5 @@ def test_paragraph_split_across_columns_is_joined(paper):
 
 def test_page_range(paper):
     doc = pipeline.load(paper, pages=(2, 2)).document
-    assert {b.page for b in doc.blocks} == {1}
+    assert [p.source_page for p in doc.pages] == [1]  # only the second PDF page was read
+    assert any("[4] Smith, J. (2020)" in b.text for b in doc.blocks)

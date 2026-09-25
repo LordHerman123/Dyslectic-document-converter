@@ -114,6 +114,9 @@ class PageInfo:
     height: float
     kind: str  # "text", "scanned" or "mixed"
     ocr_used: bool = False
+    source_page: int = -1  # page index in the original PDF (a spread gives two pages)
+    side: str = "full"  # "full", or "left"/"right" half of a two-page spread
+    skew: float = 0.0  # degrees straightened
 
 
 @dataclass
