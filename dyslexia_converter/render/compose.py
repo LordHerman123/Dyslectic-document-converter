@@ -23,6 +23,7 @@ from ..settings import FormatSettings
 from ..transform.bionic import bold_ranges
 from ..transform.citations import Citation, find_citations, match_reference
 from ..structure.detector import LIST_RE, FOOTNOTE_START_RE
+from .labels import label as doc_label
 
 
 @dataclass
@@ -58,6 +59,7 @@ class ComposeResult:
     headings: list[tuple[int, str]]  # (level, text) for the document map
     citation_count: int = 0
     uncertain_citations: list[tuple[str, Citation]] = field(default_factory=list)
+    language: str = "en"  # language of the words the converter adds (Contents, Notes, ...)
 
 
 # -------------------------------------------------------------------- helpers
@@ -119,6 +121,7 @@ def _superscript_spans(text: str, styles) -> list[tuple[int, int]]:
 def compose(doc: Document, settings: FormatSettings, ai_citation_decisions: Optional[dict[str, bool]] = None,
             citation_threshold: float = 0.9) -> ComposeResult:
     ai_citation_decisions = ai_citation_decisions or {}
+    lang = doc.language or "en"
     blocks = [b for b in doc.blocks if not (b.kind == BlockKind.FURNITURE and settings.remove_headers_footers)]
     references = [b for b in doc.blocks if b.kind == BlockKind.REFERENCE]
     ref_texts = [doc.display_text(b) for b in references]
@@ -173,9 +176,7 @@ def compose(doc: Document, settings: FormatSettings, ai_citation_decisions: Opti
                 items.append(RItem("image", image=b.image, block_id=b.id,
                                    natural_width=b.bbox[2] - b.bbox[0]))
                 if b.image.kind == "unreadable-text":
-                    items.append(RItem("small", [Run("This scanned page is shown as a picture because its text could "
-                                                     "not be read reliably. Installing Tesseract OCR usually fixes "
-                                                     "this.")]))
+                    items.append(RItem("small", [Run(doc_label(lang, "unreadable"))]))
             continue
         if b.kind == BlockKind.TABLE:
             items.append(RItem("table", table=b.table, block_id=b.id, natural_width=b.bbox[2] - b.bbox[0]))
@@ -196,7 +197,7 @@ def compose(doc: Document, settings: FormatSettings, ai_citation_decisions: Opti
                 if fn.id not in note_numbers:
                     note_counter += 1
                     note_numbers[fn.id] = note_counter
-                replacements.append((s, e, f" [Note {note_numbers[fn.id]}]"))
+                replacements.append((s, e, f" [{doc_label(lang, 'note', n=note_numbers[fn.id])}]"))
 
         # citations
         if settings.move_citations and not is_ref and b.kind not in (BlockKind.TITLE, BlockKind.HEADING):
@@ -278,8 +279,8 @@ def compose(doc: Document, settings: FormatSettings, ai_citation_decisions: Opti
     # ---- endnotes
     if settings.move_footnotes and footnotes:
         numbered = sorted(footnotes, key=lambda f: note_numbers.get(f.id, 10 ** 6))
-        items.append(RItem("heading", [Run("Notes")], level=1, keep_with_next=True))
-        headings.append((1, "Notes"))
+        items.append(RItem("heading", [Run(doc_label(lang, "notes"))], level=1, keep_with_next=True))
+        headings.append((1, doc_label(lang, "notes")))
         extra = note_counter
         for fn in numbered:
             n = note_numbers.get(fn.id)
@@ -296,20 +297,20 @@ def compose(doc: Document, settings: FormatSettings, ai_citation_decisions: Opti
             if runs:
                 runs[0].text = runs[0].text.lstrip(" .)")
             # page notes without a marker (affiliations, licences) keep a plain bullet
-            items.append(RItem("endnote", runs, marker=f"[Note {n}]" if n else "\u2013", block_id=fn.id))
+            marker = f"[{doc_label(lang, 'note', n=n)}]" if n else "\u2013"
+            items.append(RItem("endnote", runs, marker=marker, block_id=fn.id))
 
     extra_citations = [c for c in citation_list if c[2] is None]
     if extra_citations:
-        items.append(RItem("heading", [Run("Citations not matched to the reference list")], level=2,
-                           keep_with_next=True))
-        headings.append((2, "Citations not matched to the reference list"))
+        items.append(RItem("heading", [Run(doc_label(lang, "unmatched"))], level=2, keep_with_next=True))
+        headings.append((2, doc_label(lang, "unmatched")))
         for num, item_text, _ in sorted(extra_citations):
             items.append(RItem("endnote", [Run(item_text + ".")], marker=f"[{num}]"))
 
     if settings.about_note:
         items.append(RItem("about", [Run(_about_text(doc, settings, bool(citation_numbers)))]))
 
-    return ComposeResult(items, headings, len(citation_numbers), uncertain)
+    return ComposeResult(items, headings, len(citation_numbers), uncertain, lang)
 
 
 def _drop_prefix(runs: list[Run], n: int) -> list[Run]:
@@ -328,15 +329,15 @@ def _drop_prefix(runs: list[Run], n: int) -> list[Run]:
 def _about_text(doc: Document, s: FormatSettings, citations_moved: bool) -> str:
     from pathlib import Path
 
-    parts = [f"Reformatted from “{Path(doc.source_path).name}” for easier reading "
-             f"(A4, {s.alignment}-aligned, {s.font} {s.font_size:g} pt, line spacing {s.line_spacing:g})."]
-    parts.append("The author’s wording has not been changed.")
+    lang = doc.language or "en"
+    parts = [doc_label(lang, "about_source", file=Path(doc.source_path).name, font=s.font,
+                       size=f"{s.font_size:g}", spacing=f"{s.line_spacing:g}")]
+    parts.append(doc_label(lang, "about_wording"))
     if doc.ocr_used:
         n = sum(1 for c in doc.corrections if c.applied)
-        parts.append(f"Some pages were scanned and converted with OCR; {n} OCR correction(s) were applied.")
+        parts.append(doc_label(lang, "about_ocr", n=n))
     if citations_moved:
-        parts.append("Author-year citations were replaced by bracketed numbers that point to the numbered "
-                     "reference list; automated citation detection can make mistakes.")
+        parts.append(doc_label(lang, "about_citations"))
     if s.move_footnotes and any(b.kind == BlockKind.FOOTNOTE for b in doc.blocks):
-        parts.append("Footnotes were moved to the Notes section at the end.")
+        parts.append(doc_label(lang, "about_notes"))
     return " ".join(parts)

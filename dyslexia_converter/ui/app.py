@@ -23,6 +23,7 @@ from ..fonts import FONT_CHOICES, get_family
 from ..render import preview
 from ..settings import PRESET_DISCLAIMER, PRESETS, FormatSettings, SettingsStore
 from ..transform.spelling import CustomWords
+from .i18n import LANGUAGES, Translator, system_language
 from .theme import make_theme, palette
 
 log = logging.getLogger("dyslexia_converter")
@@ -32,6 +33,9 @@ RELOAD_KEYS = {"split_spreads", "scan_text_source", "ocr_language"}
 
 EXPORTS = [("pdf", "PDF", "pdf"), ("printable_pdf", "Printable PDF", "pdf"), ("docx", "Word (DOCX)", "docx"),
            ("txt", "Plain text", "txt"), ("md", "Markdown", "md")]
+# document languages (codes used by the core) and their English names (translated in the UI)
+DOC_LANGUAGES = [("en", "English"), ("nl", "Dutch"), ("de", "German"), ("fr", "French"), ("es", "Spanish"),
+                 ("it", "Italian"), ("pt", "Portuguese")]
 
 
 class ConverterApp:
@@ -42,6 +46,9 @@ class ConverterApp:
             else PRESETS["Standard"].copy()
         self.ai_settings = self.store.load_ai()
         self.ui = {"text_scale": 1.0, "high_contrast": False, "dark_mode": False, **self.store.load_ui()}
+        if self.ui.get("app_language") not in LANGUAGES:
+            self.ui["app_language"] = system_language()
+        self.t = Translator(self.ui["app_language"])
         self.keystore = KeyStore()
         self.assistant = AIAssistant(self.ai_settings, self.keystore)
         self.custom_words = CustomWords()
@@ -64,6 +71,9 @@ class ConverterApp:
 
     def text(self, value: str, size: float = 15, **kw) -> ft.Text:
         return ft.Text(value, size=self.fs(size), **kw)
+
+    def lang_name(self, code: str) -> str:
+        return self.t(dict(DOC_LANGUAGES).get(code, code))
 
     def notify(self, message: str, error: bool = False) -> None:
         if error or len(message) > 90:
@@ -89,11 +99,13 @@ class ConverterApp:
             icon = {"warning": ft.Icons.WARNING_AMBER, "action": ft.Icons.TOUCH_APP}.get(kind, ft.Icons.INFO_OUTLINE)
             color = self.pal.get(f"notice_{kind}", self.pal["notice_info"])
             controls: list[ft.Control] = [ft.Icon(icon, size=20),
-                                          ft.Text(message, size=self.fs(13), expand=True, selectable=True)]
+                                          ft.Text(self.t.message(message), size=self.fs(13), expand=True,
+                                                  selectable=True)]
             if action:
                 label, handler = action
                 controls.append(ft.FilledButton(label, on_click=handler))
-            controls.append(ft.IconButton(ft.Icons.CLOSE, tooltip="Dismiss", data=idx, on_click=self._dismiss))
+            controls.append(ft.IconButton(ft.Icons.CLOSE, tooltip=self.t("Dismiss"), data=idx,
+                                          on_click=self._dismiss))
             self.notice_list.controls.append(ft.Container(
                 ft.Row(controls, vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=8),
                 bgcolor=color, border_radius=8, padding=ft.Padding.symmetric(horizontal=10, vertical=4)))
@@ -119,9 +131,9 @@ class ConverterApp:
             self.tabs.selected_index = self.review_tab_index
             self.page.update()
 
-        words = "word needs" if pending == 1 else "words need"
-        return ("action", f"{pending} {words} your decision: OCR wasn't sure how to read them.",
-                ("Review now", open_review))
+        msg = (self.t("1 word needs your decision: OCR wasn't sure how to read it.") if pending == 1 else
+               self.t("{n} words need your decision: OCR wasn't sure how to read them.", n=pending))
+        return ("action", msg, (self.t("Review now"), open_review))
 
     def update_review_notice(self) -> None:
         notices = [n for n in getattr(self, "_notices", []) if n[0] != "action"]
@@ -135,11 +147,13 @@ class ConverterApp:
     # ================================================================ build
     def build(self) -> None:
         p = self.page
+        t = self.t
         p.title = f"Dyslexia Converter {__version__}"
         p.padding = 0
         self.apply_theme()
+        self._controls = {}
 
-        self.status = self.text("Open a PDF to start. Your original file is never changed.", 14,
+        self.status = self.text(t("Open a PDF to start. Your original file is never changed."), 14,
                                 max_lines=1, overflow=ft.TextOverflow.ELLIPSIS)
         self.progress = ft.ProgressBar(value=0, visible=False)
         # longer messages (warnings, decisions waiting) go here: wrapped, scrollable, dismissable
@@ -147,28 +161,27 @@ class ConverterApp:
         self.notices = ft.Container(self.notice_list, visible=False, height=0)
         self.mode_chip = ft.Container(content=self.text(self._mode_label(), 13, weight=ft.FontWeight.BOLD),
                                       padding=ft.Padding.symmetric(horizontal=10, vertical=4), border_radius=12,
-                                      bgcolor=self._mode_color(), tooltip="Where your document content is processed")
-        self.dark_switch = ft.Switch(label="Dark mode", value=bool(self.ui.get("dark_mode")),
-                                     on_change=self.on_dark_mode, tooltip="Switch between light and dark app colours",
-                                     label_text_style=ft.TextStyle(size=self.fs(14)))
+                                      bgcolor=self._mode_color(),
+                                      tooltip=t("Where your document content is processed"))
+        logo = ft.Image(src="icon.png", width=self.fs(38), height=self.fs(38), semantics_label="Logo")
         header = ft.Container(
             content=ft.Row([
-                ft.Row([self.text("Dyslexia Converter", 22, weight=ft.FontWeight.BOLD), self.mode_chip],
-                       spacing=12, wrap=True),
-                ft.Row([self.dark_switch, self.coffee_button(),
-                        ft.FilledButton("Open PDF", icon=ft.Icons.FOLDER_OPEN, on_click=self.on_open,
-                                        tooltip="Choose a PDF to convert")], spacing=8, wrap=True),
+                ft.Row([logo, self.text("Dyslexia Converter", 22, weight=ft.FontWeight.BOLD), self.mode_chip],
+                       spacing=10, wrap=True, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                ft.Row([self.coffee_button(),
+                        ft.FilledButton(t("Open PDF"), icon=ft.Icons.FOLDER_OPEN, on_click=self.on_open,
+                                        tooltip=t("Choose a PDF to convert"))], spacing=8, wrap=True),
             ], spacing=12, wrap=True, alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER),
             padding=ft.Padding.symmetric(horizontal=16, vertical=10))
 
         narrow = (p.width or 1200) < 820
         settings_panel, preview_panel = self.build_convert_tab()
-        if narrow:  # phones: settings and preview get their own tabs
-            convert = [("Settings", ft.Icons.TUNE, ft.Container(settings_panel, padding=12, expand=True)),
-                       ("Preview", ft.Icons.PREVIEW, ft.Container(preview_panel, padding=8, expand=True))]
+        if narrow:  # phones: layout settings and preview get their own tabs
+            convert = [(t("Layout"), ft.Icons.TUNE, ft.Container(settings_panel, padding=12, expand=True)),
+                       (t("Preview"), ft.Icons.PREVIEW, ft.Container(preview_panel, padding=8, expand=True))]
         else:
-            convert = [("Convert", ft.Icons.TUNE, ft.Row([
+            convert = [(t("Convert"), ft.Icons.TUNE, ft.Row([
                 ft.Container(settings_panel, width=400, padding=ft.Padding.only(left=12, right=4)),
                 ft.VerticalDivider(width=1),
                 ft.Container(preview_panel, expand=True, padding=8)], expand=True,
@@ -176,24 +189,44 @@ class ConverterApp:
         self.preview_tab_index = 1 if narrow else 0
         self.review_tab_index = len(convert)
         tabs = convert + [
-            ("OCR review", ft.Icons.SPELLCHECK, self.build_review_tab()),
-            ("Document map", ft.Icons.ACCOUNT_TREE, self.build_map_tab()),
-            ("AI settings", ft.Icons.SMART_TOY_OUTLINED, self.build_ai_tab()),
-            ("Help", ft.Icons.HELP_OUTLINE, self.build_help_tab())]
+            (t("OCR review"), ft.Icons.SPELLCHECK, self.build_review_tab()),
+            (t("Document map"), ft.Icons.ACCOUNT_TREE, self.build_map_tab()),
+            (t("AI settings"), ft.Icons.SMART_TOY_OUTLINED, self.build_ai_tab()),
+            (t("Settings"), ft.Icons.SETTINGS_OUTLINED, self.build_settings_tab()),
+            (t("Help"), ft.Icons.HELP_OUTLINE, self.build_help_tab())]
+        self.settings_tab_index = len(tabs) - 2
         self.tabs = ft.Tabs(
             length=len(tabs), selected_index=0, animation_duration=ft.Duration(milliseconds=0), expand=True,
             content=ft.Column([
-                ft.TabBar(tabs=[ft.Tab(label=t, icon=i) for t, i, _ in tabs], scrollable=True),
+                ft.TabBar(tabs=[ft.Tab(label=label, icon=i) for label, i, _ in tabs], scrollable=True),
                 ft.TabBarView(controls=[c for _, _, c in tabs], expand=True),
             ], expand=True, spacing=0))
         p.add(ft.Column([header, ft.Container(ft.Column([self.status, self.progress, self.notices], spacing=4),
                                               padding=ft.Padding.symmetric(horizontal=16)),
                          self.tabs], expand=True, spacing=4))
 
+    async def rebuild(self, tab: Optional[int] = None) -> None:
+        """Build the whole window again (after changing the app language or text size), keeping the document."""
+        first, last = self.tf_first.value, self.tf_last.value
+        self.page.controls.clear()
+        self.build()
+        self.tf_first.value, self.tf_last.value = first, last
+        if tab is not None:
+            self.tabs.selected_index = tab
+        if self.session:
+            self.status.value = self.doc_status()
+            self._update_doc_language_option()
+            self.refresh_review()
+            self.refresh_map()
+            await self.show_pages()
+        else:
+            self._render_notices()
+        self.page.update()
+
     def coffee_button(self) -> ft.Control:
         """Optional donation link; opens PayPal in the browser. Nothing is sent from the app."""
-        return ft.FilledTonalButton("Like the app? Buy me a coffee", icon=ft.Icons.COFFEE, url=DONATE_URL,
-                                 tooltip="Opens PayPal in your web browser (optional)")
+        return ft.FilledTonalButton(self.t("Like the app? Buy me a coffee"), icon=ft.Icons.COFFEE, url=DONATE_URL,
+                                    tooltip=self.t("Opens PayPal in your web browser (optional)"))
 
     def apply_theme(self) -> None:
         dark = bool(self.ui.get("dark_mode"))
@@ -217,8 +250,9 @@ class ConverterApp:
 
     def _mode_label(self) -> str:
         if self.ai_settings.mode == "ai_assisted":
-            return "AI-assisted"
-        return "Local-only" if (self.page.width or 1200) < 820 else "Local-only: nothing leaves this device"
+            return self.t("AI-assisted")
+        return self.t("Local-only") if (self.page.width or 1200) < 820 else \
+            self.t("Local-only: nothing leaves this device")
 
     def _mode_color(self) -> str:
         return self.pal["chip_ai"] if self.ai_settings.mode == "ai_assisted" else self.pal["chip_local"]
@@ -261,17 +295,21 @@ class ConverterApp:
             await self.settings_changed(reload=key in RELOAD_KEYS)
 
         d = ft.Dropdown(label=label, value=str(getattr(self.settings, key)), expand=True,
-                        options=[ft.DropdownOption(key=k, text=t) for k, t in options], on_select=changed,
+                        options=[ft.DropdownOption(key=k, text=v) for k, v in options], on_select=changed,
                         text_size=self.fs(14))
         self._controls[key] = d
         return d
 
     def build_convert_tab(self) -> ft.Control:
+        t = self.t
         presets = ["Standard", "Spacious", "High Readability", "Compact print", "My Settings"]
-        self.preset_dd = ft.Dropdown(label="Preset", value="", expand=True, text_size=self.fs(14),
-                                     options=[ft.DropdownOption(key=p, text=p) for p in presets],
+        self.preset_dd = ft.Dropdown(label=t("Preset"), value="", expand=True, text_size=self.fs(14),
+                                     options=[ft.DropdownOption(key=p, text=t(p)) for p in presets],
                                      on_select=self.on_preset)
-        self.font_note = self.text("", 12, color=self.pal["muted"])
+        self.font_note = self.text(self._font_note(), 12, color=self.pal["muted"])
+        self.doc_lang_dd = self.dropdown("ocr_language", t("Document language"),
+                                         [("auto", t("Detect automatically"))] +
+                                         [(code, t(name)) for code, name in DOC_LANGUAGES])
 
         def section(title: str, controls: list[ft.Control], expanded: bool = False) -> ft.Control:
             return ft.ExpansionTile(title=self.text(title, 16, weight=ft.FontWeight.BOLD), expanded=expanded,
@@ -281,102 +319,101 @@ class ConverterApp:
 
         settings_col = ft.Column([
             ft.Row([self.preset_dd]),
-            self.text(PRESET_DISCLAIMER, 12, italic=True),
-            section("Text", [
-                ft.Row([self.dropdown("font", "Font", [(f, f) for f in FONT_CHOICES])]),
+            self.text(t(PRESET_DISCLAIMER), 12, italic=True),
+            ft.Row([self.doc_lang_dd]),
+            self.text(t("Detected from the text of each PDF. Choose a language if the guess is wrong: it sets the "
+                        "dictionary for OCR, spelling fixes and rejoining split words."), 12),
+            section(t("Text"), [
+                ft.Row([self.dropdown("font", t("Font"), [(f, f) for f in FONT_CHOICES])]),
                 self.font_note,
-                self.slider("font_size", "Font size", 9, 24, 0.5, "pt"),
-                self.slider("line_spacing", "Line spacing", 1.0, 3.0, 0.1, "×"),
-                self.slider("paragraph_spacing", "Paragraph spacing", 0, 36, 1, "pt"),
-                self.slider("letter_spacing", "Letter spacing", 0, 3, 0.1, "pt"),
-                self.slider("word_spacing", "Word spacing", 0, 10, 0.5, "pt"),
-                ft.Row([self.dropdown("alignment", "Alignment",
-                                      [("left", "Left (recommended)"), ("center", "Centre"),
-                                       ("justify", "Justified")])]),
+                self.slider("font_size", t("Font size"), 9, 24, 0.5, "pt"),
+                self.slider("line_spacing", t("Line spacing"), 1.0, 3.0, 0.1, "×"),
+                self.slider("paragraph_spacing", t("Paragraph spacing"), 0, 36, 1, "pt"),
+                self.slider("letter_spacing", t("Letter spacing"), 0, 3, 0.1, "pt"),
+                self.slider("word_spacing", t("Word spacing"), 0, 10, 0.5, "pt"),
+                ft.Row([self.dropdown("alignment", t("Alignment"),
+                                      [("left", t("Left (recommended)")), ("center", t("Centre")),
+                                       ("justify", t("Justified"))])]),
             ], expanded=True),
-            section("Page", [
-                self.slider("reading_width", "Reading width", 8, 17, 0.5, "cm"),
-                self.slider("margin_top", "Top margin", 0.5, 5, 0.1, "cm"),
-                self.slider("margin_bottom", "Bottom margin", 0.5, 5, 0.1, "cm"),
-                self.slider("margin_left", "Left margin", 0.5, 5, 0.1, "cm"),
-                self.slider("margin_right", "Right margin", 0.5, 5, 0.1, "cm"),
-                ft.Row([self.dropdown("page_tint", "Page colour (screen PDF)",
-                                      [("cream", "Cream"), ("blue", "Light blue"), ("none", "White")])]),
-                self.switch("boxed_sections", "Boxes for abstract & quotes, lines under headings"),
-                self.switch("ink_saving", "Ink-saving mode (no backgrounds or decorations)"),
-                self.switch("page_numbers", "Page numbers"),
-                self.switch("include_contents", "Contents page (document map)"),
+            section(t("Page"), [
+                self.slider("reading_width", t("Reading width"), 8, 17, 0.5, "cm"),
+                self.slider("margin_top", t("Top margin"), 0.5, 5, 0.1, "cm"),
+                self.slider("margin_bottom", t("Bottom margin"), 0.5, 5, 0.1, "cm"),
+                self.slider("margin_left", t("Left margin"), 0.5, 5, 0.1, "cm"),
+                self.slider("margin_right", t("Right margin"), 0.5, 5, 0.1, "cm"),
+                ft.Row([self.dropdown("page_tint", t("Page colour (screen PDF)"),
+                                      [("cream", t("Cream")), ("blue", t("Light blue")), ("none", t("White"))])]),
+                self.switch("boxed_sections", t("Boxes for abstract & quotes, lines under headings")),
+                self.switch("ink_saving", t("Ink-saving mode (no backgrounds or decorations)")),
+                self.switch("page_numbers", t("Page numbers")),
+                self.switch("include_contents", t("Contents page (document map)")),
             ]),
-            section("Bold start of words", [
-                self.switch("bold_word_start", "Bold the first part of each word",
-                            "Changes only how words look, never the text"),
-                ft.Row([self.dropdown("bold_amount", "How much",
-                                      [("first_letter", "First letter"), ("25", "First 25%"),
-                                       ("40", "First 40%"), ("auto", "Automatic")])]),
-                self.switch("bold_in_references", "Also in references and citations"),
+            section(t("Bold start of words"), [
+                self.switch("bold_word_start", t("Bold the first part of each word"),
+                            t("Changes only how words look, never the text")),
+                ft.Row([self.dropdown("bold_amount", t("How much"),
+                                      [("first_letter", t("First letter")), ("25", t("First 25%")),
+                                       ("40", t("First 40%")), ("auto", t("Automatic"))])]),
+                self.switch("bold_in_references", t("Also in references and citations")),
             ]),
-            section("Structure", [
-                self.switch("move_footnotes", "Move footnotes to the end"),
-                self.switch("move_citations", "Move author-year citations to numbers [1]",
-                            "Automated citation detection can make mistakes. Original citation text is kept."),
-                self.text("Automated citation detection can make mistakes; the original citation text is "
-                          "always kept in the list.", 12, italic=True),
-                self.switch("remove_headers_footers", "Hide running headers, footers and page numbers"),
-                self.switch("show_decorative_images", "Show logos and decorative images"),
-                ft.Row([self.dropdown("table_mode", "Tables",
-                                      [("auto", "Rebuild as tables when reliable"),
-                                       ("image", "Always keep as picture")])]),
-                self.switch("about_note", "Add an 'About this version' note at the end"),
+            section(t("Structure"), [
+                self.switch("move_footnotes", t("Move footnotes to the end")),
+                self.switch("move_citations", t("Move author-year citations to numbers [1]"),
+                            t("Automated citation detection can make mistakes. Original citation text is kept.")),
+                self.text(t("Automated citation detection can make mistakes; the original citation text is "
+                            "always kept in the list."), 12, italic=True),
+                self.switch("remove_headers_footers", t("Hide running headers, footers and page numbers")),
+                self.switch("show_decorative_images", t("Show logos and decorative images")),
+                ft.Row([self.dropdown("table_mode", t("Tables"),
+                                      [("auto", t("Rebuild as tables when reliable")),
+                                       ("image", t("Always keep as picture"))])]),
+                self.switch("about_note", t("Add an 'About this version' note at the end")),
             ]),
-            section("Scanned documents (OCR)", [
-                ft.Row([self.dropdown("ocr_language", "Document language",
-                                      [("auto", "Detect automatically"), ("en", "English"), ("nl", "Dutch"),
-                                       ("de", "German"), ("fr", "French"), ("es", "Spanish"),
-                                       ("it", "Italian"), ("pt", "Portuguese")])]),
-                ft.Row([self.dropdown("ocr_correction", "OCR correction",
-                                      [("review", "Review uncertain corrections"),
-                                       ("automatic", "Automatic (high confidence only)"),
-                                       ("disabled", "Off")])]),
-                self.switch("split_spreads", "Split two-page book scans into single pages"),
-                ft.Row([self.dropdown("scan_text_source", "Text of scanned pages",
-                                      [("auto", "Clean up and read the scan (best quality)"),
-                                       ("text_layer", "Use the scanner's own text layer (faster)")])]),
-                self.text("Scans are straightened, gutter shadows and dark borders are removed, and two-page "
-                          "spreads are split before the text is read.", 12),
-                self.text("OCR: " + ("Tesseract found" if default_engine() else
-                                     "not available - install Tesseract to convert scanned PDFs. Scans that "
-                                     "already contain a text layer can still be converted."), 12),
+            section(t("Scanned documents (OCR)"), [
+                ft.Row([self.dropdown("ocr_correction", t("OCR correction"),
+                                      [("review", t("Review uncertain corrections")),
+                                       ("automatic", t("Automatic (high confidence only)")),
+                                       ("disabled", t("Off"))])]),
+                self.switch("split_spreads", t("Split two-page book scans into single pages")),
+                ft.Row([self.dropdown("scan_text_source", t("Text of scanned pages"),
+                                      [("auto", t("Clean up and read the scan (best quality)")),
+                                       ("text_layer", t("Use the scanner's own text layer (faster)"))])]),
+                self.text(t("Scans are straightened, gutter shadows and dark borders are removed, and two-page "
+                            "spreads are split before the text is read."), 12),
+                self.text(t("OCR: Tesseract found") if default_engine() else
+                          t("OCR: not available - install Tesseract to convert scanned PDFs. Scans that already "
+                            "contain a text layer can still be converted."), 12),
             ]),
-            section("Pages to convert", [
+            section(t("Pages to convert"), [
                 ft.Row([
-                    tf_first := ft.TextField(label="From page", value="", width=120,
+                    tf_first := ft.TextField(label=t("From page"), value="", width=120,
                                              keyboard_type=ft.KeyboardType.NUMBER),
-                    tf_last := ft.TextField(label="To page", value="", width=120,
+                    tf_last := ft.TextField(label=t("To page"), value="", width=120,
                                             keyboard_type=ft.KeyboardType.NUMBER),
-                    ft.OutlinedButton("Apply", on_click=self.on_page_range),
+                    ft.OutlinedButton(t("Apply"), on_click=self.on_page_range),
                 ], wrap=True),
-                self.text("Leave empty to convert all pages. Useful when a PDF starts with the end of "
-                          "another article.", 12),
+                self.text(t("Leave empty to convert all pages. Useful when a PDF starts with the end of "
+                            "another article."), 12),
             ]),
             ft.Row([
-                ft.FilledButton("Save as My Settings", icon=ft.Icons.SAVE, on_click=self.on_save_settings),
-                ft.OutlinedButton("Restore defaults", icon=ft.Icons.RESTORE, on_click=self.on_restore_defaults),
+                ft.FilledButton(t("Save as My Settings"), icon=ft.Icons.SAVE, on_click=self.on_save_settings),
+                ft.OutlinedButton(t("Restore defaults"), icon=ft.Icons.RESTORE, on_click=self.on_restore_defaults),
             ], wrap=True),
         ], scroll=ft.ScrollMode.AUTO, spacing=8, expand=True)
         self.tf_first, self.tf_last = tf_first, tf_last
 
         # preview
         self.orig_img = ft.Image(src=_blank_png(), fit=ft.BoxFit.CONTAIN, expand=True,
-                                 semantics_label="Original page")
+                                 semantics_label=t("Original page"))
         self.conv_img = ft.Image(src=_blank_png(), fit=ft.BoxFit.CONTAIN, expand=True,
-                                 semantics_label="Converted page")
-        self.orig_label = self.text("Original", 13)
-        self.conv_label = self.text("Converted", 13)
+                                 semantics_label=t("Converted page"))
+        self.orig_label = self.text(t("Original"), 13)
+        self.conv_label = self.text(t("Converted"), 13)
         self.view_seg = ft.SegmentedButton(
-            segments=[ft.Segment(value="orig", label=ft.Text("Original")),
-                      ft.Segment(value="side", label=ft.Text("Both")),
-                      ft.Segment(value="conv", label=ft.Text("Converted"))],
-            selected=["side"], on_change=self.on_view_mode)
+            segments=[ft.Segment(value="orig", label=ft.Text(t("Original"), no_wrap=True)),
+                      ft.Segment(value="side", label=ft.Text(t("Both"), no_wrap=True)),
+                      ft.Segment(value="conv", label=ft.Text(t("Converted"), no_wrap=True))],
+            selected=[self.view_mode], show_selected_icon=False, on_change=self.on_view_mode)
 
         def nav(which: str, label: ft.Text) -> ft.Row:
             async def prev(e):
@@ -386,89 +423,107 @@ class ConverterApp:
                 await self.page_step(which, 1)
 
             return ft.Row([
-                ft.IconButton(ft.Icons.CHEVRON_LEFT, tooltip="Previous page", on_click=prev),
+                ft.IconButton(ft.Icons.CHEVRON_LEFT, tooltip=t("Previous page"), on_click=prev),
                 label,
-                ft.IconButton(ft.Icons.CHEVRON_RIGHT, tooltip="Next page", on_click=nxt),
+                ft.IconButton(ft.Icons.CHEVRON_RIGHT, tooltip=t("Next page"), on_click=nxt),
             ], alignment=ft.MainAxisAlignment.CENTER, spacing=2)
 
         self.orig_panel = ft.Column([nav("orig", self.orig_label),
-                                     ft.Container(self.orig_img, expand=True, border=ft.Border.all(1, self.pal["frame"]))],
-                                    expand=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
+                                     ft.Container(self.orig_img, expand=True,
+                                                  border=ft.Border.all(1, self.pal["frame"]))],
+                                    expand=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                                    visible=self.view_mode in ("orig", "side"))
         self.conv_panel = ft.Column([nav("conv", self.conv_label),
-                                     ft.Container(self.conv_img, expand=True, border=ft.Border.all(1, self.pal["frame"]))],
-                                    expand=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
-        export_buttons = [ft.OutlinedButton(label, icon=ft.Icons.DOWNLOAD, data=fmt, on_click=self.on_export,
-                                            tooltip=f"Save as {label}") for fmt, label, _ in EXPORTS]
+                                     ft.Container(self.conv_img, expand=True,
+                                                  border=ft.Border.all(1, self.pal["frame"]))],
+                                    expand=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                                    visible=self.view_mode in ("conv", "side"))
+        export_buttons = [ft.OutlinedButton(t(label), icon=ft.Icons.DOWNLOAD, data=fmt, on_click=self.on_export,
+                                            tooltip=t("Save as {format}", format=t(label)))
+                          for fmt, label, _ in EXPORTS]
         preview_col = ft.Column([
             ft.Row([self.view_seg], wrap=True),
             ft.Row([self.orig_panel, self.conv_panel], expand=True, vertical_alignment=ft.CrossAxisAlignment.START),
-            ft.Row([self.text("Export:", 14, weight=ft.FontWeight.BOLD)] + export_buttons, wrap=True),
+            ft.Row([self.text(t("Export:"), 14, weight=ft.FontWeight.BOLD)] + export_buttons, wrap=True),
         ], expand=True)
 
         return settings_col, preview_col
 
+    def _update_doc_language_option(self) -> None:
+        """Show the detected language next to 'Detect automatically'."""
+        label = self.t("Detect automatically")
+        if self.session and self.settings.ocr_language == "auto":
+            label = self.t("Detect automatically (found: {language})",
+                           language=self.lang_name(self.session.document.language))
+        self.doc_lang_dd.options[0] = ft.DropdownOption(key="auto", text=label)
+
     # ---------------------------------------------------------------- review tab
     def build_review_tab(self) -> ft.Control:
-        self.review_summary = self.text("No scanned document loaded.", 14)
+        t = self.t
+        self.review_summary = self.text(t("No scanned document loaded."), 14)
         self.review_list = ft.ListView(expand=True, spacing=8, padding=8)
-        self.word_field = ft.TextField(label="Add a word to your dictionary", width=280,
+        self.word_field = ft.TextField(label=t("Add a word to your dictionary"), width=280,
                                        on_submit=self.on_add_word)
-        self.words_view = self.text(", ".join(sorted(self.custom_words.words)) or "(none yet)", 13)
+        self.words_view = self.text(", ".join(sorted(self.custom_words.words)) or t("(none yet)"), 13)
         return ft.Container(ft.Column([
-            self.text("OCR corrections", 18, weight=ft.FontWeight.BOLD),
-            self.text("Corrections use a local dictionary. The original OCR text is kept, so every "
-                      "correction can be undone.", 13),
+            self.text(t("OCR corrections"), 18, weight=ft.FontWeight.BOLD),
+            self.text(t("Corrections use a local dictionary. The original OCR text is kept, so every "
+                        "correction can be undone."), 13),
             self.review_summary,
-            ft.Row([ft.OutlinedButton("Undo all corrections", icon=ft.Icons.UNDO, on_click=self.on_undo_all)]),
+            ft.Row([ft.OutlinedButton(t("Undo all corrections"), icon=ft.Icons.UNDO, on_click=self.on_undo_all)]),
             self.review_list,
             ft.Divider(),
-            self.text("My dictionary (names, technical terms, abbreviations)", 15, weight=ft.FontWeight.BOLD),
-            ft.Row([self.word_field, ft.OutlinedButton("Add", on_click=self.on_add_word)], wrap=True),
+            self.text(t("My dictionary (names, technical terms, abbreviations)"), 15, weight=ft.FontWeight.BOLD),
+            ft.Row([self.word_field, ft.OutlinedButton(t("Add"), on_click=self.on_add_word)], wrap=True),
             self.words_view,
         ], expand=True), padding=16, expand=True)
 
     def refresh_review(self) -> None:
+        t = self.t
         self.update_review_notice()
         self.review_list.controls.clear()
         if not self.session or not self.session.document.ocr_used:
-            self.review_summary.value = "No OCR was needed for this document." if self.session else \
-                "No scanned document loaded."
+            self.review_summary.value = t("No OCR was needed for this document.") if self.session else \
+                t("No scanned document loaded.")
             return
         corr = self.session.document.corrections
         pending = [c for c in corr if c.status == "pending"]
         done = [c for c in corr if c.status in ("auto", "accepted")]
-        self.review_summary.value = (f"{len(done)} correction(s) applied, {len(pending)} waiting for your review. "
-                                     f"Mode: {self.settings.ocr_correction}.")
+        mode = {"review": t("Review uncertain corrections"), "automatic": t("Automatic (high confidence only)"),
+                "disabled": t("Off")}.get(self.settings.ocr_correction, self.settings.ocr_correction)
+        self.review_summary.value = t("{done} correction(s) applied, {pending} waiting for your review. Mode: {mode}.",
+                                      done=len(done), pending=len(pending), mode=mode)
         for c in pending + done + [c for c in corr if c.status == "rejected"]:
             before, after = self.session.correction_context(c)
-            status = {"pending": "Waiting for review", "auto": "Applied automatically",
-                      "accepted": "Accepted", "rejected": "Rejected (original kept)"}[c.status]
+            status = {"pending": t("Waiting for review"), "auto": t("Applied automatically"),
+                      "accepted": t("Accepted"), "rejected": t("Rejected (original kept)")}[c.status]
             actions = []
             if c.status in ("pending", "rejected"):
-                actions.append(ft.FilledButton("Accept", data=c.id, on_click=self.on_accept))
+                actions.append(ft.FilledButton(t("Accept"), data=c.id, on_click=self.on_accept))
             if c.status in ("pending", "auto", "accepted"):
-                actions.append(ft.OutlinedButton("Reject" if c.status == "pending" else "Undo", data=c.id,
+                actions.append(ft.OutlinedButton(t("Reject") if c.status == "pending" else t("Undo"), data=c.id,
                                                  on_click=self.on_reject))
-            actions.append(ft.TextButton(f"'{c.original}' is correct - add to dictionary", data=c.original,
-                                         on_click=self.on_add_word_from_review))
+            actions.append(ft.TextButton(t("'{word}' is correct - add to dictionary", word=c.original),
+                                         data=c.original, on_click=self.on_add_word_from_review))
             self.review_list.controls.append(ft.Card(content=ft.Container(ft.Column([
                 ft.Row([self.text(c.original, 16, weight=ft.FontWeight.BOLD),
-                        ft.Icon(ft.Icons.ARROW_FORWARD, size=18, tooltip="suggested"),
+                        ft.Icon(ft.Icons.ARROW_FORWARD, size=18, tooltip=t("suggested")),
                         self.text(c.replacement, 16, weight=ft.FontWeight.BOLD),
-                        self.text(f"Confidence {round(c.confidence * 100)}%  ·  {status}  ·  {c.source}",
-                                  12)], wrap=True),
-                self.text("Original: " + before, 13),
-                self.text("Suggested: " + after, 13),
+                        self.text(t("Confidence {pct}%", pct=round(c.confidence * 100)) + f"  ·  {status}  ·  "
+                                  f"{c.source}", 12)], wrap=True),
+                self.text(t("Original:") + " " + before, 13),
+                self.text(t("Suggested:") + " " + after, 13),
                 ft.Row(actions, wrap=True),
             ], spacing=4), padding=12)))
 
     # ---------------------------------------------------------------- map tab
     def build_map_tab(self) -> ft.Control:
+        t = self.t
         self.map_list = ft.ListView(expand=True, spacing=2, padding=8)
         return ft.Container(ft.Column([
-            self.text("Document map", 18, weight=ft.FontWeight.BOLD),
-            self.text("Headings found in the document. Select one to show it in the preview. "
-                      "Nothing here is invented: only headings present in the original are listed.", 13),
+            self.text(t("Document map"), 18, weight=ft.FontWeight.BOLD),
+            self.text(t("Headings found in the document. Select one to show it in the preview. "
+                        "Nothing here is invented: only headings present in the original are listed."), 13),
             self.map_list,
         ], expand=True), padding=16, expand=True)
 
@@ -483,10 +538,10 @@ class ConverterApp:
             self.map_list.controls.append(ft.ListTile(
                 title=self.text(title, 15 if level <= 1 else 14,
                                 weight=ft.FontWeight.BOLD if level <= 1 else ft.FontWeight.NORMAL),
-                trailing=self.text(f"page {pg}", 12), data=pg - 1, on_click=self.on_map_click,
+                trailing=self.text(self.t("page {n}", n=pg), 12), data=pg - 1, on_click=self.on_map_click,
                 content_padding=ft.Padding.only(left=12 + 24 * (level - 1))))
         if not toc:
-            self.map_list.controls.append(self.text("No headings were detected.", 14))
+            self.map_list.controls.append(self.text(self.t("No headings were detected."), 14))
 
     async def on_map_click(self, e):
         self.conv_page = int(e.control.data)
@@ -496,38 +551,39 @@ class ConverterApp:
 
     # ---------------------------------------------------------------- AI tab
     def build_ai_tab(self) -> ft.Control:
+        t = self.t
         a = self.ai_settings
         self.ai_mode = ft.RadioGroup(value=a.mode, on_change=self.on_ai_mode, content=ft.Column([
-            ft.Radio(value="local_only", label="Local-only - no document content leaves this device"),
-            ft.Radio(value="ai_assisted", label="AI-assisted - selected snippets may be sent to your AI provider"),
+            ft.Radio(value="local_only", label=t("Local-only - no document content leaves this device")),
+            ft.Radio(value="ai_assisted", label=t("AI-assisted - selected snippets may be sent to your AI provider")),
         ]))
-        self.ai_provider = ft.Dropdown(label="Provider", value=a.provider, width=260, text_size=self.fs(14),
+        self.ai_provider = ft.Dropdown(label=t("Provider"), value=a.provider, width=260, text_size=self.fs(14),
                                        options=[ft.DropdownOption(key=k, text=v.label) for k, v in PROVIDERS.items()],
                                        on_select=self.on_ai_provider)
-        self.ai_model = ft.Dropdown(label="Model", width=260, text_size=self.fs(14), on_select=self.on_ai_model)
-        self.ai_key = ft.TextField(label="API key", password=True, can_reveal_password=True, width=380)
+        self.ai_model = ft.Dropdown(label=t("Model"), width=260, text_size=self.fs(14), on_select=self.on_ai_model)
+        self.ai_key = ft.TextField(label=t("API key"), password=True, can_reveal_password=True, width=380)
         self.ai_key_status = self.text("", 13)
         self.ai_note = self.text("", 13, italic=True)
-        self.ai_usage = self.text("No AI requests made in this session.", 13)
-        self.ai_cit = ft.Checkbox(label="Uncertain citations", value=a.use_for_citations,
+        self.ai_usage = self.text(t("No AI requests made in this session."), 13)
+        self.ai_cit = ft.Checkbox(label=t("Uncertain citations"), value=a.use_for_citations,
                                   on_change=self.on_ai_tasks)
-        self.ai_ocr = ft.Checkbox(label="Uncertain OCR words", value=a.use_for_ocr, on_change=self.on_ai_tasks)
+        self.ai_ocr = ft.Checkbox(label=t("Uncertain OCR words"), value=a.use_for_ocr, on_change=self.on_ai_tasks)
         self._refresh_ai_controls()
         return ft.Container(ft.Column([
-            self.text("AI assistance (optional)", 18, weight=ft.FontWeight.BOLD),
-            self.text("The converter works fully without AI. AI is only asked about items local rules are "
-                      "unsure about, in small snippets, and answers are cached so nothing is sent twice.", 13),
+            self.text(t("AI assistance (optional)"), 18, weight=ft.FontWeight.BOLD),
+            self.text(t("The converter works fully without AI. AI is only asked about items local rules are "
+                        "unsure about, in small snippets, and answers are cached so nothing is sent twice."), 13),
             self.ai_mode,
             ft.Row([self.ai_provider, self.ai_model], wrap=True),
             self.ai_note,
-            ft.Row([self.ai_key, ft.FilledButton("Save key", on_click=self.on_save_key),
-                    ft.OutlinedButton("Remove key", on_click=self.on_remove_key)], wrap=True),
+            ft.Row([self.ai_key, ft.FilledButton(t("Save key"), on_click=self.on_save_key),
+                    ft.OutlinedButton(t("Remove key"), on_click=self.on_remove_key)], wrap=True),
             self.ai_key_status,
-            self.text("Your AI provider may charge you for API usage.", 13, weight=ft.FontWeight.BOLD),
-            self.text("Use AI for:", 14), ft.Row([self.ai_cit, self.ai_ocr], wrap=True),
-            ft.Row([ft.FilledButton("Ask AI about uncertain items now", icon=ft.Icons.SMART_TOY,
+            self.text(t("Your AI provider may charge you for API usage."), 13, weight=ft.FontWeight.BOLD),
+            self.text(t("Use AI for:"), 14), ft.Row([self.ai_cit, self.ai_ocr], wrap=True),
+            ft.Row([ft.FilledButton(t("Ask AI about uncertain items now"), icon=ft.Icons.SMART_TOY,
                                     on_click=self.on_run_ai),
-                    ft.OutlinedButton("Clear AI cache", on_click=self.on_clear_cache)], wrap=True),
+                    ft.OutlinedButton(t("Clear AI cache"), on_click=self.on_clear_cache)], wrap=True),
             self.ai_usage,
         ], scroll=ft.ScrollMode.AUTO, spacing=10, expand=True), padding=16, expand=True)
 
@@ -536,18 +592,19 @@ class ConverterApp:
         models = cls.models if cls else []
         self.ai_model.options = [ft.DropdownOption(key=m, text=m) for m in models]
         self.ai_model.value = self.ai_settings.model or (cls.default_model if cls else None)
-        self.ai_note.value = cls.note if cls else ""
+        self.ai_note.value = self.t(cls.note) if cls else ""
         has = bool(self.keystore.get(self.ai_settings.provider))
-        self.ai_key_status.value = (f"A key is saved ({self.keystore.backend})." if has
-                                    else "No key saved for this provider.")
-        self.mode_chip.content.value = self._mode_label() if hasattr(self, "mode_chip") else ""
+        self.ai_key_status.value = (self.t("A key is saved ({where}).", where=self.t(self.keystore.backend)) if has
+                                    else self.t("No key saved for this provider."))
         if hasattr(self, "mode_chip"):
+            self.mode_chip.content.value = self._mode_label()
             self.mode_chip.bgcolor = self._mode_color()
 
     async def on_ai_mode(self, e):
         mode = e.control.value
         if mode == "ai_assisted" and not self.ai_settings.consent_given:
-            ok = await self.confirm("Before using AI", PRIVACY_NOTICE, "I understand, enable AI", "Stay local-only")
+            ok = await self.confirm(self.t("Before using AI"), self.t(PRIVACY_NOTICE),
+                                    self.t("I understand, enable AI"), self.t("Stay local-only"))
             if not ok:
                 self.ai_mode.value = "local_only"
                 self.page.update()
@@ -577,92 +634,116 @@ class ConverterApp:
     async def on_save_key(self, e):
         key = (self.ai_key.value or "").strip()
         if not key:
-            self.notify("Enter a key first.", error=True)
+            self.notify(self.t("Enter a key first."), error=True)
             return
         self.keystore.set(self.ai_settings.provider, key)
         self.ai_key.value = ""
         self._refresh_ai_controls()
         self.page.update()
-        self.notify("API key saved on this device.")
+        self.notify(self.t("API key saved on this device."))
 
     async def on_remove_key(self, e):
         self.keystore.remove(self.ai_settings.provider)
         self._refresh_ai_controls()
         self.page.update()
-        self.notify("API key removed.")
+        self.notify(self.t("API key removed."))
 
     async def on_clear_cache(self, e):
         self.assistant.cache.clear()
-        self.notify("AI cache cleared.")
+        self.notify(self.t("AI cache cleared."))
 
     async def on_run_ai(self, e):
+        t = self.t
         if not self.session:
-            self.notify("Open a PDF first.", error=True)
+            self.notify(t("Open a PDF first."), error=True)
             return
         if self.ai_settings.mode != "ai_assisted":
-            self.notify("AI is off. Choose 'AI-assisted' above to use it.", error=True)
+            self.notify(t("AI is off. Choose 'AI-assisted' above to use it."), error=True)
             return
-        self.busy(True, "Sending uncertain snippets to the AI provider...")
+        self.busy(True, t("Sending uncertain snippets to the AI provider..."))
         try:
-            summary = await self.in_thread(self.session.run_ai, self.assistant, self.settings)
+            summary = t.message(await self.in_thread(self.session.run_ai, self.assistant, self.settings))
             chars = sum(u.chars_sent for u in self.assistant.usage)
             cached = sum(1 for u in self.assistant.usage if u.cached)
-            self.ai_usage.value = (f"{summary}. Requests this session: {len(self.assistant.usage)} "
-                                   f"({cached} answered from cache), about {chars} characters sent.")
+            self.ai_usage.value = summary + ". " + t(
+                "Requests this session: {n} ({cached} answered from cache), about {chars} characters sent.",
+                n=len(self.assistant.usage), cached=cached, chars=chars)
             self.notify(summary)
         except ConsentRequired as ex:
-            self.notify(str(ex).split("\n")[0], error=True)
+            self.notify(t.message(str(ex).split("\n")[0]), error=True)
         except AIError as ex:
-            self.notify(f"{ex} The local result was kept.", error=True)
+            self.notify(t.message(str(ex)) + " " + t("The local result was kept."), error=True)
         except Exception as ex:
             log.error("AI failed: %s", redact(str(ex)))
-            self.notify("The AI request failed; the local result was kept.", error=True)
+            self.notify(t("The AI request failed; the local result was kept."), error=True)
         finally:
             self.busy(False)
         self.refresh_review()
         await self.rerender()
 
-    # ---------------------------------------------------------------- help tab
-    def build_help_tab(self) -> ft.Control:
-        scale = ft.Dropdown(label="App text size", value=str(self.ui.get("text_scale", 1.0)), width=220,
-                            options=[ft.DropdownOption(key=str(v), text=t) for v, t in
-                                     [(1.0, "Normal"), (1.15, "Large"), (1.3, "Larger"), (1.5, "Largest")]],
+    # ---------------------------------------------------------------- settings tab
+    def build_settings_tab(self) -> ft.Control:
+        t = self.t
+        from ..settings import app_data_dir
+
+        app_lang = ft.Dropdown(label=t("App language"), value=self.t.lang, width=260, text_size=self.fs(14),
+                               options=[ft.DropdownOption(key=k, text=v) for k, v in LANGUAGES.items()],
+                               on_select=self.on_app_language)
+        dark = ft.Switch(label=t("Dark mode"), value=bool(self.ui.get("dark_mode")), on_change=self.on_dark_mode,
+                         label_text_style=ft.TextStyle(size=self.fs(14)))
+        contrast = ft.Switch(label=t("High-contrast colours"), value=bool(self.ui.get("high_contrast")),
+                             on_change=self.on_contrast, label_text_style=ft.TextStyle(size=self.fs(14)))
+        scale = ft.Dropdown(label=t("App text size"), value=str(self.ui.get("text_scale", 1.0)), width=260,
+                            text_size=self.fs(14),
+                            options=[ft.DropdownOption(key=str(v), text=label) for v, label in
+                                     [(1.0, t("Normal")), (1.15, t("Large")), (1.3, t("Larger")),
+                                      (1.5, t("Largest"))]],
                             on_select=self.on_ui_scale)
-        contrast = ft.Switch(label="High-contrast app colours", value=bool(self.ui.get("high_contrast")),
-                             on_change=self.on_contrast)
+        tess = find_tesseract()
+
+        def heading(s: str) -> ft.Control:
+            return self.text(s, 17, weight=ft.FontWeight.BOLD)
+
+        def card(controls: list[ft.Control]) -> ft.Control:
+            return ft.Card(content=ft.Container(ft.Column(controls, spacing=10), padding=16))
+
         return ft.Container(ft.Column([
-            self.text(f"Dyslexia Converter {__version__}", 20, weight=ft.FontWeight.BOLD),
-            self.text("Text recognition (OCR): " + (f"Tesseract - {find_tesseract()}" if find_tesseract() else
-                                                     "Tesseract not found. Scanned pages fall back to the text the "
-                                                     "scanner stored. Get it at "
-                                                     "https://github.com/UB-Mannheim/tesseract/wiki"), 12,
-                      selectable=True),
-            self.text("How it works", 18, weight=ft.FontWeight.BOLD),
-            self.text("1. Open a PDF. Text is extracted locally; scanned pages are read with OCR.\n"
-                      "2. Headings, lists, tables, figures, footnotes and references are detected with "
-                      "simple rules - no AI needed.\n"
-                      "3. Adjust the settings; the preview updates.\n"
-                      "4. Export to PDF, printable PDF, Word, text or Markdown.", 14),
-            self.text("What never changes", 16, weight=ft.FontWeight.BOLD),
-            self.text("The author's words. The converter does not summarise, paraphrase, simplify or remove "
-                      "text. Your original PDF is never modified or overwritten.", 14),
-            self.text("About the presets and fonts", 16, weight=ft.FontWeight.BOLD),
-            self.text(PRESET_DISCLAIMER + " No single font is best for every reader with dyslexia.", 14),
-            self.text("Support", 16, weight=ft.FontWeight.BOLD),
-            self.text("The app is free. If it helps you, you can buy the maker a coffee. This is completely "
-                      "optional and changes nothing in the app.", 14),
-            ft.Row([self.coffee_button()]),
-            self.text("App display", 16, weight=ft.FontWeight.BOLD),
-            ft.Row([scale, contrast], wrap=True),
-            self.text("The app text size applies after restarting the app. Colours change straight away. "
-                      "Dark mode only changes the app; your exported documents keep their own colours.", 12,
-                      italic=True),
-        ], scroll=ft.ScrollMode.AUTO, spacing=10, expand=True), padding=16, expand=True)
+            self.text(t("Settings"), 20, weight=ft.FontWeight.BOLD),
+            card([heading(t("Appearance")),
+                  ft.Row([app_lang, scale], wrap=True, spacing=16),
+                  ft.Row([dark, contrast], wrap=True, spacing=24),
+                  self.text(t("These only change the app. Your exported documents keep their own layout "
+                              "and colours (see the Convert tab)."), 12, italic=True)]),
+            card([heading(t("Text recognition (OCR)")),
+                  self.text(t("Tesseract: {path}", path=tess) if tess else
+                            t("Tesseract was not found. Scanned pages fall back to the text the scanner stored. "
+                              "Get it at https://github.com/UB-Mannheim/tesseract/wiki"), 13, selectable=True),
+                  self.text(t("Scanned documents are only read once: the result is saved on this device, so "
+                              "opening the same PDF again is almost instant."), 13),
+                  ft.Row([ft.OutlinedButton(t("Clear saved OCR results"), icon=ft.Icons.DELETE_OUTLINE,
+                                            on_click=self.on_clear_ocr_cache)])]),
+            card([heading(t("Privacy and storage")),
+                  self.text(t("Everything is processed on this device unless you switch on AI (see AI settings). "
+                              "Your settings, dictionary and saved OCR results are stored here:"), 13),
+                  self.text(str(app_data_dir()), 12, selectable=True)]),
+            card([heading(t("Support")),
+                  self.text(t("The app is free. If it helps you, you can buy the maker a coffee. This is "
+                              "completely optional and changes nothing in the app."), 13),
+                  ft.Row([self.coffee_button()])]),
+            self.text(f"Dyslexia Converter {__version__}", 12),
+        ], scroll=ft.ScrollMode.AUTO, spacing=12, expand=True, horizontal_alignment=ft.CrossAxisAlignment.STRETCH),
+            padding=16, expand=True)
+
+    async def on_app_language(self, e):
+        self.ui["app_language"] = e.control.value
+        self.store.save_ui(self.ui)
+        self.t = Translator(e.control.value)
+        await self.rebuild(tab=self.settings_tab_index)
 
     async def on_ui_scale(self, e):
         self.ui["text_scale"] = float(e.control.value)
         self.store.save_ui(self.ui)
-        self.notify("Saved. Restart the app to apply the new text size.")
+        await self.rebuild(tab=self.settings_tab_index)
 
     async def on_contrast(self, e):
         self.ui["high_contrast"] = bool(e.control.value)
@@ -673,6 +754,31 @@ class ConverterApp:
         self.ui["dark_mode"] = bool(e.control.value)
         self.store.save_ui(self.ui)
         self.restyle()
+
+    async def on_clear_ocr_cache(self, e):
+        n = await self.in_thread(pipeline.clear_ocr_cache)
+        self.notify(self.t("Saved OCR results cleared ({n} document(s)).", n=n))
+
+    # ---------------------------------------------------------------- help tab
+    def build_help_tab(self) -> ft.Control:
+        t = self.t
+        return ft.Container(ft.Column([
+            self.text(t("How it works"), 18, weight=ft.FontWeight.BOLD),
+            self.text(t("1. Open a PDF. Text is extracted locally; scanned pages are read with OCR.\n"
+                        "2. Headings, lists, tables, figures, footnotes and references are detected with "
+                        "simple rules - no AI needed.\n"
+                        "3. Adjust the settings; the preview updates.\n"
+                        "4. Export to PDF, printable PDF, Word, text or Markdown."), 14),
+            self.text(t("What never changes"), 16, weight=ft.FontWeight.BOLD),
+            self.text(t("The author's words. The converter does not summarise, paraphrase, simplify or remove "
+                        "text. Your original PDF is never modified or overwritten."), 14),
+            self.text(t("Document language"), 16, weight=ft.FontWeight.BOLD),
+            self.text(t("The language of each PDF is detected automatically from its text. If the guess is "
+                        "wrong, choose the language at the top of the Convert tab."), 14),
+            self.text(t("About the presets and fonts"), 16, weight=ft.FontWeight.BOLD),
+            self.text(t(PRESET_DISCLAIMER) + " " + t("No single font is best for every reader with dyslexia."), 14),
+            self.text(t("App language, dark mode and text size are in the Settings tab."), 14),
+        ], scroll=ft.ScrollMode.AUTO, spacing=10, expand=True), padding=16, expand=True)
 
     # ================================================================ dialogs
     async def confirm(self, title: str, message: str, yes: str, no: str) -> bool:
@@ -701,7 +807,7 @@ class ConverterApp:
 
     # ================================================================ events
     async def on_open(self, e):
-        files = await self.file_picker.pick_files(dialog_title="Choose a PDF", allowed_extensions=["pdf"],
+        files = await self.file_picker.pick_files(dialog_title=self.t("Choose a PDF"), allowed_extensions=["pdf"],
                                                   file_type=ft.FilePickerFileType.CUSTOM,
                                                   with_data=self.page.web)
         if not files:
@@ -726,18 +832,29 @@ class ConverterApp:
             a = int(self.tf_first.value) if self.tf_first.value else None
             b = int(self.tf_last.value) if self.tf_last.value else None
         except ValueError:
-            self.notify("Page numbers must be whole numbers.", error=True)
+            self.notify(self.t("Page numbers must be whole numbers."), error=True)
             return None
         if a is None and b is None:
             return None
         return (a or 1, b or 10 ** 6)
 
+    def doc_status(self) -> str:
+        t = self.t
+        d = self.session.document
+        name = Path(self.source_path).name
+        scanner_text = any(p.text_source == "scanner" for p in d.pages)
+        kind = {"text": t("selectable text"),
+                "scanned": t("scanned pages (the scanner's stored text was used)") if scanner_text
+                else t("scanned pages (text read with OCR)"),
+                "mixed": t("a mix of text and scanned pages (OCR used where needed)")}[d.pdf_type]
+        return t("{name}: {kind}. Language: {language}.", name=name, kind=kind, language=self.lang_name(d.language))
+
     async def load_document(self) -> None:
         name = Path(self.source_path).name
-        self.busy(True, f"Reading {name}...")
+        self.busy(True, self.t("Reading {name}...", name=name))
 
         def progress(msg: str, frac: float) -> None:
-            self.status.value = msg
+            self.status.value = self.t.message(msg)
             self.progress.value = frac
             try:
                 self.page.update()
@@ -749,19 +866,15 @@ class ConverterApp:
                 lambda: pipeline.load(self.source_path, self.settings, progress=progress,
                                       custom_words=self.custom_words, pages=self._page_range()))
         except Exception as ex:
-            self.busy(False, f"Could not read {name}.")
-            self.notify(f"Could not read this PDF: {redact(str(ex))}", error=True)
+            self.busy(False, self.t("Could not read {name}.", name=name))
+            self.notify(self.t("Could not read this PDF:") + " " + redact(str(ex)), error=True)
             return
         d = self.session.document
         self.orig_count = preview.page_count(self.source_path)
         self.orig_page = (self._page_range() or (1, 1))[0] - 1
         self.conv_page = 0
-        scanner_text = any(p.text_source == "scanner" for p in d.pages)
-        kind = {"text": "selectable text",
-                "scanned": "scanned pages (" + ("the scanner's stored text was used" if scanner_text
-                                                else "text read with OCR") + ")",
-                "mixed": "a mix of text and scanned pages (OCR used where needed)"}[d.pdf_type]
-        self.busy(False, f"{name}: {kind}. Language: {d.language}.")
+        self.busy(False, self.doc_status())
+        self._update_doc_language_option()
         self._notices = [("warning", w, None) for w in d.warnings]
         self.refresh_review()
         await self.rerender()
@@ -785,21 +898,24 @@ class ConverterApp:
 
     async def on_save_settings(self, e):
         self.store.save_format(self.settings)
-        self.notify("Saved as 'My Settings'. They will be used next time you open the app.")
+        self.notify(self.t("Saved as 'My Settings'. They will be used next time you open the app."))
 
     async def on_restore_defaults(self, e):
         self.settings = self.store.reset_format()
         self.sync_controls()
         self.preset_dd.value = "Standard"
         await self.settings_changed(recompute=True)
-        self.notify("Default settings restored.")
+        self.notify(self.t("Default settings restored."))
+
+    def _font_note(self) -> str:
+        return self.t.message(get_family(self.settings.font).substitute_note)
 
     async def settings_changed(self, recompute: bool = False, reload: bool = False) -> None:
         if reload and self.source_path:
-            self.font_note.value = get_family(self.settings.font).substitute_note
+            self.font_note.value = self._font_note()
             await self.load_document()
             return
-        self.font_note.value = get_family(self.settings.font).substitute_note
+        self.font_note.value = self._font_note()
         if self.session and self.session.document.ocr_used and recompute:
             self.session.recompute_corrections(self.settings)
             self.refresh_review()
@@ -818,7 +934,7 @@ class ConverterApp:
             self.conv_page = min(self.conv_page, self.conv_count - 1)
         except Exception as ex:
             log.exception("render failed")
-            self.notify(f"Could not build the preview: {redact(str(ex))}", error=True)
+            self.notify(self.t("Could not build the preview:") + " " + redact(str(ex)), error=True)
         finally:
             self.busy(False)
         self.refresh_map()
@@ -827,10 +943,10 @@ class ConverterApp:
     async def show_pages(self) -> None:
         if self.source_path:
             self.orig_img.src = await self.in_thread(preview.render_page, self.source_path, self.orig_page, 800)
-            self.orig_label.value = f"Original {self.orig_page + 1} / {self.orig_count}"
+            self.orig_label.value = f"{self.t('Original')} {self.orig_page + 1} / {self.orig_count}"
         if self.converted_pdf:
             self.conv_img.src = await self.in_thread(preview.render_page, self.converted_pdf, self.conv_page, 800)
-            self.conv_label.value = f"Converted {self.conv_page + 1} / {self.conv_count}"
+            self.conv_label.value = f"{self.t('Converted')} {self.conv_page + 1} / {self.conv_count}"
         self.page.update()
 
     async def page_step(self, which: str, delta: int) -> None:
@@ -842,38 +958,41 @@ class ConverterApp:
 
     async def on_view_mode(self, e):
         mode = list(e.control.selected)[0] if e.control.selected else "side"
+        self.view_mode = mode
         self.orig_panel.visible = mode in ("orig", "side")
         self.conv_panel.visible = mode in ("conv", "side")
         self.page.update()
 
     async def on_export(self, e):
+        t = self.t
         if not self.session:
-            self.notify("Open a PDF first.", error=True)
+            self.notify(t("Open a PDF first."), error=True)
             return
         fmt = e.control.data
         ext = next(x for f, _, x in EXPORTS if f == fmt)
         stem = Path(self.source_path).stem
         suffix = "_printable" if fmt == "printable_pdf" else "_readable"
-        self.busy(True, "Preparing export...")
+        self.busy(True, t("Preparing export..."))
         try:
             data = await self.in_thread(self.session.export, fmt, self.settings)
         except Exception as ex:
             self.busy(False)
-            self.notify(f"Export failed: {redact(str(ex))}", error=True)
+            self.notify(t("Export failed:") + " " + redact(str(ex)), error=True)
             return
-        self.busy(False, "Choose where to save the file.")
-        path = await self.file_picker.save_file(dialog_title="Save converted file", file_name=f"{stem}{suffix}.{ext}",
+        self.busy(False, t("Choose where to save the file."))
+        path = await self.file_picker.save_file(dialog_title=t("Save converted file"),
+                                                file_name=f"{stem}{suffix}.{ext}",
                                                 allowed_extensions=[ext], file_type=ft.FilePickerFileType.CUSTOM,
                                                 src_bytes=data)
         if path and not self.page.web and not self.page.platform.is_mobile():
             if Path(path).resolve() == Path(self.source_path).resolve():
-                self.notify("That is the original PDF - choose a different name so it is not overwritten.",
+                self.notify(t("That is the original PDF - choose a different name so it is not overwritten."),
                             error=True)
                 return
             if not Path(path).exists() or Path(path).stat().st_size != len(data):
                 Path(path).write_bytes(data)
         if path or self.page.web:
-            self.status.value = f"Saved {Path(path).name if path else 'file'}."
+            self.status.value = t("Saved {name}.", name=Path(path).name if path else t("file"))
             self.page.update()
 
     # ---- review events
@@ -911,7 +1030,7 @@ class ConverterApp:
             self.refresh_review()
             await self.rerender()
         self.page.update()
-        self.notify(f"'{word}' added to your dictionary.")
+        self.notify(self.t("'{word}' added to your dictionary.", word=word))
 
 
 def _blank_png() -> bytes:
