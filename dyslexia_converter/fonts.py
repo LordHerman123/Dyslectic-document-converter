@@ -1,9 +1,9 @@
 """Font discovery and registration.
 
-Open-licensed fonts (Atkinson Hyperlegible, OpenDyslexic, Liberation Sans,
-DejaVu Sans) are bundled. Proprietary fonts (Arial, Verdana, Tahoma) are used
-from the operating system when installed; otherwise a metrically similar free
-font is substituted and the substitution is reported to the user.
+Open-licensed fonts (Atkinson Hyperlegible, OpenDyslexic, Liberation Sans/Serif,
+DejaVu Sans) are bundled. Proprietary fonts (Arial, Verdana, Tahoma, and Times New
+Roman for formulas) are used from the operating system when installed; otherwise a
+metrically similar free font is substituted and the substitution is reported to the user.
 
 No font is claimed to be universally best for dyslexia.
 """
@@ -36,6 +36,8 @@ _BUNDLED = {
                      "OpenDyslexic-Italic.ttf", "OpenDyslexic-BoldItalic.ttf"),
     "Liberation Sans": ("LiberationSans-Regular.ttf", "LiberationSans-Bold.ttf",
                         "LiberationSans-Italic.ttf", "LiberationSans-BoldItalic.ttf"),
+    "Liberation Serif": ("LiberationSerif-Regular.ttf", "LiberationSerif-Bold.ttf",
+                         "LiberationSerif-Italic.ttf", "LiberationSerif-BoldItalic.ttf"),
     "DejaVu Sans": ("DejaVuSans.ttf", "DejaVuSans-Bold.ttf", "DejaVuSans.ttf", "DejaVuSans-Bold.ttf"),
 }
 
@@ -49,11 +51,18 @@ _SYSTEM = {
                 ("verdanaz.ttf", "Verdana Bold Italic.ttf", "Verdana_Bold_Italic.ttf")),
     "Tahoma": (("tahoma.ttf", "Tahoma.ttf"), ("tahomabd.ttf", "Tahoma Bold.ttf", "Tahoma_Bold.ttf"),
                ("tahoma.ttf", "Tahoma.ttf"), ("tahomabd.ttf", "Tahoma Bold.ttf", "Tahoma_Bold.ttf")),
+    "Times New Roman": (("times.ttf", "Times New Roman.ttf", "Times_New_Roman.ttf"),
+                        ("timesbd.ttf", "Times New Roman Bold.ttf", "Times_New_Roman_Bold.ttf"),
+                        ("timesi.ttf", "Times New Roman Italic.ttf", "Times_New_Roman_Italic.ttf"),
+                        ("timesbi.ttf", "Times New Roman Bold Italic.ttf", "Times_New_Roman_Bold_Italic.ttf")),
 }
-_SUBSTITUTES = {"Arial": "Liberation Sans", "Verdana": "DejaVu Sans", "Tahoma": "DejaVu Sans"}
+_SUBSTITUTES = {"Arial": "Liberation Sans", "Verdana": "DejaVu Sans", "Tahoma": "DejaVu Sans",
+                "Times New Roman": "Liberation Serif"}
 
 FONT_CHOICES = ["DejaVu Sans", "Atkinson Hyperlegible", "OpenDyslexic", "Verdana", "Arial", "Tahoma", "Liberation Sans"]
 FALLBACK_FAMILY = "DejaVu Sans"  # wide Unicode coverage, used per character
+# formulas are set like in most papers: Times New Roman (or its free metric twin Liberation Serif)
+MATH_FAMILY = "Times New Roman"
 
 
 def _system_font_dirs() -> list[Path]:

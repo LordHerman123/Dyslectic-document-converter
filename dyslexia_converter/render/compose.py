@@ -15,7 +15,7 @@ explicit, user-controlled transformations.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Optional
 
 from ..model import Block, BlockKind, Document, ImageData, TableData, map_styles
@@ -33,6 +33,8 @@ class Run:
     italic: bool = False
     superscript: bool = False
     marker: bool = False  # inserted marker such as [3] or [Note 1]
+    subscript: bool = False
+    math: bool = False  # part of a formula: shown in a serif maths font
 
 
 @dataclass
@@ -60,6 +62,7 @@ class ComposeResult:
     citation_count: int = 0
     uncertain_citations: list[tuple[str, Citation]] = field(default_factory=list)
     language: str = "en"  # language of the words the converter adds (Contents, Notes, ...)
+    inline_images: dict[str, ImageData] = field(default_factory=dict)  # small formulas inside the text
 
 
 # -------------------------------------------------------------------- helpers
@@ -92,17 +95,27 @@ def _runs_from(text: str, styles, bold_spans: list[tuple[int, int]],
         bold = any(s.bold and s.start <= a and b <= s.end for s in styles)
         italic = keep_italic and any(s.italic and s.start <= a and b <= s.end for s in styles)
         sup = any(s.superscript and s.start <= a and b <= s.end for s in styles)
+        sub = any(s.subscript and s.start <= a and b <= s.end for s in styles)
+        math = any(s.math and s.start <= a and b <= s.end for s in styles)
         bb = any(x <= a and b <= y for x, y in bold_spans)
-        runs.append(Run(seg, bold=bold or bb, italic=italic, superscript=sup))
+        runs.append(Run(seg, bold=bold or bb, italic=italic, superscript=sup, subscript=sub and not sup, math=math))
     # merge neighbours with identical style
     merged: list[Run] = []
     for r in runs:
         if merged and not r.marker and not merged[-1].marker and \
-                (merged[-1].bold, merged[-1].italic, merged[-1].superscript) == (r.bold, r.italic, r.superscript):
+                _style(merged[-1]) == _style(r):
             merged[-1].text += r.text
         else:
             merged.append(r)
     return merged
+
+
+def _style(r: Run) -> tuple:
+    return r.bold, r.italic, r.superscript, r.subscript, r.math
+
+
+def _math_spans(styles) -> list[tuple[int, int]]:
+    return [(s.start, s.end) for s in styles if s.math]
 
 
 def _strip_marker(text: str) -> tuple[str, str]:
@@ -113,7 +126,8 @@ def _strip_marker(text: str) -> tuple[str, str]:
 
 
 def _superscript_spans(text: str, styles) -> list[tuple[int, int]]:
-    return [(s.start, s.end) for s in styles if s.superscript and 0 <= s.start < s.end <= len(text)]
+    # superscripts inside formulas (x², W^Q) are never note markers or citations
+    return [(s.start, s.end) for s in styles if s.superscript and not s.math and 0 <= s.start < s.end <= len(text)]
 
 
 # -------------------------------------------------------------------- compose
@@ -170,6 +184,9 @@ def compose(doc: Document, settings: FormatSettings, ai_citation_decisions: Opti
         text = doc.display_text(b)
         styles = map_styles(b.styles, b.text, doc.corrections_for(b.id))
 
+        if b.kind == BlockKind.IMAGE and b.image is not None and b.image.kind == "equation":
+            items.append(RItem("equation", image=b.image, block_id=b.id, natural_width=b.bbox[2] - b.bbox[0]))
+            continue
         if b.kind == BlockKind.IMAGE:
             if b.image and (b.image.kind != "decorative"
                             or (settings.show_decorative_images and not settings.ink_saving)):
@@ -226,6 +243,10 @@ def compose(doc: Document, settings: FormatSettings, ai_citation_decisions: Opti
         bold_spans = bold_ranges(text, settings.bold_amount) if bionic_ok else []
         if bold_spans and clean:
             bold_spans = [(a, e) for a, e in bold_spans if not any(r0 <= a < r1 for r0, r1, _ in clean)]
+        # formulas are never bolded
+        if bold_spans:
+            maths = _math_spans(styles)
+            bold_spans = [(a, e) for a, e in bold_spans if not any(m0 <= a < m1 for m0, m1 in maths)]
         # never bionic-bold inside citations
         if bold_spans and not settings.bold_in_references:
             cites = [(c.start, c.end) for c in find_citations(text, n_refs)]
@@ -310,7 +331,7 @@ def compose(doc: Document, settings: FormatSettings, ai_citation_decisions: Opti
     if settings.about_note:
         items.append(RItem("about", [Run(_about_text(doc, settings, bool(citation_numbers)))]))
 
-    return ComposeResult(items, headings, len(citation_numbers), uncertain, lang)
+    return ComposeResult(items, headings, len(citation_numbers), uncertain, lang, dict(doc.inline_images))
 
 
 def _drop_prefix(runs: list[Run], n: int) -> list[Run]:
@@ -321,7 +342,7 @@ def _drop_prefix(runs: list[Run], n: int) -> list[Run]:
         elif len(r.text) <= n:
             n -= len(r.text)
         else:
-            out.append(Run(r.text[n:], r.bold, r.italic, r.superscript, r.marker))
+            out.append(replace(r, text=r.text[n:]))
             n = 0
     return out
 

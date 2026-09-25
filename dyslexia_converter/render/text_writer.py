@@ -4,14 +4,28 @@ from __future__ import annotations
 from .compose import ComposeResult, RItem
 
 
+_images: dict = {}
+
+
+def _unpack(text: str) -> str:
+    """Small formula pictures in the text become their text form."""
+    if not _images:
+        return text
+    return "".join(_images[c].alt if c in _images and _images[c].alt else c for c in text)
+
+
 def _plain(item: RItem) -> str:
-    return "".join(r.text for r in item.runs).strip()
+    return _unpack("".join(r.text for r in item.runs)).strip()
 
 
 def build_text(result: ComposeResult) -> str:
+    global _images
+    _images = result.inline_images
     out: list[str] = []
     for it in result.items:
-        if it.kind == "image":
+        if it.kind == "equation":
+            out.append("    " + (it.image.alt if it.image else ""))
+        elif it.kind == "image":
             out.append("[Image]")
         elif it.kind == "table":
             if it.table and it.table.reliable:
@@ -30,9 +44,11 @@ def build_text(result: ComposeResult) -> str:
 def _md_runs(item: RItem, bionic: bool = True) -> str:
     parts = []
     for r in item.runs:
-        t = r.text.replace("*", "\\*").replace("_", "\\_")
+        t = _unpack(r.text).replace("*", "\\*").replace("_", "\\_")
         if r.superscript and not r.marker:
             t = f"<sup>{t}</sup>"
+        elif r.subscript:
+            t = f"<sub>{t}</sub>"
         if r.bold and t.strip():
             lead = t[: len(t) - len(t.lstrip())]
             trail = t[len(t.rstrip()):]
@@ -46,9 +62,14 @@ def _md_runs(item: RItem, bionic: bool = True) -> str:
 
 
 def build_markdown(result: ComposeResult) -> str:
+    global _images
+    _images = result.inline_images
     out: list[str] = []
     for it in result.items:
-        if it.kind == "title":
+        if it.kind == "equation":
+            out.append("> " + (it.image.alt if it.image else "").replace("*", "\\*").replace("_", "\\_")
+                       + "  \n> *(equation - see the PDF export)*")
+        elif it.kind == "title":
             out.append("# " + _plain(it))
         elif it.kind in ("heading", "box_heading"):
             out.append("#" * min(6, (it.level or 1) + 1) + " " + _plain(it))

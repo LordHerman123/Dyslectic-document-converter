@@ -13,6 +13,7 @@ from __future__ import annotations
 import io
 import math
 import re
+import threading
 from dataclasses import dataclass, replace
 from typing import Optional
 
@@ -21,14 +22,16 @@ from reportlab.lib.enums import TA_LEFT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import cm
+from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import (BaseDocTemplate, CondPageBreak, Flowable, Frame, Image, KeepTogether, PageBreak,
                                 PageTemplate, Paragraph, Spacer, Table, TableStyle)
 from reportlab.platypus.tableofcontents import TableOfContents
 
-from ..fonts import FALLBACK_FAMILY, font_path
+from ..fonts import FALLBACK_FAMILY, MATH_FAMILY, font_path
 from ..settings import FormatSettings
+from ..model import ImageData
 from .compose import ComposeResult, RItem, Run
 from .labels import label as doc_label
 
@@ -93,7 +96,10 @@ class _Piece:
     font: str
     size: float
     rise: float
-    width: float
+    width: float  # how far the pen moves on
+    back: float = 0.0  # drawn this far to the left (an index stacked under/over the previous one)
+    image: Optional[ImageData] = None  # a small formula picture instead of text
+    height: float = 0.0
 
 
 class RichParagraph(Flowable):
@@ -111,6 +117,7 @@ class RichParagraph(Flowable):
         self._last = _last
         self._fonts = {(b, i): register_font(style.family, b, i) for b in (False, True) for i in (False, True)}
         self._fallback = {(b, i): register_font(FALLBACK_FAMILY, b, i) for b in (False, True) for i in (False, True)}
+        self._math = {(b, i): register_font(MATH_FAMILY, b, i) for b in (False, True) for i in (False, True)}
 
     def __repr__(self) -> str:
         text = "".join(r.text for r in self.runs)
@@ -130,18 +137,33 @@ class RichParagraph(Flowable):
         s = self.style
         return (s.padding if s.pad_bottom is None else s.pad_bottom) if self._last else 0.0
 
-    def _pieces_for(self, text: str, bold: bool, italic: bool, sup: bool) -> list[_Piece]:
+    def _pieces_for(self, text: str, bold: bool, italic: bool, sup: bool, sub: bool = False,
+                    math: bool = False) -> list[_Piece]:
         s = self.style
-        size = s.size * (0.7 if sup else 1.0)
-        rise = s.size * 0.33 if sup else 0.0
+        # formulas use a Times-style serif (as in the paper); it looks smaller than a sans at the same size
+        base = s.size * (1.06 if math else 1.0)
+        size = base * (0.7 if (sup or sub) else 1.0)
+        rise = s.size * 0.33 if sup else (-s.size * 0.16 if sub else 0.0)
         bold = bold or s.bold
-        italic = italic or s.italic
-        main = self._fonts[(bold, italic)]
+        italic = italic or (s.italic and not math)
+        main = (self._math if math else self._fonts)[(bold, italic)]
         fb = self._fallback[(bold, italic)]
         g_main = _glyphs(main)
         out: list[_Piece] = []
         cur, cur_font = "", main
+        images = _render_state.images
         for ch in text:
+            img = images.get(ch)
+            if img is not None:
+                if cur:
+                    out.append(_Piece(cur, cur_font, size, rise, 0))
+                    cur = ""
+                # a little larger than the text scale: text-style fractions are small in the original too
+                scale = (s.size / img.text_size if img.text_size else 1.0) * INLINE_FORMULA_BOOST
+                w = (img.width_pt or img.width * 72 / 300) * scale
+                h = w * img.height / max(1, img.width)
+                out.append(_Piece(ch, "", size, -img.descent * scale, w, image=img, height=h))
+                continue
             f = main if (ord(ch) in g_main or ch in " \t") else fb
             if f != cur_font and cur:
                 out.append(_Piece(cur, cur_font, size, rise, 0))
@@ -151,7 +173,8 @@ class RichParagraph(Flowable):
         if cur:
             out.append(_Piece(cur, cur_font, size, rise, 0))
         for p in out:
-            p.width = pdfmetrics.stringWidth(p.text, p.font, p.size) + s.char_space * len(p.text)
+            if p.image is None:
+                p.width = pdfmetrics.stringWidth(p.text, p.font, p.size) + s.char_space * len(p.text)
         return out
 
     def _words(self) -> list[list[_Piece]]:
@@ -166,9 +189,11 @@ class RichParagraph(Flowable):
                         words.append(cur)
                         cur = []
                     continue
-                cur += self._pieces_for(token, r.bold, r.italic, r.superscript)
+                cur += self._pieces_for(token, r.bold, r.italic, r.superscript, r.subscript, r.math)
         if cur:
             words.append(cur)
+        for word in words:
+            _stack_indices(word)
         return words
 
     def _space_width(self) -> float:
@@ -219,6 +244,13 @@ class RichParagraph(Flowable):
         cur_w = 0.0
         cs = self.style.char_space
         for p in word:
+            if p.image is not None:  # a formula picture is never split
+                if cur_w + p.width > width and cur:
+                    chunks.append(cur)
+                    cur, cur_w = [], 0.0
+                cur.append(p)
+                cur_w += p.width
+                continue
             for ch in p.text:
                 w = pdfmetrics.stringWidth(ch, p.font, p.size) + cs
                 if cur_w + w > width and cur:
@@ -234,6 +266,17 @@ class RichParagraph(Flowable):
             chunks.append(cur)
         return chunks
 
+    def _line_height(self, line) -> float:
+        """Normal leading, or more when a line holds a formula picture taller than the text."""
+        s = self.style
+        h = s.leading
+        for word in line:
+            for p in word:
+                if p.image is not None:
+                    descent = -p.rise
+                    h = max(h, 2 * (p.height - descent) - 0.62 * s.size + 2, 2 * descent + 0.62 * s.size + 2)
+        return h
+
     def wrap(self, availWidth, availHeight):
         self._avail = availWidth
         if self._lines is None or self._lines_width != availWidth:
@@ -241,7 +284,8 @@ class RichParagraph(Flowable):
                 self._lines = self._break_lines(self._text_width(availWidth))
             self._lines_width = availWidth
         self.width = availWidth
-        self.height = len(self._lines) * self.style.leading + self.pad_top + self.pad_bottom
+        self._heights = [self._line_height(l) for l in self._lines]
+        self.height = sum(self._heights) + self.pad_top + self.pad_bottom
         return availWidth, self.height
 
     def getSpaceBefore(self):
@@ -252,11 +296,16 @@ class RichParagraph(Flowable):
 
     def split(self, availWidth, availHeight):
         self.wrap(availWidth, availHeight)
-        lead = self.style.leading
         if self.height <= availHeight + 1e-6:
             return [self]
         # the first part keeps the top padding; its bottom padding moves to the second part
-        fit = min(len(self._lines) - 1, int((availHeight - self.pad_top) // lead))
+        fit, used = 0, self.pad_top
+        for h in self._heights:
+            if used + h > availHeight + 1e-6:
+                break
+            used += h
+            fit += 1
+        fit = min(len(self._lines) - 1, fit)
         total = len(self._lines)
         if fit < 2 or total < 4:
             return []  # avoid orphans: move whole paragraph
@@ -304,8 +353,11 @@ class RichParagraph(Flowable):
         lead = s.leading
         c.setFillColor(s.color)
         top = self.height - self.pad_top
+        heights = getattr(self, "_heights", None) or [lead] * len(self._lines)
+        line_top = top
         for i, line in enumerate(self._lines):
-            baseline = top - i * lead - (lead + s.size * 0.62) / 2
+            baseline = line_top - (heights[i] + s.size * 0.62) / 2
+            line_top -= heights[i]
             if i == 0 and self.marker and self._first:
                 mf = self._fonts[(s.bold, False)]
                 t = c.beginText(x0 + pad_x, baseline)
@@ -322,21 +374,49 @@ class RichParagraph(Flowable):
             if s.align == "center":
                 x = text_x + max(0.0, (width - natural) / 2)
             for wi, word in enumerate(line):
-                t = c.beginText(x, baseline)
-                t.setCharSpace(s.char_space)
-                for p in word:
+                px = x
+                for pi, p in enumerate(word):
+                    if p.image is not None:
+                        c.drawImage(ImageReader(io.BytesIO(p.image.data)), px, baseline + p.rise, p.width, p.height,
+                                    mask="auto")
+                        px += p.width
+                        continue
+                    t = c.beginText(px - p.back, baseline)
+                    t.setCharSpace(s.char_space)
                     t.setFont(p.font, p.size)
                     t.setRise(p.rise)
                     t.textOut(p.text)
-                if wi < len(line) - 1:
-                    t.setRise(0)
-                    t.textOut(" ")  # real space so copied text keeps word breaks
-                c.drawText(t)
+                    if pi == len(word) - 1 and wi < len(line) - 1:
+                        t.setRise(0)
+                        t.textOut(" ")  # real space so copied text keeps word breaks
+                    c.drawText(t)
+                    px += p.width
                 x += sum(p.width for p in word) + gap
         if s.rule_below is not None and self._last:
             c.setStrokeColor(s.rule_below)
             c.setLineWidth(0.8)
             c.line(x0, 1, x0 + box_w, 1)
+
+
+INLINE_FORMULA_BOOST = 1.15
+
+
+class _RenderState(threading.local):
+    images: dict = {}
+
+
+_render_state = _RenderState()
+
+
+def _stack_indices(word: list[_Piece]) -> None:
+    """A subscript directly followed by a superscript (or the reverse) is drawn stacked, as in x_i^2."""
+    for a, b in zip(word, word[1:]):
+        if a.image is not None or b.image is not None:
+            continue
+        if a.rise and b.rise and (a.rise > 0) != (b.rise > 0) and not a.back:
+            natural = b.width
+            b.back = a.width
+            b.width = max(0.0, natural - a.width)
 
 
 # --------------------------------------------------------------------------- document
@@ -413,6 +493,20 @@ def _image_flowable(item: RItem, col_w: float, max_h: float) -> Optional[Flowabl
     return Image(io.BytesIO(img.data), width=w, height=h, hAlign="LEFT")
 
 
+def _equation_flowable(item: RItem, s: FormatSettings, col_w: float) -> Optional[Flowable]:
+    """A display equation exactly as typeset in the paper, scaled like the text around it."""
+    img = item.image
+    if img is None:
+        return None
+    scale = s.font_size / img.text_size if img.text_size else 1.3
+    w = (item.natural_width or img.width * 72 / 300) * scale
+    w = min(w, col_w)
+    h = w * img.height / max(1, img.width)
+    fl = Image(io.BytesIO(img.data), width=w, height=h, hAlign="CENTER")
+    fl._alt = img.alt  # type: ignore[attr-defined]
+    return fl
+
+
 def _table_flowable(item: RItem, s: FormatSettings, col_w: float, max_h: float, printable: bool) -> tuple[Flowable, str]:
     tab = item.table
     rows = tab.rows if tab else []
@@ -466,6 +560,7 @@ def _table_flowable(item: RItem, s: FormatSettings, col_w: float, max_h: float, 
 def build_pdf(result: ComposeResult, s: FormatSettings, title: str = "", author: str = "",
               printable: bool = False) -> bytes:
     """Render the composed document to PDF bytes."""
+    _render_state.images = result.inline_images
     buf = io.BytesIO()
     page_w, page_h = A4
     ml, mr, mt, mb = (s.margin_left * cm, s.margin_right * cm, s.margin_top * cm, s.margin_bottom * cm)
@@ -526,6 +621,12 @@ def build_pdf(result: ComposeResult, s: FormatSettings, title: str = "", author:
                     i += 2
                     continue
                 story += [Spacer(1, s.paragraph_spacing * 0.5), fl, Spacer(1, s.paragraph_spacing)]
+            i += 1
+            continue
+        if kind == "equation":
+            fl = _equation_flowable(it, s, col_w)
+            if fl is not None:
+                story += [Spacer(1, s.paragraph_spacing * 0.35), fl, Spacer(1, s.paragraph_spacing * 0.6)]
             i += 1
             continue
         if kind == "table":

@@ -6,10 +6,13 @@ from __future__ import annotations
 
 import concurrent.futures
 import io
+import itertools
 import os
 import re
+import statistics
 import threading
 import time
+import unicodedata
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Callable, Optional
@@ -18,6 +21,7 @@ import numpy as np
 import pymupdf
 
 from ..model import ImageData, OcrWordConfidence, PageInfo, Rect, StyleRange, TableData
+from .mathtext import TEX_TEXT_FONT_RE, base_font, is_math_font, is_math_italic, math_text
 from .ocr import OcrEngine
 
 ProgressFn = Callable[[str, float], None]
@@ -25,6 +29,7 @@ ProgressFn = Callable[[str, float], None]
 OCR_DPI = 300
 SCAN_DPI = 225  # full-page scans: as accurate as 300 dpi on book text, about a third faster
 FIGURE_DPI = 200
+EQUATION_DPI = 300  # equations are small: render them sharp
 CAPTION_RE = re.compile(r"^\s*(fig\.?|figure|figuur|afb\.?|afbeelding|table|tab\.?|tabel|chart|graph|plate)\s*"
                         r"[\dIVXivx]+[a-z]?\b", re.I)
 
@@ -42,6 +47,10 @@ class RawLine:
     italic: bool = False
     font: str = ""
     conf: list[OcrWordConfidence] = field(default_factory=list)
+    baseline: float = 0.0  # 0 when unknown (OCR)
+    # small formulas that cannot be written on one line (a fraction, a sum with limits), kept as pictures;
+    # the text holds one placeholder character for each
+    inline_images: dict[str, ImageData] = field(default_factory=dict)
 
     @property
     def x0(self) -> float:
@@ -238,10 +247,51 @@ def _page_mapper(page: pymupdf.Page):
     return rect, direction
 
 
-def _text_lines(page: pymupdf.Page, pno: int) -> list[RawLine]:
+@dataclass
+class _Span:
+    text: str
+    bbox: Rect
+    baseline: float
+    size: float
+    font: str
+    flags: int
+    block_no: int
+
+    @property
+    def x0(self) -> float:
+        return self.bbox[0]
+
+    @property
+    def x1(self) -> float:
+        return self.bbox[2]
+
+    @property
+    def mid_y(self) -> float:
+        return (self.bbox[1] + self.bbox[3]) / 2
+
+
+# accents typeset above a letter as a separate glyph -> the combining character for that letter
+ACCENTS = {"˜": "\u0303", "~": "\u0303", "ˆ": "\u0302", "^": "\u0302", "¯": "\u0304", "ˉ": "\u0304",
+           "˙": "\u0307", "¨": "\u0308", "ˇ": "\u030c", "´": "\u0301", "`": "\u0300", "˘": "\u0306",
+           "˚": "\u030a", "→": "\u20d7", "\u20d7": "\u20d7", "\u0303": "\u0303", "\u0302": "\u0302",
+           "\u0304": "\u0304", "\u0307": "\u0307", "\u0308": "\u0308"}
+
+
+def _is_accent(sp: "_Span") -> bool:
+    t = sp.text.strip()
+    return bool(t) and len(t) <= 3 and all(c in ACCENTS or c.isspace() for c in t) and not t.startswith("→")
+
+
+def _font_family(font: str) -> str:
+    """'ABCDEF+NimbusRomNo9L-Regu' -> 'nimbusromno9l', 'CMR10' -> 'cmr'."""
+    name = base_font(font).split("-")[0].split(",")[0]
+    return re.sub(r"\d+$", "", name).lower()
+
+
+def _page_spans(page: pymupdf.Page) -> list[_Span]:
     d = page.get_text("dict", flags=pymupdf.TEXTFLAGS_DICT & ~pymupdf.TEXT_PRESERVE_IMAGES)
     to_page, to_dir = _page_mapper(page)
-    lines: list[RawLine] = []
+    spans: list[_Span] = []
     for bno, block in enumerate(d["blocks"]):
         if block.get("type", 0) != 0:
             continue
@@ -249,51 +299,370 @@ def _text_lines(page: pymupdf.Page, pno: int) -> list[RawLine]:
             dx, dy = to_dir(line["dir"])
             if abs(dy) > 0.1 or dx < 0:  # rotated text (margins, watermarks)
                 continue
+            for span in line["spans"]:
+                t = span["text"]
+                if not t or not t.strip():
+                    continue  # word gaps are recovered from positions
+                ox, oy = span["origin"]
+                baseline = to_page((ox, oy, ox, oy))[1]
+                spans.append(_Span(t.replace("\u00a0", " "), to_page(span["bbox"]), baseline, span["size"],
+                                   span["font"], span["flags"], bno))
+    return spans
+
+
+def _rows(spans: list[_Span]) -> list[list[_Span]]:
+    """Group a page's spans into lines by baseline.
+
+    Full-size spans form lines within their PDF text block. Sub- and superscripts (smaller type, shifted up
+    or down) join the line they belong to, even when the PDF stores them in a block or line of their own
+    (e.g. W with both a sub- and a superscript).
+    """
+    main: dict[int, float] = {}
+    by_block: dict[int, Counter] = {}
+    for sp in spans:
+        by_block.setdefault(sp.block_no, Counter())[round(sp.size, 1)] += len(sp.text.strip()) or 1
+    page_sizes = Counter()
+    for c in by_block.values():
+        page_sizes.update(c)
+    page_main = page_sizes.most_common(1)[0][0] if page_sizes else 10.0
+    for bno, c in by_block.items():
+        main[bno] = c.most_common(1)[0][0]
+
+    def is_small(sp: _Span) -> bool:
+        if _is_accent(sp):
+            return True  # an accent over a letter belongs to that letter's line
+        if re.match(r"^(CMEX|MTEX|TXEX|PXEX|RMTEX)", base_font(sp.font), re.I):
+            return True  # big brackets and operators hang from the top: place them by position
+        return sp.size < main[sp.block_no] * 0.85 or (
+            sp.size < page_main * 0.8 and len(sp.text.strip()) <= 12)
+
+    big = sorted((sp for sp in spans if not is_small(sp)), key=lambda sp: (round(sp.baseline), sp.x0))
+    small = sorted((sp for sp in spans if is_small(sp)), key=lambda sp: (sp.baseline, sp.x0))
+    rows: list[dict] = []
+
+    def join(sp: _Span, by_box: bool) -> bool:
+        for row in rows:
+            size = max(sp.size, row["size"])
+            if by_box:
+                # PyMuPDF sometimes reports a symbol's baseline at the height of a neighbouring index;
+                # its box still sits where the characters of its line do
+                if not row["baseline"] - 0.8 * size <= sp.mid_y <= row["baseline"] + 0.05 * size:
+                    continue
+            elif abs(sp.baseline - row["baseline"]) > 0.25 * size:
+                continue
+            if any(sp.x0 < o.x1 - 1 and o.x0 < sp.x1 - 1 for o in row["spans"]):
+                continue
+            # the PDF may split one line over several blocks; a column gutter is wider than a word gap
+            near = -1 <= sp.x0 - row["x1"] < 1.6 * sp.size or -1 <= row["x0"] - sp.x1 < 1.6 * sp.size \
+                or (row["x0"] - 1 <= sp.x0 and sp.x1 <= row["x1"] + 1)  # fills a gap inside the line
+            if sp.block_no in row["blocks"] or near:
+                row["spans"].append(sp)
+                row["blocks"].add(sp.block_no)
+                row["x0"] = min(row["x0"], sp.x0)
+                row["x1"] = max(row["x1"], sp.x1)
+                return True
+        return False
+
+    # letters first: their baselines are reliable; lone symbols may report a shifted baseline
+    wordy = [sp for sp in big if sum(c.isalnum() for c in sp.text) >= 2]
+    lone = [sp for sp in big if sum(c.isalnum() for c in sp.text) < 2]
+    deferred: list[_Span] = []
+    for group in (wordy, lone):
+        for sp in group:
+            if not join(sp, False):
+                if group is lone:
+                    deferred.append(sp)
+                else:
+                    rows.append({"baseline": sp.baseline, "size": sp.size, "spans": [sp], "blocks": {sp.block_no},
+                                 "x0": sp.x0, "x1": sp.x1})
+    for sp in deferred:
+        if not join(sp, True):
+            rows.append({"baseline": sp.baseline, "size": sp.size, "spans": [sp], "blocks": {sp.block_no},
+                         "x0": sp.x0, "x1": sp.x1})
+    # pieces of one line that only met once the formulas between them were placed
+    changed = True
+    while changed:
+        changed = False
+        for i, a in enumerate(rows):
+            for b in rows[i + 1:]:
+                size = max(a["size"], b["size"])
+                if abs(a["baseline"] - b["baseline"]) > 0.25 * size:
+                    continue
+                touching = a["x0"] - 1.6 * size <= b["x1"] and b["x0"] - 1.6 * size <= a["x1"]
+                clash = any(x.x0 < y.x1 - 1 and y.x0 < x.x1 - 1 for x in a["spans"] for y in b["spans"])
+                if touching and not clash:
+                    a["spans"] += b["spans"]
+                    a["blocks"] |= b["blocks"]
+                    a["x0"], a["x1"] = min(a["x0"], b["x0"]), max(a["x1"], b["x1"])
+                    rows.remove(b)
+                    changed = True
+                    break
+            if changed:
+                break
+    for row in rows:
+        row["x0"] = min(o.x0 for o in row["spans"])
+        row["x1"] = max(o.x1 for o in row["spans"])
+    orphans: list[_Span] = []
+    for sp in small:
+        best, best_d = None, None
+        for row in rows:
+            lo, hi = row["baseline"] - 1.05 * row["size"], row["baseline"] + 0.5 * row["size"]
+            if lo <= sp.mid_y <= hi and row["x0"] - 1.5 * row["size"] <= sp.x0 <= row["x1"] + 1.5 * row["size"]:
+                dist = abs(sp.mid_y - (row["baseline"] - 0.3 * row["size"]))
+                if best is None or dist < best_d:
+                    best, best_d = row, dist
+        if best is not None:
+            best["spans"].append(sp)
+            best["x1"] = max(best["x1"], sp.x1)
+        else:
+            orphans.append(sp)
+    # second chance for the limits of a sum or the parts of a small fraction in running text, which sit
+    # further above or below the line: join the nearest line if it is clearly the closest one
+    still: list[_Span] = []
+    for sp in orphans:
+        cands = []
+        for row in rows:
+            if row["size"] < sp.size:
+                continue
+            lo, hi = row["baseline"] - 1.7 * row["size"], row["baseline"] + 1.1 * row["size"]
+            if lo <= sp.mid_y <= hi and row["x0"] - row["size"] <= sp.x0 <= row["x1"] + row["size"]:
+                cands.append((abs(sp.mid_y - (row["baseline"] - 0.3 * row["size"])), row))
+        cands.sort(key=lambda c: c[0])
+        if cands and (len(cands) == 1 or cands[1][0] - cands[0][0] > 0.3 * cands[0][1]["size"]) and \
+                any(is_math_font(o.font) for o in cands[0][1]["spans"]) and is_math_font(sp.font) or \
+                (cands and len(sp.text.strip()) <= 4 and (len(cands) == 1 or cands[1][0] - cands[0][0] > 0.3 * cands[0][1]["size"])
+                 and any(re.match(r"^(CMEX|MTEX)", base_font(o.font), re.I) or is_math_font(o.font) for o in cands[0][1]["spans"])):
+            cands[0][1]["spans"].append(sp)
+        else:
+            still.append(sp)
+    orphans = still
+    small_rows: list[dict] = []
+    for sp in orphans:
+        for row in small_rows:
+            if abs(sp.baseline - row["baseline"]) <= 0.3 * row["size"] and sp.x0 - row["x1"] < 3 * row["size"]:
+                row["spans"].append(sp)
+                row["x1"] = max(row["x1"], sp.x1)
+                break
+        else:
+            small_rows.append({"baseline": sp.baseline, "size": sp.size, "spans": [sp], "x1": sp.x1})
+    out = []
+    for row in rows + small_rows:
+        row["spans"].sort(key=lambda sp: sp.x0)
+        out.append(row["spans"])
+    return out
+
+
+BIG_OPERATORS = set("∑∏∫∮⋃⋂⨁⨂⨀⨆⨄⋀⋁∐")
+_placeholders = itertools.count()
+
+
+def new_placeholder() -> str:
+    """A private-use character standing for one inline formula picture."""
+    return chr(0xF0000 + next(_placeholders) % 0xFFFD)
+
+
+def is_placeholder(ch: str) -> bool:
+    return 0xF0000 <= ord(ch) <= 0xFFFFD
+
+
+def _stacks(row: list[_Span], rules: list[Rect], baseline: float, size: float) -> list[tuple[Rect, list[_Span], str]]:
+    """Parts of a text line that are stacked vertically: fractions and big operators with limits.
+
+    Returns (region, spans, text) for each; these cannot be written as text on one line.
+    """
+    found: list[tuple[Rect, list[_Span], str]] = []
+
+    def cx(sp: _Span) -> float:
+        return (sp.x0 + sp.x1) / 2
+
+    for r in rules:
+        if not (baseline - 1.3 * size <= r[1] <= baseline + 0.4 * size) or r[2] - r[0] > 14 * size:
+            continue
+        above = [sp for sp in row if r[0] - 1 <= cx(sp) <= r[2] + 1 and sp.bbox[3] <= r[1] + 1.5]
+        below = [sp for sp in row if r[0] - 1 <= cx(sp) <= r[2] + 1 and sp.bbox[1] >= r[3] - 1.5]
+        if above and below:
+            spans = above + below
+            rect = _union(r, (min(sp.bbox[0] for sp in spans), min(sp.bbox[1] for sp in spans),
+                              max(sp.bbox[2] for sp in spans), max(sp.bbox[3] for sp in spans)))
+            text = "(" + "".join(sp.text.strip() for sp in above) + ")/(" + \
+                "".join(sp.text.strip() for sp in below) + ")"
+            found.append((rect, spans, text))
+    for op in row:
+        t = math_text(op.font, op.text).strip() if is_math_font(op.font) else op.text.strip()
+        if t not in BIG_OPERATORS:
+            continue
+        lower = [sp for sp in row if sp is not op and op.x0 - 2 <= cx(sp) <= op.x1 + 2 and sp.bbox[1] >= op.bbox[3] - 0.35 * size]
+        upper = [sp for sp in row if sp is not op and op.x0 - 2 <= cx(sp) <= op.x1 + 2 and sp.bbox[3] <= op.bbox[1] + 0.35 * size]
+        if lower or upper:
+            spans = [op] + lower + upper
+            rect = (min(sp.bbox[0] for sp in spans), min(sp.bbox[1] for sp in spans),
+                    max(sp.bbox[2] for sp in spans), max(sp.bbox[3] for sp in spans))
+            text = t + ("_{" + "".join(sp.text.strip() for sp in lower) + "}" if lower else "") + \
+                ("^{" + "".join(sp.text.strip() for sp in upper) + "}" if upper else "")
+            found.append((rect, spans, text))
+    # overlapping stacks (a fraction under a sum) become one picture
+    merged: list[list] = []
+    for rect, spans, text in sorted(found, key=lambda f: f[0][0]):
+        for m in merged:
+            if rect[0] < m[0][2] + 0.5 and m[0][0] < rect[2] + 0.5:
+                m[0] = _union(m[0], rect)
+                m[1] = m[1] + [sp for sp in spans if sp not in m[1]]
+                m[2] = m[2] + " " + text
+                break
+        else:
+            merged.append([rect, list(spans), text])
+    # big brackets hugging a stack belong to it
+    for m in merged:
+        for sp in row:
+            if sp in m[1] or not re.match(r"^(CMEX|MTEX|TXEX|PXEX)", base_font(sp.font), re.I):
+                continue
+            if (0 <= m[0][0] - sp.x1 < 2 or 0 <= sp.x0 - m[0][2] < 2) and sp.bbox[1] <= m[0][1] + 2:
+                m[0] = _union(m[0], sp.bbox)
+                m[1].append(sp)
+    return [(tuple(m[0]), m[1], m[2]) for m in merged]
+
+
+def _text_lines(page: pymupdf.Page, pno: int) -> list[RawLine]:
+    spans = _page_spans(page)
+    try:
+        rules = [tuple(d["rect"]) for d in page.get_drawings()
+                 if d["rect"].height < 1.6 and 2 < d["rect"].width]
+    except Exception:
+        rules = []
+    # the page's text typeface; TeX text fonts (CMR...) in a Times/Arial document are formula parts
+    fam = Counter()
+    for sp in spans:
+        if not is_math_font(sp.font):
+            fam[_font_family(sp.font)] += len(sp.text.strip())
+    body_family = fam.most_common(1)[0][0] if fam else ""
+    tex_body = bool(TEX_TEXT_FONT_RE.match(body_family))
+
+    lines: list[RawLine] = []
+    if True:
+        for row in _rows(spans):
+            bno = Counter(sp.block_no for sp in row).most_common(1)[0][0]
+            full = [sp for sp in row if sp.size >= max(o.size for o in row) * 0.85]
+            weights = Counter()
+            for sp in full:
+                weights[round(sp.baseline, 1)] += len(sp.text.strip()) or 1
+            baseline = weights.most_common(1)[0][0] if weights else row[0].baseline
             text = ""
             styles: list[StyleRange] = []
             weighted = Counter()
             bold_chars = italic_chars = 0
             fonts = Counter()
-            max_size = 0.0
-            prev_x1 = None
-            for span in line["spans"]:
-                t = span["text"]
+            max_size = max(sp.size for sp in row)
+            prev: Optional[_Span] = None
+            prev_math = False
+            accents = [sp for sp in row if _is_accent(sp)]
+            row = [sp for sp in row if not _is_accent(sp)] or row
+            positions: list[tuple[int, float]] = []  # (index in text, x centre) of each character
+            right_edge = 0.0  # rightmost ink so far (stacked indices end at different points)
+            inline_images: dict[str, ImageData] = {}
+            stack_of: dict[int, int] = {}
+            stacks = _stacks(row, rules, baseline, max_size) if any(is_math_font(sp.font) for sp in row) else []
+            for k, (_r, members, _t) in enumerate(stacks):
+                for sp in members:
+                    stack_of[id(sp)] = k
+            emitted: set[int] = set()
+            for sp in row:
+                if id(sp) in stack_of:
+                    k = stack_of[id(sp)]
+                    if k in emitted:
+                        continue
+                    emitted.add(k)
+                    rect, members, alt = stacks[k]
+                    # tight above and below: the neighbouring lines' letters come close to a fraction
+                    clip = pymupdf.Rect(rect[0] - 0.8, rect[1] - 0.2, rect[2] + 0.8, rect[3] + 0.2)
+                    try:
+                        pix = page.get_pixmap(clip=clip, dpi=EQUATION_DPI, alpha=True)
+                    except Exception:
+                        pix = None
+                    if pix is None:
+                        continue
+                    ph = new_placeholder()
+                    inline_images[ph] = ImageData(pix.tobytes("png"), "png", pix.width, pix.height, kind="inline-math",
+                                                  alt=alt, text_size=float(max_size), descent=clip.y1 - baseline,
+                                                  width_pt=clip.width)
+                    if text and not text[-1].isspace() and rect[0] - right_edge > max_size * 0.15:
+                        text += " "
+                    styles.append(StyleRange(len(text), len(text) + 1, math=True))
+                    text += ph
+                    positions.append((len(text) - 1, (rect[0] + rect[2]) / 2))
+                    prev, prev_math = sp, True
+                    right_edge = max(right_edge, rect[2])
+                    continue
+                math_font = is_math_font(sp.font)
+                t = math_text(sp.font, sp.text) if math_font else sp.text
                 if not t:
                     continue
-                t = t.replace("\u00a0", " ")
-                # word-per-span text layers (common in scanner OCR) carry no space characters
-                if (prev_x1 is not None and text and not text[-1].isspace() and not t[0].isspace()
-                        and to_page(span["bbox"])[0] - prev_x1 > span["size"] * 0.15):
+                small = sp.size < max_size * 0.85
+                # position decides (PyMuPDF's own superscript flag also marks some full-size commas)
+                sup = small and (sp.baseline < baseline - 0.12 * max_size or
+                                 (bool(sp.flags & 1) and sp.baseline < baseline + 0.02 * max_size))
+                sub = small and not sup and sp.baseline > baseline + 0.08 * max_size
+                if sup or sub:
+                    t = t.strip()  # "W" + " K" (an index) is W^K, not "W K"
+                    if not t:
+                        continue
+                gap = sp.x0 - right_edge if prev is not None else 0
+                math = math_font or (not tex_body and bool(TEX_TEXT_FONT_RE.match(_font_family(sp.font)))) \
+                    or ((sup or sub) and prev_math and gap < 0.2 * max_size)
+                # word-per-span layers carry no spaces; formulas and scripts are spaced by position
+                if prev is not None and text and not text[-1].isspace() and not t[0].isspace() \
+                        and gap > max_size * (0.2 if (sup or sub) else 0.15):
                     text += " "
-                prev_x1 = to_page(span["bbox"])[2]
+                elif text[-1:] in (",", ";") and t[0].isalpha() and not (sup or sub) and len(text) > 1 \
+                        and not text[-2].isdigit():
+                    text += " "  # "∈ ℝ^h, b": the space after a comma is not always stored as a gap
                 start = len(text)
                 text += t
-                size, flags, font = span["size"], span["flags"], span["font"]
-                bold = _is_bold_font(font, flags)
-                italic = _is_italic_font(font, flags)
-                sup = bool(flags & 1)
+                step = (sp.x1 - sp.x0) / max(1, len(t))
+                positions += [(start + k, sp.x0 + step * (k + 0.5)) for k, c in enumerate(t) if not c.isspace()]
+                bold = _is_bold_font(sp.font, sp.flags) or bool(re.match(r"^(CMBX|CMMIB|CMBSY)", base_font(sp.font)))
+                italic = _is_italic_font(sp.font, sp.flags) or (is_math_italic(sp.font) and any(c.isalpha() for c in t))
                 n = len(t.strip())
-                if not sup:
-                    weighted[round(size, 1)] += n
-                    max_size = max(max_size, size)
+                if not (sup or sub):
+                    weighted[round(sp.size, 1)] += n
                 bold_chars += n if bold else 0
                 italic_chars += n if italic else 0
-                fonts[font] += n
-                if bold or italic or sup:
-                    styles.append(StyleRange(start, len(text), bold, italic, sup))
+                fonts[sp.font] += n
+                if bold or italic or sup or sub or math:
+                    styles.append(StyleRange(start, len(text), bold, italic, sup, sub, math))
+                prev, prev_math = sp, math or (prev_math and (sup or sub))
+                right_edge = max(right_edge, sp.x1)
+            # accents: a combining mark after the letter underneath (x̂, h̃)
+            for acc in sorted(accents, key=lambda a: -(a.x0 + a.x1) / 2):
+                if acc in row or not positions:
+                    continue
+                cx = (acc.x0 + acc.x1) / 2
+                idx, x = min(positions, key=lambda p: abs(p[1] - cx))
+                if abs(x - cx) > max(4.0, acc.size * 0.6):
+                    continue
+                mark = ACCENTS.get(acc.text.strip()[0], "")
+                if not mark:
+                    continue
+                k = idx + 1
+                text = text[:k] + mark + text[k:]
+                styles = [st.moved(0, st.start + (1 if st.start >= k else 0), st.end + (1 if st.end >= k else 0))
+                          for st in styles]
+                positions = [(i + 1 if i >= k else i, px) for i, px in positions]
             stripped = text.strip()
             if not stripped:
                 continue
             lead = len(text) - len(text.lstrip())
             text = text.strip()
-            styles = [StyleRange(max(0, s.start - lead), min(len(text), s.end - lead), s.bold, s.italic,
-                                 s.superscript) for s in styles if s.end - lead > 0 and s.start - lead < len(text)]
+            styles = [st.moved(-lead, max(lead, st.start), min(len(text) + lead, st.end))
+                      for st in styles if st.end - lead > 0 and st.start - lead < len(text)]
             total = max(1, len(re.sub(r"\s", "", text)))
             size = weighted.most_common(1)[0][0] if weighted else max_size or 10.0
+            bbox = (min(sp.bbox[0] for sp in row), min(sp.bbox[1] for sp in row),
+                    max(sp.bbox[2] for sp in row), max(sp.bbox[3] for sp in row))
             lines.append(RawLine(
-                text=text, bbox=to_page(line["bbox"]), size=float(size), page=pno, block_no=bno,
+                text=text, bbox=bbox, size=float(size), page=pno, block_no=bno,
                 styles=styles, bold=bold_chars / total > 0.6, italic=italic_chars / total > 0.6,
-                font=fonts.most_common(1)[0][0] if fonts else "",
+                font=fonts.most_common(1)[0][0] if fonts else "", baseline=baseline,
+                inline_images=inline_images,
             ))
     return _merge_same_baseline(lines)
 
@@ -301,6 +670,9 @@ def _text_lines(page: pymupdf.Page, pno: int) -> list[RawLine]:
 def _continues_line(prev: RawLine, ln: RawLine) -> bool:
     gap = ln.x0 - prev.x1
     size = max(prev.size, ln.size)
+    if prev.baseline and ln.baseline and abs(prev.baseline - ln.baseline) < 0.25 * size \
+            and abs(prev.size - ln.size) < 1.5 and -1 <= gap < 1.6 * size:
+        return True  # same baseline: indices and formulas can make the boxes differ in height
     # Fragments of one PyMuPDF block may be far apart in justified text; across
     # blocks a wide gap is more likely a column gutter.
     limit = size * 1.5 if prev.block_no == ln.block_no else max(3.0, size * 0.6)
@@ -328,10 +700,11 @@ def _merge_same_baseline(lines: list[RawLine]) -> list[RawLine]:
         sep = "" if ln.x0 - prev.x1 < prev.size * 0.15 else " "
         base = len(prev.text) + len(sep)
         prev.text += sep + ln.text
-        prev.styles += [StyleRange(s.start + base, s.end + base, s.bold, s.italic, s.superscript)
-                        for s in ln.styles]
-        if ln.size < prev.size * 0.85 and not any(s.superscript for s in ln.styles):
-            prev.styles.append(StyleRange(base, base + len(ln.text), superscript=True))
+        prev.styles += [s.moved(base) for s in ln.styles]
+        prev.inline_images.update(ln.inline_images)
+        if ln.size < prev.size * 0.85 and not any(s.superscript or s.subscript for s in ln.styles):
+            low = ln.y1 > prev.y1 + 0.5  # hangs below the line: a subscript
+            prev.styles.append(StyleRange(base, base + len(ln.text), superscript=not low, subscript=low))
         prev.bbox = _union(prev.bbox, ln.bbox)
     out.sort(key=lambda l: (l.y0, l.x0))
     return out
@@ -431,6 +804,213 @@ def _figures(page: pymupdf.Page, doc: pymupdf.Document, lines: list[RawLine],
         img.kind = "decorative" if (small or logo) else "figure"
         figures.append(RawFigure(rect, img))
     return figures
+
+
+# --------------------------------------------------------------------------- equations
+
+EQ_NUMBER_RE = re.compile(r"^\(\s*[A-Z]?[\dIVX]+(?:[.\-–]\d+)*[a-z]?\s*\)$")
+# names that appear as words inside formulas
+MATH_WORDS = {"sin", "cos", "tan", "log", "exp", "max", "min", "arg", "argmax", "argmin", "lim", "sup", "inf",
+              "det", "diag", "tr", "var", "cov", "mod", "sgn", "softmax", "where", "for", "and", "if", "otherwise",
+              "s.t", "with", "all", "subject"}
+_NEUTRAL = set("0123456789=+-−–×·∗*/()[]{}|,.;:<>≤≥≈∼~^_'′’!?⋯…%")
+
+
+def _math_profile(line: RawLine) -> tuple[int, int, int, int]:
+    """(maths-font characters, formula-like characters, all characters, ordinary words) of a line."""
+    flags = [False] * len(line.text)
+    for st in line.styles:
+        if st.math:
+            for i in range(max(0, st.start), min(len(flags), st.end)):
+                flags[i] = True
+    math = sum(1 for i, c in enumerate(line.text) if flags[i] and not c.isspace())
+    formula = sum(1 for i, c in enumerate(line.text) if not c.isspace() and (
+        flags[i] or c in _NEUTRAL or unicodedata.category(c) == "Sm" or "\u0370" <= c <= "\u03ff"))
+    total = sum(1 for c in line.text if not c.isspace())
+    words = 0
+    for m in re.finditer(r"[A-Za-z]+", line.text):
+        if any(flags[i] for i in range(m.start(), m.end())):
+            continue
+        after = line.text[m.end():m.end() + 1]
+        if len(m.group()) <= 2 or m.group().lower() in MATH_WORDS:
+            formula += len(m.group())  # variables set in the text italic (x, y, h), and cos, log, max
+            continue
+        if after == "(":
+            continue  # Attention(...), Softmax(...)
+        words += 1
+    return math, formula, total, words
+
+
+def _columns(lines: list[RawLine]) -> list[tuple[float, float]]:
+    """(left, right) edges of the text columns on a page, from its full-width lines.
+
+    Indented first lines and long formulas are not columns: only lines about as wide as the widest
+    running text count, and edges that differ by an indent are merged.
+    """
+    long = [l for l in lines if len(l.text) >= 45]
+    if not long:
+        return []
+    widths = sorted(l.x1 - l.x0 for l in long)
+    wide = widths[int(len(widths) * 0.8)] if len(widths) > 1 else widths[0]
+    body = sorted((l for l in long if l.x1 - l.x0 >= 0.85 * wide), key=lambda l: l.x0)
+    groups: list[list[RawLine]] = []
+    for l in body:
+        if groups and l.x0 - groups[-1][-1].x0 < 4:
+            groups[-1].append(l)
+        else:
+            groups.append([l])
+    cols: list[tuple[float, float, int]] = []
+    for g in groups:
+        rights = sorted(l.x1 for l in g)
+        cols.append((g[0].x0, rights[len(rights) * 3 // 4], len(g)))
+    merged: list[list] = []
+    for left, right, n in sorted(cols):
+        for m in merged:
+            if abs(m[1] - right) < 10 and left - m[0] < 30:  # a first-line indent of the same column
+                m[2] += n
+                break
+        else:
+            merged.append([left, right, n])
+    return [(m[0], m[1]) for m in merged if m[2] >= 3]
+
+
+def _equations(page: pymupdf.Page, lines: list[RawLine]) -> tuple[list[RawFigure], list[RawLine]]:
+    """Display equations: kept exactly as typeset (a sharp picture), with their text as alt text.
+
+    Returns the equation figures and the remaining text lines.
+    """
+    if not any(st.math for l in lines for st in l.styles):
+        return [], lines
+    cols = _columns(lines)
+    if not cols:
+        cols = [(min(l.x0 for l in lines), max(l.x1 for l in lines))]
+    sizes = Counter()
+    for l in lines:
+        sizes[round(l.size)] += len(l.text)
+    body = sizes.most_common(1)[0][0] if sizes else 10
+
+    def column(l: RawLine) -> tuple[float, float]:
+        left = [c for c in cols if c[0] <= l.x0 + 3 and l.x1 <= c[1] + 0.25 * (c[1] - c[0])]
+        return max(left, key=lambda c: c[0]) if left else min(cols, key=lambda c: abs(c[0] - l.x0))
+
+    ordered = sorted(lines, key=lambda l: (l.y0, l.x0))
+    gaps = [b.y0 - a.y1 for a, b in zip(ordered, ordered[1:])
+            if 0 <= b.y0 - a.y1 < 2 * a.size and abs(a.x0 - b.x0) < 2 and len(a.text) > 40]
+    typical_gap = statistics.median(gaps) if gaps else body * 0.3
+
+    def spaced(l: RawLine) -> bool:
+        """Extra white space above or below, as TeX puts around display equations."""
+        def near(o: RawLine) -> bool:
+            return o is not l and min(o.x1, l.x1) - max(o.x0, l.x0) > 0
+        above = [l.y0 - o.y1 for o in lines if near(o) and o.y1 <= l.y0 + 1]
+        below = [o.y0 - l.y1 for o in lines if near(o) and o.y0 >= l.y1 - 1]
+        extra = typical_gap + 0.35 * l.size
+        return (min(above) if above else 99) > extra or (min(below) if below else 99) > extra
+
+    marked: list[RawLine] = []
+    numbers: list[RawLine] = []
+    for l in lines:
+        if CAPTION_RE.match(l.text) or (l.bold and l.size > body * 1.05):
+            continue
+        left, right = column(l)
+        width = max(1.0, right - left)
+        if EQ_NUMBER_RE.match(l.text.strip()) and l.x0 > left + 0.55 * width:
+            numbers.append(l)
+            continue
+        math, formula, total, words = _math_profile(l)
+        if math == 0 or total == 0:
+            continue
+        indent, gap_right = l.x0 - left, right - l.x1
+        set_apart = indent > 1.8 * l.size or (gap_right > 1.8 * l.size and indent > 0.8 * l.size)
+        if (formula / total >= 0.6 and words <= 2 and set_apart) or \
+                (formula / total >= 0.85 and words == 0 and math >= 2 and spaced(l)
+                 and l.x1 - l.x0 > 0.35 * width) or \
+                (total <= 6 and words == 0 and set_apart):
+            marked.append(l)
+    # a display equation never shares its line with running text; inline formulas do
+    prose = [l for l in lines if _math_profile(l)[3] >= 3]
+
+    candidates = {id(l) for l in marked}
+
+    def inline(l: RawLine) -> bool:
+        left = column(l)[0]
+        for p in lines:
+            # the rest of a text line: something that is not a formula starts the row at the margin
+            if p is l or id(p) in candidates or p.x1 > l.x0 + 1:
+                continue
+            if p.x0 - left < 1.0 * p.size and min(p.y1, l.y1) - max(p.y0, l.y0) > 0.4 * p.height:
+                return True
+        tiny = sum(1 for c in l.text if not c.isspace()) <= 6
+        for p in prose:
+            if p is l:
+                continue
+            overlap = min(p.y1, l.y1) - max(p.y0, l.y0)
+            if tiny and overlap > 0.5 and p.x0 - 2 <= l.x0 and l.x1 <= p.x1 + 2:
+                return True  # a small stacked fraction or index inside a line of text
+            mid = (l.y0 + l.y1) / 2
+            if overlap > 0.5 * min(p.height, l.height) and p.y0 - 1 <= mid <= p.y1 + 1 \
+                    and p.x0 - 2 <= l.x0 and l.x1 <= p.x1 + 2:
+                return True
+        return False
+
+    marked = [l for l in marked if not inline(l)]
+    if not marked:
+        return [], lines
+
+    # join neighbouring formula lines (fractions, sum limits, multi-line equations) into regions
+    marked.sort(key=lambda l: (l.y0, l.x0))
+    regions: list[list[RawLine]] = []
+    for l in marked:
+        for reg in regions:
+            y0, y1 = min(m.y0 for m in reg), max(m.y1 for m in reg)
+            x1 = max(m.x1 for m in reg)
+            same_col = column(reg[0]) == column(l)
+            if same_col and l.y0 - y1 < 1.1 * max(l.size, body) and l.y1 > y0 - 1.1 * body \
+                    and not (l.x0 > x1 + 3 * body and l.y0 > y1):
+                reg.append(l)
+                break
+        else:
+            regions.append([l])
+    used = {id(l) for reg in regions for l in reg}
+    # equation numbers on the same height, and short pieces sitting inside a region
+    for reg in regions:
+        y0, y1 = min(m.y0 for m in reg), max(m.y1 for m in reg)
+        for l in numbers + [l for l in lines if id(l) not in used and len(l.text) <= 25]:
+            mid = (l.y0 + l.y1) / 2
+            if id(l) not in used and y0 - 1 <= mid <= y1 + 1 and column(l) == column(reg[0]):
+                reg.append(l)
+                used.add(id(l))
+
+    try:
+        drawings = [tuple(d["rect"]) for d in page.get_drawings()]
+    except Exception:
+        drawings = []
+    figures: list[RawFigure] = []
+    for reg in regions:
+        math_chars = sum(_math_profile(l)[0] for l in reg)
+        if math_chars < 2:
+            for l in reg:
+                used.discard(id(l))
+            continue
+        rect = (min(l.x0 for l in reg), min(l.y0 for l in reg), max(l.x1 for l in reg), max(l.y1 for l in reg))
+        # fraction bars, radicals and big brackets drawn as lines
+        for d in drawings:
+            if _area(_intersect(_expand(rect, 2), d)) > 0 or (d[3] - d[1] < 1.5 and
+                                                              _area(_intersect(_expand(rect, 3), d)) >= 0 and
+                                                              rect[0] - 2 <= d[0] and d[2] <= rect[2] + 2 and
+                                                              rect[1] - 3 <= d[1] <= rect[3] + 3):
+                if d[2] - d[0] < 1.2 * (rect[2] - rect[0]) + 20 and d[3] - d[1] < 3 * (rect[3] - rect[1]) + 20:
+                    rect = _union(rect, d)
+        # the letter boxes already hold the ink; more room would catch accents of the next line
+        clip = (rect[0] - 3, rect[1] - 0.3, rect[2] + 3, rect[3] + 0.3)
+        pix = page.get_pixmap(clip=pymupdf.Rect(clip), dpi=EQUATION_DPI, alpha=True)
+        ordered = sorted(reg, key=lambda l: (round(l.y0 / 3), l.x0))
+        alt = " ".join(l.text for l in ordered)
+        img = ImageData(pix.tobytes("png"), "png", pix.width, pix.height, kind="equation", alt=alt,
+                        text_size=float(body))
+        figures.append(RawFigure(clip, img))
+    rest = [l for l in lines if id(l) not in used]
+    return figures, rest
 
 
 # --------------------------------------------------------------------------- tables
@@ -954,7 +1534,9 @@ def read_pdf(path: str, ocr_engine: Optional[OcrEngine] = None, languages: Optio
                 lines = [l for l in all_lines if not any(overlap_ratio(l.bbox, t) > 0.6 for t in table_rects)]
                 rp.figures = _figures(page, doc, lines, table_rects, repeated)
                 fig_rects = [f.bbox for f in rp.figures]
-                rp.lines = [l for l in lines if not any(overlap_ratio(l.bbox, f) > 0.6 for f in fig_rects)]
+                lines = [l for l in lines if not any(overlap_ratio(l.bbox, f) > 0.6 for f in fig_rects)]
+                equations, rp.lines = _equations(page, lines)
+                rp.figures += equations
             pages.append(rp)
         if no_ocr_pages:
             warnings.append(f"{len(no_ocr_pages)} scanned page(s) are kept as pictures because no OCR engine is "

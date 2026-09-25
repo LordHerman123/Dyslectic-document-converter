@@ -109,6 +109,8 @@ class StructureDetector:
         doc = Document(source_path=source_path, pages=[p.info for p in raw.pages],
                        title=raw.title, author=raw.author, toc=raw.toc, warnings=list(raw.warnings))
         all_lines = [l for p in raw.pages for l in p.lines]
+        for l in all_lines:
+            doc.inline_images.update(l.inline_images)
         text_lines = [l for l in all_lines if l.source == "text"]
         ocr_lines = [l for l in all_lines if l.source == "ocr"]
         body = {"text": body_font_size(text_lines), "ocr": body_font_size(ocr_lines)}
@@ -328,7 +330,7 @@ class StructureDetector:
                     text += " "
             base = len(text)
             text += l.text
-            styles += [StyleRange(s.start + base, s.end + base, s.bold, s.italic, s.superscript) for s in l.styles]
+            styles += [s.moved(base) for s in l.styles]
             conf += [OcrWordConfidence(c.start + base, c.end + base, c.confidence) for c in l.conf]
             if l.bold and not any(s.bold for s in l.styles):
                 styles.append(StyleRange(base, base + len(l.text), bold=True))
@@ -376,6 +378,12 @@ class StructureDetector:
             if b.kind in (BlockKind.FURNITURE, BlockKind.FOOTNOTE):
                 out.append(b)
                 continue
+            if _is_equation(b):
+                # a display equation is part of the running text: what follows it comes after it
+                out.append(b)
+                last_para = None
+                floats_between = False
+                continue
             if b.kind in (BlockKind.IMAGE, BlockKind.TABLE, BlockKind.CAPTION) or (
                     last_para is not None and b.kind == BlockKind.PARAGRAPH
                     and b.font_size < last_para.font_size - 1 and len(b.text) < 200):
@@ -402,8 +410,7 @@ class StructureDetector:
                     sep = ""
                 base = len(last_para.text) + len(sep)
                 last_para.text += sep + b.text
-                last_para.styles += [StyleRange(s.start + base, s.end + base, s.bold, s.italic, s.superscript)
-                                     for s in b.styles]
+                last_para.styles += [s.moved(base) for s in b.styles]
                 last_para.ocr_confidence += [OcrWordConfidence(c.start + base, c.end + base, c.confidence)
                                              for c in b.ocr_confidence]
                 last_para._nlines += getattr(b, "_nlines", 1)  # type: ignore[attr-defined]
@@ -620,11 +627,11 @@ class StructureDetector:
         # book-style captions ("1. Mixed forest ...") directly below a picture
         for i, b in enumerate(blocks[:-1]):
             nxt = blocks[i + 1]
-            if (b.kind == BlockKind.IMAGE and nxt.page == b.page
+            if (b.kind == BlockKind.IMAGE and nxt.page == b.page and not _is_equation(b)
                     and nxt.kind in (BlockKind.PARAGRAPH, BlockKind.LIST_ITEM) and len(nxt.text) < 300
                     and 0 <= nxt.bbox[1] - b.bbox[3] < 40):
                 nxt.kind = BlockKind.CAPTION
-        targets = [b for b in blocks if b.kind in (BlockKind.IMAGE, BlockKind.TABLE)]
+        targets = [b for b in blocks if b.kind in (BlockKind.IMAGE, BlockKind.TABLE) and not _is_equation(b)]
         for cap in [b for b in blocks if b.kind == BlockKind.CAPTION]:
             is_table = bool(re.match(r"^\s*(table|tab\.?|tabel)", cap.text, re.I))
             best, best_d = None, 1e9
@@ -654,6 +661,10 @@ class StructureDetector:
                     j += 1
                 out.insert(j, cap)
         return out
+
+
+def _is_equation(b: Block) -> bool:
+    return b.kind == BlockKind.IMAGE and b.image is not None and b.image.kind == "equation"
 
 
 def _looks_garbled(text: str) -> bool:
@@ -706,5 +717,5 @@ def _slice_styles(styles: list[StyleRange], start: int, end: int) -> list[StyleR
     for s in styles:
         a, b = max(s.start, start), min(s.end, end)
         if a < b:
-            out.append(StyleRange(a - start, b - start, s.bold, s.italic, s.superscript))
+            out.append(s.moved(-start, a, b))
     return out
