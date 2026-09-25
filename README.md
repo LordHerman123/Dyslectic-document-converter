@@ -65,8 +65,10 @@ help every reader. No single font is best for everyone.
 Open *AI settings* in the app and pick **AI-assisted**. The app shows a notice saying that snippets
 will be sent to your provider using your key, and nothing is sent until you confirm it. Then:
 
-* Pick a provider: **Anthropic** (paid API) or **Google Gemini** (has a free tier; check Google's current
-  terms). Choose a model, then enter your key. Keys go into the OS keychain when `keyring` is installed.
+* Pick a provider: **Mistral AI** (the default; its free "Experiment" plan gives you a key at
+  console.mistral.ai, and `mistral-small-latest` is preselected), **Anthropic** (paid API) or
+  **Google Gemini**. Choose a model, then enter your key. The key can also be supplied through the
+  `MISTRAL_API_KEY`, `ANTHROPIC_API_KEY` or `GEMINI_API_KEY` environment variable. Keys go into the OS keychain when `keyring` is installed.
   Otherwise they're saved in a private file on your device. Keys never go into settings, logs,
   error messages or exports.
 * The AI is only asked narrow questions: "is this parenthesis a citation?" and "is this word an OCR

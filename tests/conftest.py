@@ -13,7 +13,7 @@ def isolated_home(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("DYSLEXIA_CONVERTER_HOME", str(home))
-    for var in ("ANTHROPIC_API_KEY", "GEMINI_API_KEY"):
+    for var in ("MISTRAL_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY"):
         monkeypatch.delenv(var, raising=False)
     return home
 

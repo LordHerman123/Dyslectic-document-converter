@@ -52,7 +52,7 @@ class FakeProvider:
 def make_assistant(isolated_home, answer, monkeypatch, mode="ai_assisted", consent=True):
     ks = KeyStore()
     ks._keyring = False
-    ks.set("anthropic", "sk-ant-test-000000000")
+    ks.set("mistral", "test-key-000000000")
     FakeProvider.calls = 0
     monkeypatch.setattr(assistant_mod, "make_provider", lambda *a, **k: FakeProvider(answer))
     return AIAssistant(AISettings(mode=mode, consent_given=consent), ks)
@@ -101,3 +101,33 @@ def test_cli_converts_and_refuses_overwrite(paper, tmp_path, capsys):
     assert cli.main([str(paper), "-o", str(out), "--preset", "Spacious", "--bold-start"]) == 0
     assert out.read_bytes().startswith(b"%PDF")
     assert cli.main([str(paper), "-o", str(paper)]) == 2
+
+
+def test_mistral_provider_request_and_errors(monkeypatch):
+    import httpx
+
+    from dyslexia_converter.ai.providers import AIError, make_provider
+
+    sent = {}
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        sent.update(url=url, body=json, headers=headers)
+        content = '{"results": [{"id": 0, "is_citation": true}]}'
+        return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    p = make_provider("mistral", "secret-mistral-key")
+    assert p.model == "mistral-small-latest"
+    assert p.complete_json("sys", "question", {"type": "object"}) == {"results": [{"id": 0, "is_citation": True}]}
+    assert sent["url"] == "https://api.mistral.ai/v1/chat/completions"
+    assert sent["headers"]["Authorization"] == "Bearer secret-mistral-key"
+    assert sent["body"]["response_format"] == {"type": "json_object"}
+
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: httpx.Response(401, text="bad secret-mistral-key"))
+    with pytest.raises(AIError) as err:
+        p.complete_json("sys", "q", {})
+    assert "secret-mistral-key" not in str(err.value)
+
+
+def test_mistral_is_default_provider():
+    assert AISettings().provider == "mistral"

@@ -108,7 +108,51 @@ class GeminiProvider(AIProvider):
             raise AIError("The AI returned an unreadable answer; the local result was kept.") from e
 
 
-PROVIDERS: dict[str, type[AIProvider]] = {p.name: p for p in (AnthropicProvider, GeminiProvider)}
+class MistralProvider(AIProvider):
+    """Mistral AI chat-completions API (La Plateforme). The free "Experiment" plan works with the small models."""
+
+    name = "mistral"
+    label = "Mistral AI"
+    models = ["mistral-small-latest", "ministral-8b-latest", "open-mistral-nemo", "mistral-large-latest"]
+    default_model = "mistral-small-latest"
+    note = ("Free 'Experiment' plan available at console.mistral.ai (rate-limited; check Mistral's current "
+            "terms - free-plan data may be used to improve their models).")
+
+    URL = "https://api.mistral.ai/v1/chat/completions"
+
+    def complete_json(self, system: str, prompt: str, schema: dict) -> dict:
+        import httpx
+
+        body = {
+            "model": self.model,
+            "temperature": 0,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt + "\n\nAnswer only with JSON matching this schema: "
+                 + json.dumps(schema)},
+            ],
+        }
+        try:
+            r = httpx.post(self.URL, json=body, timeout=60.0,
+                           headers={"Authorization": f"Bearer {self._key}", "Content-Type": "application/json",
+                                    "Accept": "application/json"})
+        except httpx.HTTPError as e:
+            raise AIError("Could not reach the Mistral API. Check your internet connection.") from e
+        if r.status_code in (401, 403):
+            raise AIError("The API key was rejected by Mistral. Check the key in AI Settings.")
+        if r.status_code == 429:
+            raise AIError("Mistral rate limit / free-plan quota reached. Try again in a minute.")
+        if r.status_code >= 400:
+            raise AIError(redact(f"Mistral API error ({r.status_code}).", self._key))
+        try:
+            text = r.json()["choices"][0]["message"]["content"]
+            return json.loads(text)
+        except (KeyError, IndexError, TypeError, ValueError) as e:
+            raise AIError("The AI returned an unreadable answer; the local result was kept.") from e
+
+
+PROVIDERS: dict[str, type[AIProvider]] = {p.name: p for p in (MistralProvider, AnthropicProvider, GeminiProvider)}
 
 
 def make_provider(name: str, api_key: str, model: Optional[str] = None) -> AIProvider:

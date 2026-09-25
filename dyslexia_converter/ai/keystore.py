@@ -17,7 +17,7 @@ from typing import Optional
 from ..settings import app_data_dir
 
 SERVICE = "dyslexia-converter"
-ENV_VARS = {"anthropic": "ANTHROPIC_API_KEY", "gemini": "GEMINI_API_KEY"}
+ENV_VARS = {"mistral": "MISTRAL_API_KEY", "anthropic": "ANTHROPIC_API_KEY", "gemini": "GEMINI_API_KEY"}
 
 
 class KeyStore:

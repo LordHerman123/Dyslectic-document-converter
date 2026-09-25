@@ -114,7 +114,7 @@ PRESET_DISCLAIMER = (
 @dataclass
 class AISettings:
     mode: str = "local_only"  # local_only / ai_assisted
-    provider: str = "anthropic"  # anthropic / gemini
+    provider: str = "mistral"  # mistral / anthropic / gemini
     model: str = ""
     consent_given: bool = False  # user accepted that content is sent to the provider
     use_for_citations: bool = True
