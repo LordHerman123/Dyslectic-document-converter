@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dyslexia-converter"
+version = "0.1.0"
+description = "Convert PDFs (papers, textbooks, reports) into cleaner, dyslexia-friendly, printable layouts without changing the text."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pymupdf>=1.24",
+    "reportlab>=4.0",
+    "pyspellchecker>=0.8",
+    "rapidfuzz>=3.0",
+    "python-docx>=1.1",
+    "pillow>=10",
+    "pytesseract>=0.3.10",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+app = ["flet>=1.0,<2"]
+ai = ["anthropic>=1.0"]
+keyring = ["keyring>=24"]
+dev = ["pytest>=8", "fonttools>=4", "brotli"]
+
+[project.scripts]
+dyslexia-converter = "dyslexia_converter.cli:main"
+dyslexia-converter-app = "dyslexia_converter.ui.app:run"
+
+[tool.setuptools.packages.find]
+include = ["dyslexia_converter*"]
+
+[tool.setuptools.package-data]
+dyslexia_converter = ["assets/fonts/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["tests", "."]
+
+# Used by `flet build apk` / `flet build windows|macos|linux`
+[tool.flet]
+org = "org.dyslexiaconverter"
+product = "Dyslexia Converter"
+company = "Dyslexia Converter"
+
+[tool.flet.app]
+path = "."
