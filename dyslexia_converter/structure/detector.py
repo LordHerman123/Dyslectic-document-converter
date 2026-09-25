@@ -40,7 +40,17 @@ SPECIAL_HEADINGS = re.compile(
 Item = Union[RawLine, RawFigure, RawTable]
 
 
+def _caption_start(text: str) -> bool:
+    """A caption label ("Fig. 4.", "Table 2:") and not a sentence about a figure ("Fig. 4 shows ...")."""
+    m = CAPTION_RE.match(text)
+    if not m:
+        return False
+    return not re.match(r"\s*(?:[,;)]\s*|and\s|&\s|to\s|[-–]\s*\d)?\s*[a-z]", text[m.end():])
+
+
+
 @dataclass
+
 class _Para:
     lines: list[RawLine] = field(default_factory=list)
 
@@ -206,9 +216,16 @@ class StructureDetector:
             else:
                 break
         zone = sorted(kept, key=lambda l: (l.y0, l.x0))
+        bottom = max(l.y1 for l in zone)
+        ids = {id(l) for l in zone}
+        if any(id(o) not in ids and o.y0 > bottom and min(o.x1, l.x1) - max(o.x0, l.x0) > 5
+               for o in lines for l in zone):
+            return []  # more text follows below it: not the notes at the foot of the page
         first = zone[0]
         if CAPTION_RE.match(first.text) or REF_BRACKET_RE.match(first.text):
             return []
+        if sum(1 for l in zone if REF_BRACKET_RE.match(l.text)) >= 2:
+            return []  # the end of a reference list ("[17] ...", "[18] ..."), not notes
         # Small print below the body text: real footnotes (with markers) or
         # page notes such as affiliations and licence statements.
         return zone
@@ -279,8 +296,10 @@ class StructureDetector:
             return False
         if p.bold != c.bold and (len(p.text) < 120 or len(c.text) < 120):
             return False
-        if LIST_RE.match(c.text) or CAPTION_RE.match(c.text) or REF_BRACKET_RE.match(c.text):
+        if LIST_RE.match(c.text) or REF_BRACKET_RE.match(c.text):
             return False
+        if _caption_start(c.text) and (p.text.rstrip().endswith(TERMINAL) or abs(p.size - c.size) > 0.3):
+            return False  # "... presented in" + "Fig. 2. When ..." is one sentence running on
         if p.font and c.font and _family(p.font) != _family(c.font) and len(para.lines) == 1 \
                 and (p.x1 - p.x0) < 0.5 * (c.x1 - c.x0) and not (p.italic or c.italic):
             return False  # e.g. a heading set in a different typeface
@@ -348,7 +367,7 @@ class StructureDetector:
     def _para_block(self, p: _Para, body_size: float) -> Block:
         text, styles, conf = self._join_lines(p.lines)
         kind = BlockKind.PARAGRAPH
-        if CAPTION_RE.match(text):
+        if _caption_start(text):
             kind = BlockKind.CAPTION
         elif LIST_RE.match(text) and not self._heading_like(p, text, body_size):
             kind = BlockKind.LIST_ITEM
