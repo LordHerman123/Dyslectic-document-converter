@@ -9,6 +9,7 @@ Creates:
 """
 from __future__ import annotations
 
+import io
 import sys
 from pathlib import Path
 
@@ -172,7 +173,110 @@ def main(out_dir: str = "tests/fixtures") -> None:
     d.mkdir(parents=True, exist_ok=True)
     make_paper(d / "sample_paper.pdf")
     make_scanned(d / "sample_paper.pdf", d / "sample_scanned.pdf")
+    make_book_spread(d / "sample_book_spread.pdf")
     print(f"Wrote samples to {d}")
+
+
+
+# --------------------------------------------------------------------------- book scans
+
+BOOK_TEXT = [
+    ("12 THE STATE AND THE FOREST", None),
+    (None, "The early modern European state viewed its forests primarily through the fiscal lens of "
+           "revenue needs. Other concerns were not entirely absent from official management, but they "
+           "rarely shaped the decisions that mattered."),
+    (None, "The best way to appreciate how narrow this vision was is to notice what fell outside its field "
+           "of vision. Missing were all those trees, bushes, and plants holding little or no potential for "
+           "state revenue, and all the uses that local people made of them."),
+    ("heading", "Measuring the Forest"),
+    (None, "Careful exploitation of the forests was all the more important because the forests were a "
+           "source of income that could be planned and taxed. The first attempts at precise measurement "
+           "were made by officials who counted trees in sample plots."),
+]
+BOOK_TEXT_2 = [
+    ("The State and the Forest 13", None),
+    (None, "Mathematicians then worked from the shape of an ideal tree to tables that predicted the volume "
+           "of wood a stand would yield. The result was a forest that could be read like a ledger."),
+    (None, "Foresters soon began to replant the forest itself so that it matched the tables. Rows of trees "
+           "of one species and one age made counting, harvesting and planning much easier."),
+    (None, "This simplified forest was easier to manage for a while, but the losses of the old diversity "
+           "became visible only after a generation, when the second rotation of trees began to fail."),
+]
+
+
+def _book_page_image(blocks, dpi=200):
+    """Render one book page (14 x 21 cm, single column, indented paragraphs) to a PIL image."""
+    from PIL import Image
+
+    buf = io.BytesIO()
+    body = ParagraphStyle("b", fontName="Times-Roman", fontSize=11, leading=14.5, firstLineIndent=14,
+                          alignment=4)
+    head = ParagraphStyle("h", fontName="Times-Italic", fontSize=12, leading=16, spaceBefore=10, spaceAfter=6)
+    run = ParagraphStyle("r", fontName="Times-Roman", fontSize=8.5, leading=10, spaceAfter=14)
+    story = []
+    for kind, text in blocks:
+        if text is None:
+            story.append(Paragraph(kind, run))
+        elif kind == "heading":
+            story.append(Paragraph(text, head))
+        else:
+            story.append(Paragraph(text, body))
+    from reportlab.platypus import SimpleDocTemplate
+
+    SimpleDocTemplate(buf, pagesize=(14 * cm, 21 * cm), leftMargin=1.8 * cm, rightMargin=1.8 * cm,
+                      topMargin=1.5 * cm, bottomMargin=2 * cm).build(story)
+    page = pymupdf.open(stream=buf.getvalue(), filetype="pdf")[0]
+    pix = page.get_pixmap(dpi=dpi, colorspace=pymupdf.csGRAY)
+    return Image.open(io.BytesIO(pix.tobytes("png"))).convert("L")
+
+
+def make_book_spread(dst: Path, dpi: int = 200, skew: float = 1.2, rotation: int = 90) -> None:
+    """A photocopied book spread: two pages side by side, tilted, with gutter shadow and dark edges,
+    stored as two image tiles on a PDF page that is rotated by 90 degrees."""
+    import numpy as np
+    from PIL import Image
+
+    left = _book_page_image(BOOK_TEXT, dpi).rotate(skew, fillcolor=255, expand=False)
+    right = _book_page_image(BOOK_TEXT_2, dpi).rotate(-skew * 0.7, fillcolor=255, expand=False)
+    w, h = left.width + right.width, max(left.height, right.height)
+    spread = Image.new("L", (w, h), 255)
+    spread.paste(left, (0, 0))
+    spread.paste(right, (left.width, 0))
+    a = np.asarray(spread, dtype=np.float32)
+    x = np.arange(w, dtype=np.float32)
+    gutter = 1 - 0.55 * np.exp(-((x - left.width) / (w * 0.03)) ** 2)  # shadow in the fold
+    paper = 0.9 - 0.08 * (x / w)  # greyish, unevenly lit paper
+    a = a * paper[None, :] * gutter[None, :]
+    a[:, : int(w * 0.012)] = 25  # dark scanner edges
+    a[:, -int(w * 0.012):] = 25
+    a[: int(h * 0.01), :] = 30
+    spread = Image.fromarray(np.clip(a, 0, 255).astype(np.uint8))
+    # store rotated 90 degrees (as copiers often do) in two tiles
+    stored = spread.rotate(90, expand=True)
+    out = pymupdf.open()
+    pw, ph = stored.width * 72 / dpi, stored.height * 72 / dpi
+    page = out.new_page(width=pw, height=ph)
+    half = stored.height // 2
+    for i, box in enumerate(((0, 0, stored.width, half), (0, half, stored.width, stored.height))):
+        tile = stored.crop(box)
+        b = io.BytesIO()
+        tile.save(b, format="PNG")
+        rect = pymupdf.Rect(0, box[1] * 72 / dpi, pw, box[3] * 72 / dpi)
+        page.insert_image(rect, stream=b.getvalue())
+    page.set_rotation(rotation)  # 90 shows it upright; 270 shows it upside down
+    out.save(dst)
+
+
+def make_scan_with_text_layer(src_scan: Path, dst: Path, text_pdf: Path) -> None:
+    """Add an invisible text layer (like a copier's OCR) to a scanned PDF."""
+    scan = pymupdf.open(src_scan)
+    text = pymupdf.open(text_pdf)
+    for sp, tp in zip(scan, text):
+        for x0, y0, x1, y1, t, *_ in tp.get_text("words"):
+            unit = pymupdf.get_text_length(t, fontname="helv", fontsize=1) or 1
+            size = max(3, min((y1 - y0) * 0.8, (x1 - x0) / unit * 0.95))  # fit the word's box
+            sp.insert_text((x0, y1 - 2), t, fontsize=size, render_mode=3)
+    scan.save(dst)
 
 
 if __name__ == "__main__":

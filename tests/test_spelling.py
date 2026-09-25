@@ -56,3 +56,20 @@ def test_apply_corrections_skips_stale_offsets():
 def test_language_detection():
     assert detect_language("de kat zit op het dak en de hond is in de tuin") == "nl"
     assert detect_language("the cat is on the roof and the dog is in the garden") == "en"
+
+
+def test_book_scan_words_are_not_miscorrected(tmp_path):
+    c = corrector(tmp_path)
+    ctx = "x "
+    for w in ("crown’s", "naturalist’s", "forests’", "utilité", "l’esprit", "logics",
+              "nonsustainable", "decentral", "collectivizers", "describ", "strik", "avy"):
+        assert c.suggest(w, ctx + w, len(ctx), Counter()) is None, w
+    assert c.suggest("characreristic", "x characreristic", 2, Counter())[0] == "characteristic"
+
+
+def test_words_broken_without_hyphen_are_rejoined():
+    from dyslexia_converter.transform.spelling import word_rejoiner
+
+    join = word_rejoiner(Dictionary(["en"]))
+    assert join("describ", "ing") and join("particu", "larly")
+    assert not join("the", "forest") and not join("state", "tax")

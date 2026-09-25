@@ -31,6 +31,7 @@ REF_BRACKET_RE = re.compile(r"^\s*\[\d{1,4}\]\s")
 REFERENCE_HEADINGS = re.compile(
     r"^\s*(?:\d+\.?\s*)?(references|reference list|bibliography|works cited|literature cited|literature|"
     r"sources|referenties|literatuur|literatuurlijst|bronnen|bronvermelding)\s*$", re.I)
+RUNNING_HEAD_RE = re.compile(r"^(?:\d{1,4}\s+\S.*|.*\S\s+\d{1,4})$")
 SPECIAL_HEADINGS = re.compile(
     r"^\s*(abstract|samenvatting|summary|keywords|key words|trefwoorden|introduction|inleiding|"
     r"conclusions?|conclusie|discussion|discussie|methods?|methode|results|resultaten|"
@@ -90,10 +91,13 @@ def _is_upper_heading(text: str) -> bool:
 # ----------------------------------------------------------------------------- detector
 
 class StructureDetector:
-    def __init__(self, dehyphenate: Optional[Callable[[str, str], bool]] = None):
+    def __init__(self, dehyphenate: Optional[Callable[[str, str], bool]] = None,
+                 rejoin: Optional[Callable[[str, str], bool]] = None):
         """``dehyphenate(left, right)`` decides whether ``left-`` + ``right``
-        at a line break is one hyphenated word that should be joined."""
+        at a line break is one hyphenated word that should be joined.
+        ``rejoin(left, right)`` does the same for OCR text where the hyphen was lost."""
         self.dehyphenate = dehyphenate or (lambda a, b: False)
+        self.rejoin = rejoin or (lambda a, b: False)
         self._counter = 0
 
     def _id(self) -> str:
@@ -133,8 +137,10 @@ class StructureDetector:
         blocks = self._merge_across_breaks(blocks)
         self._classify_headings(blocks, body)
         self._apply_toc(blocks, raw.toc)
-        first_h = raw.pages[0].info.height if raw.pages else 842
-        self._detect_title_authors(blocks, body["text"], first_h)
+        heights = {p.info.number: p.info.height for p in raw.pages}
+        self._detect_title_authors(blocks, max(body["text"], body["ocr"]) if not text_lines else body["text"],
+                                   heights)
+        self._detect_quotes(blocks, body)
         self._mark_references(blocks)
         self._split_references(blocks)
         blocks = self._attach_captions(blocks)
@@ -158,9 +164,13 @@ class StructureDetector:
                         seen.add(key)
         result = set()
         for l, key in candidates:
-            if PAGE_NUMBER_RE.match(l.text.strip()):
+            text = l.text.strip()
+            if PAGE_NUMBER_RE.match(text):
                 result.add(id(l))
             elif n >= 2 and counts[key] >= max(2, 0.4 * n) and len(key) > 2:
+                result.add(id(l))
+            elif RUNNING_HEAD_RE.match(text) and len(text.split()) <= 10 and counts[key] >= 2:
+                # book running heads: "12 CHAPTER TITLE" / "Section title 13", repeated
                 result.add(id(l))
         return result
 
@@ -259,6 +269,9 @@ class StructureDetector:
     def _continues(self, para: _Para, c: RawLine, nxt: Optional[RawLine], typical_gap: float) -> bool:
         p = para.lines[-1]
         size = max(p.size, c.size)
+        if (c.source == "ocr" and c.text[:1].islower() and not p.text.rstrip().endswith(TERMINAL)
+                and not (c.y0 < p.y0 - 2 or c.x0 > p.x1) and c.y0 - p.y1 < typical_gap + 0.6 * size):
+            return True  # a sentence running on to the next line, whatever OCR thinks its size is
         tolerance = 0.22 * size if c.source == "ocr" else 1.0  # OCR size estimates are noisy
         if abs(p.size - c.size) > tolerance:
             return False
@@ -309,6 +322,8 @@ class StructureDetector:
                     text = text[:-1]
                 elif text.endswith(("-", "/", "–")) and not text.endswith(" -"):
                     pass  # keep compound hyphen, no space
+                elif l.source == "ocr" and self._lost_hyphen(text, l.text):
+                    pass  # "describ" + "ing": OCR dropped the hyphen at the line end
                 else:
                     text += " "
             base = len(text)
@@ -318,6 +333,11 @@ class StructureDetector:
             if l.bold and not any(s.bold for s in l.styles):
                 styles.append(StyleRange(base, base + len(l.text), bold=True))
         return text, styles, conf
+
+    def _lost_hyphen(self, text: str, nxt: str) -> bool:
+        left = re.search(r"([A-Za-z]+)$", text)
+        right = re.match(r"([a-z]+)", nxt)
+        return bool(left and right and self.rejoin(left.group(1), right.group(1)))
 
     def _para_block(self, p: _Para, body_size: float) -> Block:
         text, styles, conf = self._join_lines(p.lines)
@@ -367,8 +387,16 @@ class StructureDetector:
                     and abs(last_para.font_size - b.font_size) <= 1.0
                     and not last_para.text.rstrip().endswith(TERMINAL)
                     and not b.text[:1].isupper() and not LIST_RE.match(b.text)):
-                base = len(last_para.text) + 1
-                last_para.text += " " + b.text
+                sep = " "
+                left = re.search(r"([A-Za-z]+)-$", last_para.text)
+                right = re.match(r"([a-z]+)", b.text)
+                if left and right and self.dehyphenate(left.group(1), right.group(1)):
+                    last_para.text = last_para.text[:-1]  # word hyphenated across a page break
+                    sep = ""
+                elif b.source == "ocr" and self._lost_hyphen(last_para.text, b.text):
+                    sep = ""
+                base = len(last_para.text) + len(sep)
+                last_para.text += sep + b.text
                 last_para.styles += [StyleRange(s.start + base, s.end + base, s.bold, s.italic, s.superscript)
                                      for s in b.styles]
                 last_para.ocr_confidence += [OcrWordConfidence(c.start + base, c.end + base, c.confidence)
@@ -397,6 +425,8 @@ class StructureDetector:
             bold = getattr(b, "_bold", False)
             if not words or nlines > 3 or len(words) > 18:
                 continue
+            if sum(ch.isalpha() for ch in text) < 3 or text[:1].islower():
+                continue  # fragments and sentence continuations are never headings
             ends_sentence = text.endswith((".", ",", ";")) and not NUMBERED_HEADING_RE.match(text + " x")
             bigger = b.font_size >= bs * (1.25 if b.source == "ocr" else 1.12) or (
                 b.source == "text" and b.font_size >= bs * 1.07 and nlines == 1 and len(words) <= 10)
@@ -419,6 +449,11 @@ class StructureDetector:
                 b.kind = BlockKind.HEADING
             elif numbered and b.source == "ocr" and len(words) <= 8 and not text.endswith("."):
                 b.kind = BlockKind.HEADING
+            elif b.source == "ocr" and nlines == 1 and _title_case(text) and b.font_size >= bs * 0.93 \
+                    and not text.endswith((".", ":", ";", ",")):
+                # scans carry no bold/italic information: a short, isolated Title Case line
+                b.kind = BlockKind.HEADING
+                b._title_case = True  # type: ignore[attr-defined]
             if b.kind == BlockKind.HEADING:
                 m = NUMBERED_HEADING_RE.match(text)
                 if m and re.match(r"^\d", m.group(1)):
@@ -432,6 +467,9 @@ class StructureDetector:
         sizes = sorted({round(h.font_size) for h in heads}, reverse=True)
         for h in heads:
             if h.level:
+                continue
+            if getattr(h, "_title_case", False) and h.font_size <= body.get(h.source, 10) * 1.15:
+                h.level = 2  # section heading inside a chapter
                 continue
             key = round(h.font_size)
             if key in numbered_sizes:
@@ -460,12 +498,17 @@ class StructureDetector:
                 best.level = max(1, min(6, level))
 
     # -------------------------------------------------------- title / authors
-    def _detect_title_authors(self, blocks: list[Block], body_size: float, page_h: float) -> None:
+    def _detect_title_authors(self, blocks: list[Block], body_size: float, heights: dict[int, float]) -> None:
         page0 = min((b.page for b in blocks), default=0)
-        first_page = [b for b in blocks if b.page == page0 and b.kind in (BlockKind.HEADING, BlockKind.PARAGRAPH)]
+        # book scans: the title page is often the right-hand page of the first spread
+        first_page = [b for b in blocks if b.page in (page0, page0 + 1) and b.kind in (BlockKind.HEADING, BlockKind.PARAGRAPH)]
         if not first_page:
             return
         biggest = max(first_page, key=lambda b: b.font_size)
+        if biggest.page != page0 and any(b.kind == BlockKind.HEADING and NUMBERED_HEADING_RE.match(b.text)
+                                         for b in blocks if b.page == biggest.page):
+            return  # the second page already starts a chapter
+        page_h = heights.get(biggest.page, 842)
         if biggest.font_size < body_size * 1.25 or biggest.bbox[1] > 0.5 * page_h:
             return
         if REFERENCE_HEADINGS.match(biggest.text) or SPECIAL_HEADINGS.match(biggest.text):
@@ -477,7 +520,7 @@ class StructureDetector:
         for b in blocks[idx + 1: idx + 7]:
             if b.kind in (BlockKind.FURNITURE, BlockKind.IMAGE, BlockKind.FOOTNOTE):
                 continue
-            if b.kind not in (BlockKind.PARAGRAPH, BlockKind.HEADING) or b.page != page0 or found >= 3:
+            if b.kind not in (BlockKind.PARAGRAPH, BlockKind.HEADING) or b.page != biggest.page or found >= 3:
                 break
             if b.font_size < body_size * 0.9:
                 continue  # journal metadata printed small next to the title
@@ -490,6 +533,33 @@ class StructureDetector:
                 found += 1
             else:
                 break
+
+    # ----------------------------------------------------------------- quotes
+    def _detect_quotes(self, blocks: list[Block], body: dict) -> None:
+        """Block quotations and epigraphs: set smaller and/or indented, often with a "—Author" line."""
+        by_page: dict[int, list[Block]] = {}
+        for b in blocks:
+            if b.kind == BlockKind.PARAGRAPH:
+                by_page.setdefault(b.page, []).append(b)
+        for page_blocks in by_page.values():
+            wide = [b for b in page_blocks if len(b.text) > 200]
+            if not wide:
+                continue
+            left = sorted(b.bbox[0] for b in wide)[len(wide) // 2]
+            right = sorted(b.bbox[2] for b in wide)[len(wide) // 2]
+            for i, b in enumerate(page_blocks):
+                bs = body.get(b.source, 10.0)
+                t = b.text.strip()
+                attribution = t[:1] in "\u2014\u2013-" and len(t.split()) <= 18
+                indented = b.bbox[0] > left + 1.2 * bs and b.bbox[2] < right - 1.2 * bs
+                smaller = b.font_size <= bs * 0.9
+                nxt = page_blocks[i + 1] if i + 1 < len(page_blocks) else None
+                followed_by_attr = nxt is not None and nxt.text.strip()[:1] in "\u2014\u2013" and \
+                    len(nxt.text.split()) <= 18
+                if attribution and (smaller or indented or i > 0 and page_blocks[i - 1].kind == BlockKind.QUOTE):
+                    b.kind = BlockKind.QUOTE
+                elif (indented and (smaller or followed_by_attr)) or (smaller and followed_by_attr):
+                    b.kind = BlockKind.QUOTE
 
     # ------------------------------------------------------------- references
     def _mark_references(self, blocks: list[Block]) -> None:
@@ -540,6 +610,13 @@ class StructureDetector:
     # --------------------------------------------------------------- captions
     def _attach_captions(self, blocks: list[Block]) -> list[Block]:
         """Link captions to the nearest figure/table on the same page and keep them adjacent."""
+        # book-style captions ("1. Mixed forest ...") directly below a picture
+        for i, b in enumerate(blocks[:-1]):
+            nxt = blocks[i + 1]
+            if (b.kind == BlockKind.IMAGE and nxt.page == b.page
+                    and nxt.kind in (BlockKind.PARAGRAPH, BlockKind.LIST_ITEM) and len(nxt.text) < 300
+                    and 0 <= nxt.bbox[1] - b.bbox[3] < 40):
+                nxt.kind = BlockKind.CAPTION
         targets = [b for b in blocks if b.kind in (BlockKind.IMAGE, BlockKind.TABLE)]
         for cap in [b for b in blocks if b.kind == BlockKind.CAPTION]:
             is_table = bool(re.match(r"^\s*(table|tab\.?|tabel)", cap.text, re.I))
@@ -570,6 +647,16 @@ class StructureDetector:
                     j += 1
                 out.insert(j, cap)
         return out
+
+
+def _title_case(text: str) -> bool:
+    words = re.findall(r"[A-Za-z\u00C0-\u024F][\w'\u2019-]*", text)
+    if not 2 <= len(words) <= 12 or not text.lstrip("\"'\u201c\u2018(")[:1].isupper():
+        return False
+    content = [w for w in words if len(w) > 3]
+    if not content:
+        return False
+    return sum(w[0].isupper() for w in content) / len(content) >= 0.75
 
 
 def _family(font: str) -> str:

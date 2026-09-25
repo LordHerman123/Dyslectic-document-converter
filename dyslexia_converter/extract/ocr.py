@@ -7,6 +7,7 @@ implementing :class:`OcrEngine` and passing it to the pipeline.
 from __future__ import annotations
 
 import io
+import os
 import shutil
 from dataclasses import dataclass
 from typing import Optional, Protocol
@@ -53,6 +54,9 @@ class TesseractEngine:
 
     def __init__(self, cmd: Optional[str] = None):
         self._cmd = cmd
+        # Pages are OCR'd in parallel; one thread per Tesseract process avoids
+        # the heavy slowdown of several multi-threaded Tesseracts competing.
+        os.environ.setdefault("OMP_THREAD_LIMIT", "1")
 
     def available(self) -> bool:
         try:
@@ -71,6 +75,25 @@ class TesseractEngine:
         except Exception:
             return []
         return [k for k, v in LANG_CODES.items() if v in installed]
+
+    def orientation(self, png: bytes) -> int:
+        """Clockwise rotation (0/90/180/270) needed to make the text upright; 0 if unknown."""
+        import pytesseract
+        from PIL import Image
+
+        try:
+            img = Image.open(io.BytesIO(png))
+            img.thumbnail((1600, 1600))
+            osd = pytesseract.image_to_osd(img, config="--psm 0")
+        except Exception:
+            return 0
+        for line in osd.splitlines():
+            if line.startswith("Rotate:"):
+                try:
+                    return int(line.split(":")[1].strip()) % 360
+                except ValueError:
+                    return 0
+        return 0
 
     def recognize(self, png: bytes, languages: list[str]) -> OcrResult:
         import pytesseract
