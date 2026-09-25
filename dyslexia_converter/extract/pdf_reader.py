@@ -288,6 +288,19 @@ def _font_family(font: str) -> str:
     return re.sub(r"\d+$", "", name).lower()
 
 
+LEADER_RE = re.compile(r"\s*(?:\.\s?){5,}\s*(?=\S*\s*$)")
+
+
+def _replace_run(text: str, styles: list[StyleRange], start: int, end: int, repl: str
+                 ) -> tuple[str, list[StyleRange]]:
+    delta = len(repl) - (end - start)
+
+    def at(i: int) -> int:
+        return i if i <= start else (start + len(repl) if i < end else i + delta)
+    moved = [replace(st, start=at(st.start), end=at(st.end)) for st in styles]
+    return text[:start] + repl + text[end:], [st for st in moved if st.end > st.start]
+
+
 def _unspace(text: str, styles: list[StyleRange], positions: list[tuple[int, float]],
              boxes: list[tuple[float, float]]) -> tuple[str, list[StyleRange]]:
     """'H I G H L I G H T S' -> 'HIGHLIGHTS': a letter-spaced heading, where wider gaps part the words."""
@@ -596,6 +609,14 @@ def _text_lines(page: pymupdf.Page, pno: int) -> list[RawLine]:
             max_size = max((sp.size for sp in row if not (len(sp.text.strip()) == 1 and not sp.text.strip().isalnum()
                                                              and sp.size > 1.3 * main)), default=0) \
                 or max(sp.size for sp in row)
+            # what counts as smaller type: symbols of a maths font can be set larger than the text around
+            # them (ϕ at 9.7 pt in 8 pt text), which must not turn that text into superscript
+            on_line = [sp for sp in row if abs(sp.baseline - baseline) < 0.1 * sp.size]
+            line_sizes = Counter()
+            for sp in on_line:
+                line_sizes[round(sp.size, 1)] += len(sp.text.strip())
+            line_main = line_sizes.most_common(1)[0][0] if line_sizes else max_size
+            ref_size = max((sp.size for sp in on_line if sp.size <= 1.15 * line_main), default=0) or max_size
             prev: Optional[_Span] = None
             prev_math = False
             accents = [sp for sp in row if _is_accent(sp)]
@@ -640,7 +661,7 @@ def _text_lines(page: pymupdf.Page, pno: int) -> list[RawLine]:
                 t = math_text(sp.font, sp.text) if math_font else sp.text
                 if not t:
                     continue
-                small = sp.size < max_size * 0.85
+                small = sp.size < ref_size * 0.85
                 # position decides (PyMuPDF's own superscript flag also marks some full-size commas)
                 sup = small and (sp.baseline < baseline - 0.12 * max_size or
                                  (bool(sp.flags & 1) and sp.baseline < baseline + 0.02 * max_size))
@@ -694,6 +715,9 @@ def _text_lines(page: pymupdf.Page, pno: int) -> list[RawLine]:
             stripped = text.strip()
             if not stripped:
                 continue
+            leader = LEADER_RE.search(text)
+            if leader:  # "2.1. Results . . . . . . . 12" (a printed table of contents): one short leader
+                text, styles = _replace_run(text, styles, leader.start(), leader.end(), " … ")
             if re.fullmatch(r"(?:\S ){4,}\S", stripped) and stripped.replace(" ", "").isalpha() \
                     and (stripped.isupper() or len(stripped) >= 15) \
                     and not any(st.math or st.superscript or st.subscript for st in styles) \
@@ -978,8 +1002,8 @@ def _equations(page: pymupdf.Page, lines: list[RawLine]) -> tuple[list[RawFigure
     marked: list[RawLine] = []
     numbers: list[RawLine] = []
     for l in lines:
-        if CAPTION_RE.match(l.text) or (l.bold and l.size > body * 1.05):
-            continue
+        if CAPTION_RE.match(l.text) or (l.bold and l.size > body * 1.05) or l.text[:1] in "•◦▪●‣":
+            continue  # captions, headings and bullet points are text
         left, right = column(l)
         width = max(1.0, right - left)
         if EQ_NUMBER_RE.match(l.text.strip()) and l.x0 > left + 0.55 * width:
@@ -998,7 +1022,8 @@ def _equations(page: pymupdf.Page, lines: list[RawLine]) -> tuple[list[RawFigure
                 marked.append(l)
                 continue
         set_apart = indent > 1.8 * l.size or (gap_right > 1.8 * l.size and indent > 0.8 * l.size)
-        if (formula / total >= 0.6 and words <= 2 and set_apart) or \
+        centred = abs(indent - gap_right) < 0.2 * width
+        if (formula / total >= 0.6 and set_apart and (words == 0 or (words <= 2 and (centred or spaced(l))))) or \
                 (formula / total >= 0.85 and words == 0 and math >= 2 and spaced(l)
                  and l.x1 - l.x0 > 0.35 * width) or \
                 (total <= 6 and words == 0 and set_apart):
@@ -1087,11 +1112,14 @@ def _equations(page: pymupdf.Page, lines: list[RawLine]) -> tuple[list[RawFigure
                     continue
                 overlap = min(l.y1, y1) - max(l.y0, y0)
                 math, _f, _t, words = _math_profile(l)
-                beside = overlap > 0.4 * l.height and (len(l.text) <= 25 or (
+                rx1 = max(m.x1 for m in reg)
+                # a lone denominator or limit hanging just below or above (partly outside the region)
+                piece = bool(re.fullmatch(r"[\w′'∗*+−-]{1,3}", l.text.strip())) and overlap > -0.2 * body and rx0 - 1 <= l.x0 and l.x1 <= rx1 + 1
+                beside = piece or overlap > 0.4 * l.height and (len(l.text) <= 25 or (
                     len(l.text) <= 70 and words <= 4 and l.x0 >= rx0 - body))
                 # rows of a cases block above or below, indented from the region's left edge
                 touching = (l.y0 < y1 + 0.5 * body and l.y1 > y1) or (l.y1 > y0 - 0.5 * body and l.y0 < y0)
-                row = touching and l.x0 > rx0 + body and words <= 4 and len(l.text) <= 70 and math > 0 \
+                row = touching and l.x0 > rx0 + body and words <= 1 and len(l.text) <= 70 and math > 0 \
                     and not inline(l)
                 if beside or row:
                     reg.append(l)
@@ -1127,11 +1155,47 @@ def _equations(page: pymupdf.Page, lines: list[RawLine]) -> tuple[list[RawFigure
         for l in reg:
             for ph, im in l.inline_images.items():
                 alt = alt.replace(ph, im.alt or "")
-        img = ImageData(pix.tobytes("png"), "png", pix.width, pix.height, kind="equation", alt=alt,
-                        text_size=float(body))
+        png, width, height = _close_number_gap(pix, body)
+        if width != pix.width:
+            clip = (clip[0], clip[1], clip[0] + width * 72.0 / EQUATION_DPI, clip[3])
+        img = ImageData(png, "png", width, height, kind="equation", alt=alt, text_size=float(body))
         figures.append(RawFigure(clip, img))
     rest = [l for l in lines if id(l) not in used]
     return figures, rest
+
+
+def _close_number_gap(pix: pymupdf.Pixmap, body: float) -> tuple[bytes, int, int]:
+    """An equation number set at the far right leaves a wide empty stretch in the picture, which would make
+    the formula tiny once the picture is fitted to the page: bring the number closer."""
+    try:
+        import numpy as np
+        from PIL import Image
+        alpha = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, -1]
+        ink = alpha.max(axis=0) > 20
+        px_per_pt = EQUATION_DPI / 72.0
+        cols = np.flatnonzero(ink)
+        if len(cols) < 2:
+            return pix.tobytes("png"), pix.width, pix.height
+        # the widest run of empty columns between inked ones
+        gaps = np.diff(cols)
+        k = int(gaps.argmax())
+        gap_px = int(gaps[k])
+        left_end, right_start = int(cols[k]), int(cols[k + 1])
+        right_w = pix.width - right_start
+        if gap_px < 4 * body * px_per_pt or right_w > 0.2 * pix.width:
+            return pix.tobytes("png"), pix.width, pix.height
+        keep = int(2 * body * px_per_pt)
+        im = Image.frombytes("RGBA", (pix.width, pix.height), pix.samples) if pix.n == 4 else None
+        if im is None:
+            return pix.tobytes("png"), pix.width, pix.height
+        out = Image.new("RGBA", (left_end + 1 + keep + right_w, pix.height), (0, 0, 0, 0))
+        out.paste(im.crop((0, 0, left_end + 1, pix.height)), (0, 0))
+        out.paste(im.crop((right_start, 0, pix.width, pix.height)), (left_end + 1 + keep, 0))
+        buf = io.BytesIO()
+        out.save(buf, "PNG")
+        return buf.getvalue(), out.width, out.height
+    except Exception:
+        return pix.tobytes("png"), pix.width, pix.height
 
 
 # --------------------------------------------------------------------------- tables
@@ -1338,6 +1402,16 @@ def _rule_tables(page: pymupdf.Page, existing: list[RawTable]) -> list[RawTable]
                 merged[-1] = [(a + " " + b).strip() for a, b in zip(merged[-1], row)]
             else:
                 merged.append(row)
+        # running text split in two (an "article info | abstract" header between rules): a column whose
+        # cells continue each other mid-sentence
+        flows = 0
+        for ci in range(n_cols):
+            col = [r[ci] for r in merged if r[ci]]
+            flows = max(flows, sum(1 for a, b in zip(col, col[1:])
+                                   if len(re.findall(r"[A-Za-z]{3,}", a)) >= 4 and b[:1].islower()
+                                   and not a.endswith((".", ":", ";"))))
+        if flows >= 2:
+            continue
         filled = sum(1 for r in merged for c in r if c) / max(1, len(merged) * n_cols)
         # formulas in cells read better as the original picture
         reliable = filled > 0.45 and math_chars <= 0.1 * max(1, total_chars)

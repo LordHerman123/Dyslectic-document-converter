@@ -298,6 +298,8 @@ class StructureDetector:
             return False
         if LIST_RE.match(c.text) or REF_BRACKET_RE.match(c.text):
             return False
+        if re.search(r" … \S+\s*$", p.text):
+            return False  # an entry of a printed table of contents
         if _caption_start(c.text) and (p.text.rstrip().endswith(TERMINAL) or abs(p.size - c.size) > 0.3):
             return False  # "... presented in" + "Fig. 2. When ..." is one sentence running on
         if p.font and c.font and _family(p.font) != _family(c.font) and len(para.lines) == 1 \
@@ -417,6 +419,7 @@ class StructureDetector:
                     and last_para.kind == BlockKind.PARAGRAPH
                     and abs(last_para.font_size - b.font_size) <= 1.0
                     and not last_para.text.rstrip().endswith(TERMINAL)
+                    and not re.search(r" … \S+\s*$", last_para.text)
                     and not b.text[:1].isupper() and not LIST_RE.match(b.text)):
                 sep = " "
                 left = re.search(r"([A-Za-z]+)-$", last_para.text)
