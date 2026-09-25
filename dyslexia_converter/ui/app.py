@@ -17,7 +17,7 @@ from .. import pipeline
 from ..ai.assistant import PRIVACY_NOTICE, AIAssistant, ConsentRequired
 from ..ai.keystore import KeyStore, install_log_redaction, redact
 from ..ai.providers import PROVIDERS, AIError
-from .. import __version__
+from .. import DONATE_URL, __version__
 from ..extract.ocr import default_engine, find_tesseract
 from ..fonts import FONT_CHOICES, get_family
 from ..render import preview
@@ -153,8 +153,9 @@ class ConverterApp:
             content=ft.Row([
                 ft.Row([self.text("Dyslexia Converter", 22, weight=ft.FontWeight.BOLD), self.mode_chip],
                        spacing=12, wrap=True),
-                ft.FilledButton("Open PDF", icon=ft.Icons.FOLDER_OPEN, on_click=self.on_open,
-                                tooltip="Choose a PDF to convert"),
+                ft.Row([self.coffee_button(),
+                        ft.FilledButton("Open PDF", icon=ft.Icons.FOLDER_OPEN, on_click=self.on_open,
+                                        tooltip="Choose a PDF to convert")], spacing=8, wrap=True),
             ], spacing=12, wrap=True, alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER),
             padding=ft.Padding.symmetric(horizontal=16, vertical=10))
@@ -186,6 +187,11 @@ class ConverterApp:
         p.add(ft.Column([header, ft.Container(ft.Column([self.status, self.progress, self.notices], spacing=4),
                                               padding=ft.Padding.symmetric(horizontal=16)),
                          self.tabs], expand=True, spacing=4))
+
+    def coffee_button(self) -> ft.Control:
+        """Optional donation link; opens PayPal in the browser. Nothing is sent from the app."""
+        return ft.OutlinedButton("Like the app? Buy me a coffee", icon=ft.Icons.COFFEE, url=DONATE_URL,
+                                 tooltip="Opens PayPal in your web browser (optional)")
 
     def apply_theme(self) -> None:
         hc = bool(self.ui.get("high_contrast"))
@@ -628,6 +634,10 @@ class ConverterApp:
                       "text. Your original PDF is never modified or overwritten.", 14),
             self.text("About the presets and fonts", 16, weight=ft.FontWeight.BOLD),
             self.text(PRESET_DISCLAIMER + " No single font is best for every reader with dyslexia.", 14),
+            self.text("Support", 16, weight=ft.FontWeight.BOLD),
+            self.text("The app is free. If it helps you, you can buy the maker a coffee. This is completely "
+                      "optional and changes nothing in the app.", 14),
+            ft.Row([self.coffee_button()]),
             self.text("App display", 16, weight=ft.FontWeight.BOLD),
             ft.Row([scale, contrast], wrap=True),
             self.text("The app text size and colours apply after restarting the app.", 12, italic=True),
