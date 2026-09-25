@@ -30,6 +30,7 @@ from reportlab.platypus.tableofcontents import TableOfContents
 from ..fonts import FALLBACK_FAMILY, font_path
 from ..settings import FormatSettings
 from .compose import ComposeResult, RItem, Run
+from .labels import label as doc_label
 
 # Palette modelled on the reference conversions
 CREAM = colors.HexColor("#FDFCF5")
@@ -503,7 +504,8 @@ def build_pdf(result: ComposeResult, s: FormatSettings, title: str = "", author:
                            leading=s.font_size * 1.7, leftIndent=i * s.font_size * 1.4, firstLineIndent=0)
             for i in range(3)]
         toc.dotsMinLevel = -1
-        story.append(RichParagraph([Run("Contents")], styles["heading1"], keep_with_next=True))
+        story.append(RichParagraph([Run(doc_label(result.language, "contents"))], styles["heading1"],
+                                   keep_with_next=True))
         story.append(toc)
         story.append(PageBreak())
 
@@ -583,6 +585,6 @@ def build_pdf(result: ComposeResult, s: FormatSettings, title: str = "", author:
         i += 1
 
     if not story:
-        story.append(RichParagraph([Run("(No text could be extracted from this document.)")], styles["paragraph"]))
+        story.append(RichParagraph([Run(doc_label(result.language, "no_text"))], styles["paragraph"]))
     doc.multiBuild(story)
     return buf.getvalue()

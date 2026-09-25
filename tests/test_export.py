@@ -124,3 +124,12 @@ def test_padded_paragraph_never_overflows_a_page():
     _, h = p.wrap(400, 800)
     assert p.split(400, h - 1) == []  # does not fit: move it, never claim it fits
     assert p.split(400, h + 1) == [p]
+
+
+def test_added_labels_follow_the_document_language(paper):
+    """Words the converter adds (Contents, Notes, [Note n]) use the document's language; the text is unchanged."""
+    s = FormatSettings(move_footnotes=True, include_contents=True, ocr_language="nl")
+    out = pdf_text(pipeline.load(paper, s).export("pdf", s))
+    assert "Inhoud" in out and "Noten" in out and "reader [Noot 1]" in out
+    assert "[Note 1]" not in out and "Contents" not in out
+    assert "Individual differences are discussed in Section 4." in out
