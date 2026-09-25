@@ -126,5 +126,7 @@ class TesseractEngine:
 
 
 def default_engine() -> Optional[OcrEngine]:
+    if os.environ.get("DYSLEXIA_CONVERTER_NO_OCR"):
+        return None  # testing / very slow machines: rely on text layers only
     eng = TesseractEngine()
     return eng if eng.available() else None

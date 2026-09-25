@@ -172,6 +172,10 @@ def compose(doc: Document, settings: FormatSettings, ai_citation_decisions: Opti
                             or (settings.show_decorative_images and not settings.ink_saving)):
                 items.append(RItem("image", image=b.image, block_id=b.id,
                                    natural_width=b.bbox[2] - b.bbox[0]))
+                if b.image.kind == "unreadable-text":
+                    items.append(RItem("small", [Run("This scanned page is shown as a picture because its text could "
+                                                     "not be read reliably. Installing Tesseract OCR usually fixes "
+                                                     "this.")]))
             continue
         if b.kind == BlockKind.TABLE:
             items.append(RItem("table", table=b.table, block_id=b.id, natural_width=b.bbox[2] - b.bbox[0]))

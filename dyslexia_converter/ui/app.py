@@ -64,9 +64,69 @@ class ConverterApp:
         return ft.Text(value, size=self.fs(size), **kw)
 
     def notify(self, message: str, error: bool = False) -> None:
+        if error or len(message) > 90:
+            # long or important messages stay visible in the notices panel instead of a pop-up
+            self._notices = [("warning" if error else "info", message, None)] + getattr(self, "_notices", [])
+            self._render_notices()
+            self.page.update()
+            return
         self.page.show_dialog(ft.SnackBar(ft.Text(message, size=self.fs(15)),
                                           bgcolor=ft.Colors.RED_700 if error else None,
                                           duration=ft.Duration(seconds=6 if error else 4)))
+
+    # ---------------------------------------------------------------- notices
+    def set_notices(self, notices: list[tuple[str, str, Optional[tuple[str, Callable]]]]) -> None:
+        """Show (kind, message, optional (button label, handler)) notices below the header."""
+        self._notices = list(notices)
+        self._render_notices()
+
+    def _render_notices(self) -> None:
+        items = getattr(self, "_notices", [])
+        self.notice_list.controls.clear()
+        for idx, (kind, message, action) in enumerate(items):
+            icon, color = {"warning": (ft.Icons.WARNING_AMBER, "#FFF4D6"),
+                           "action": (ft.Icons.TOUCH_APP, "#E3F0FF"),
+                           "info": (ft.Icons.INFO_OUTLINE, "#EEF3EA")}.get(kind, (ft.Icons.INFO_OUTLINE, "#EEF3EA"))
+            controls: list[ft.Control] = [ft.Icon(icon, size=20),
+                                          ft.Text(message, size=self.fs(13), expand=True, selectable=True)]
+            if action:
+                label, handler = action
+                controls.append(ft.FilledButton(label, on_click=handler))
+            controls.append(ft.IconButton(ft.Icons.CLOSE, tooltip="Dismiss", data=idx, on_click=self._dismiss))
+            self.notice_list.controls.append(ft.Container(
+                ft.Row(controls, vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=8),
+                bgcolor=color, border_radius=8, padding=ft.Padding.symmetric(horizontal=10, vertical=4)))
+        self.notices.visible = bool(items)
+        # grow with the content up to a limit; beyond that the list scrolls
+        self.notices.height = min(150, 52 * len(items)) if items else 0
+
+    def _dismiss(self, e) -> None:
+        idx = e.control.data
+        if 0 <= idx < len(getattr(self, "_notices", [])):
+            del self._notices[idx]
+        self._render_notices()
+        self.page.update()
+
+    def _review_notice(self) -> Optional[tuple[str, str, Optional[tuple[str, Callable]]]]:
+        if not self.session:
+            return None
+        pending = len(self.session.pending_corrections())
+        if not pending:
+            return None
+
+        async def open_review(e):
+            self.tabs.selected_index = self.review_tab_index
+            self.page.update()
+
+        words = "word needs" if pending == 1 else "words need"
+        return ("action", f"{pending} {words} your decision: OCR wasn't sure how to read them.",
+                ("Review now", open_review))
+
+    def update_review_notice(self) -> None:
+        notices = [n for n in getattr(self, "_notices", []) if n[0] != "action"]
+        rn = self._review_notice()
+        self._notices = ([rn] if rn else []) + notices
+        self._render_notices()
 
     async def in_thread(self, fn: Callable, *args):
         return await asyncio.to_thread(fn, *args)
@@ -79,8 +139,12 @@ class ConverterApp:
         p.theme_mode = ft.ThemeMode.LIGHT
         self.apply_theme()
 
-        self.status = self.text("Open a PDF to start. Your original file is never changed.", 14)
+        self.status = self.text("Open a PDF to start. Your original file is never changed.", 14,
+                                max_lines=1, overflow=ft.TextOverflow.ELLIPSIS)
         self.progress = ft.ProgressBar(value=0, visible=False)
+        # longer messages (warnings, decisions waiting) go here: wrapped, scrollable, dismissable
+        self.notice_list = ft.Column(spacing=4, scroll=ft.ScrollMode.AUTO)
+        self.notices = ft.Container(self.notice_list, visible=False, height=0)
         self.mode_chip = ft.Container(content=self.text(self._mode_label(), 13, weight=ft.FontWeight.BOLD),
                                       padding=ft.Padding.symmetric(horizontal=10, vertical=4), border_radius=12,
                                       bgcolor=self._mode_color(), tooltip="Where your document content is processed")
@@ -106,6 +170,7 @@ class ConverterApp:
                 ft.Container(preview_panel, expand=True, padding=8)], expand=True,
                 vertical_alignment=ft.CrossAxisAlignment.STRETCH))]
         self.preview_tab_index = 1 if narrow else 0
+        self.review_tab_index = len(convert)
         tabs = convert + [
             ("OCR review", ft.Icons.SPELLCHECK, self.build_review_tab()),
             ("Document map", ft.Icons.ACCOUNT_TREE, self.build_map_tab()),
@@ -117,7 +182,7 @@ class ConverterApp:
                 ft.TabBar(tabs=[ft.Tab(label=t, icon=i) for t, i, _ in tabs], scrollable=True),
                 ft.TabBarView(controls=[c for _, _, c in tabs], expand=True),
             ], expand=True, spacing=0))
-        p.add(ft.Column([header, ft.Container(ft.Column([self.status, self.progress], spacing=4),
+        p.add(ft.Column([header, ft.Container(ft.Column([self.status, self.progress, self.notices], spacing=4),
                                               padding=ft.Padding.symmetric(horizontal=16)),
                          self.tabs], expand=True, spacing=4))
 
@@ -342,6 +407,7 @@ class ConverterApp:
         ], expand=True), padding=16, expand=True)
 
     def refresh_review(self) -> None:
+        self.update_review_notice()
         self.review_list.controls.clear()
         if not self.session or not self.session.document.ocr_used:
             self.review_summary.value = "No OCR was needed for this document." if self.session else \
@@ -365,7 +431,9 @@ class ConverterApp:
             actions.append(ft.TextButton(f"'{c.original}' is correct - add to dictionary", data=c.original,
                                          on_click=self.on_add_word_from_review))
             self.review_list.controls.append(ft.Card(content=ft.Container(ft.Column([
-                ft.Row([self.text(f"{c.original} → {c.replacement}", 16, weight=ft.FontWeight.BOLD),
+                ft.Row([self.text(c.original, 16, weight=ft.FontWeight.BOLD),
+                        ft.Icon(ft.Icons.ARROW_FORWARD, size=18, tooltip="suggested"),
+                        self.text(c.replacement, 16, weight=ft.FontWeight.BOLD),
                         self.text(f"Confidence {round(c.confidence * 100)}%  ·  {status}  ·  {c.source}",
                                   12)], wrap=True),
                 self.text("Original: " + before, 13),
@@ -651,17 +719,15 @@ class ConverterApp:
         self.orig_count = preview.page_count(self.source_path)
         self.orig_page = (self._page_range() or (1, 1))[0] - 1
         self.conv_page = 0
-        kind = {"text": "selectable text", "scanned": "scanned pages (OCR used)",
+        scanner_text = any(p.text_source == "scanner" for p in d.pages)
+        kind = {"text": "selectable text",
+                "scanned": "scanned pages (" + ("the scanner's stored text was used" if scanner_text
+                                                else "text read with OCR") + ")",
                 "mixed": "a mix of text and scanned pages (OCR used where needed)"}[d.pdf_type]
-        msg = f"{name}: {kind}. Language: {d.language}."
-        if d.warnings:
-            msg += " " + " ".join(d.warnings)
-        self.busy(False, msg)
+        self.busy(False, f"{name}: {kind}. Language: {d.language}.")
+        self._notices = [("warning", w, None) for w in d.warnings]
         self.refresh_review()
         await self.rerender()
-        pending = len(self.session.pending_corrections())
-        if pending:
-            self.notify(f"{pending} uncertain OCR correction(s) are waiting in 'OCR review'.")
 
     async def on_preset(self, e):
         name = e.control.value

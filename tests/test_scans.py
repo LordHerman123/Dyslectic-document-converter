@@ -75,6 +75,36 @@ def test_scanner_text_layer_is_used_without_ocr(samples):
     session = pipeline.load(samples / "scan_with_text_layer.pdf", use_ocr=False)
     doc = session.document
     assert doc.pdf_type == "scanned" and doc.ocr_used
-    assert any("text layer" in w for w in doc.warnings)
+    assert any("text the scanner stored" in w for w in doc.warnings)
     text = " ".join(b.text for b in doc.blocks)
     assert "Reading difficulties affect a substantial proportion" in text
+
+
+def test_rotated_text_pdf_is_read(paper, tmp_path):
+    """Text positions on /Rotate pages must be mapped to the displayed page (they used to be skipped)."""
+    rotated = tmp_path / "rotated.pdf"
+    d = pymupdf.open(paper)
+    for page in d:
+        page.set_rotation(90)
+    d.save(rotated)
+    doc = pipeline.load(rotated).document
+    text = " ".join(b.text for b in doc.blocks)
+    assert "Reading difficulties affect a substantial proportion" in text
+    assert any(b.kind == BlockKind.HEADING and b.text == "2.1 Participants" for b in doc.blocks)
+
+
+def test_garbled_scanner_text_is_shown_as_picture(samples, tmp_path):
+    """A scanner text layer full of nonsense is replaced by a picture of the page, with a warning."""
+    src = pymupdf.open(samples / "sample_scanned.pdf")
+    out = pymupdf.open()
+    out.insert_pdf(src, from_page=0, to_page=0)
+    page = out[0]
+    junk = "^^Tn wlm^ Zrawtrhi^h fTelel ^^qk7es poTseu^ s AlmT^^ iocalhuge7hTgh"
+    for i in range(30):
+        page.insert_text((60, 80 + i * 22), junk, fontsize=9, render_mode=3)
+    path = tmp_path / "garbled.pdf"
+    out.save(path)
+    doc = pipeline.load(path, use_ocr=False).document
+    assert any(b.kind == BlockKind.IMAGE and b.image.kind == "unreadable-text" for b in doc.blocks)
+    assert not any("Zrawtrhi" in b.text for b in doc.blocks)
+    assert any("shown as pictures" in w for w in doc.warnings)

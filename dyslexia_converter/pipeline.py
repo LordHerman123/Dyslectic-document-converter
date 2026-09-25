@@ -145,6 +145,115 @@ def _languages(doc: Document, settings: FormatSettings) -> list[str]:
     return [doc.language]
 
 
+# ----------------------------------------------------------------------------- OCR cache
+# Reading scans is slow, so the result of text recognition is kept on this
+# device (never uploaded). Bump CACHE_VERSION when extraction changes.
+
+CACHE_VERSION = "1"
+CACHE_ENTRIES = 30
+
+
+def ocr_cache_dir() -> Path:
+    from .settings import app_data_dir
+
+    d = app_data_dir() / "ocr_cache"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def clear_ocr_cache() -> int:
+    """Delete saved OCR results; returns how many documents were forgotten."""
+    n = 0
+    for f in ocr_cache_dir().glob("*.pkl"):
+        try:
+            f.unlink()
+            n += 1
+        except OSError:
+            pass
+    return n
+
+
+def _cache_key(path: str, langs: list[str], engine, options: dict) -> str:
+    import hashlib
+
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    h.update(repr((CACHE_VERSION, _extraction_fingerprint(), sorted(langs), getattr(engine, "name", None),
+                   sorted(options.items()))).encode())
+    return h.hexdigest()
+
+
+def _extraction_fingerprint() -> str:
+    """Changes whenever the extraction code changes, so updates never reuse stale results."""
+    import hashlib
+
+    h = hashlib.sha256()
+    for f in sorted((Path(__file__).parent / "extract").glob("*.py")):
+        h.update(f.read_bytes())
+    return h.hexdigest()[:16]
+
+
+def _cache_load(key: str):
+    import pickle
+
+    f = ocr_cache_dir() / f"{key}.pkl"
+    try:
+        with open(f, "rb") as fh:
+            raw = pickle.load(fh)
+        f.touch()
+        return raw
+    except Exception:
+        return None
+
+
+def _cache_store(key: str, raw) -> None:
+    import pickle
+
+    d = ocr_cache_dir()
+    try:
+        tmp = d / f"{key}.tmp"
+        with open(tmp, "wb") as fh:
+            pickle.dump(raw, fh, protocol=pickle.HIGHEST_PROTOCOL)
+        tmp.replace(d / f"{key}.pkl")
+        files = sorted(d.glob("*.pkl"), key=lambda p: p.stat().st_mtime, reverse=True)
+        for old in files[CACHE_ENTRIES:]:
+            old.unlink()
+    except OSError:
+        pass
+
+
+def _garbled_scanner_pages(raw, dictionary: Dictionary, threshold: float = 0.9) -> list[int]:
+    """PDF page numbers (1-based) whose scanner text layer is mostly not real words."""
+    import re
+
+    scores: dict[int, list[int]] = {}
+    for p in raw.pages:
+        if p.info.text_source != "scanner":
+            continue
+        words = [w for l in p.lines for w in re.findall(r"[A-Za-z]{3,}", l.text)]
+        good = sum(1 for w in words if dictionary.known(w))
+        s = scores.setdefault(p.info.source_page + 1, [0, 0])
+        s[0] += good
+        s[1] += len(words)
+    return [pg for pg, (good, n) in sorted(scores.items()) if n >= 20 and good / n < threshold]
+
+
+def _page_list(pages: list[int]) -> str:
+    """[3, 4, 5, 9] -> '3-5, 9'"""
+    out, start, prev = [], None, None
+    for p in pages + [None]:
+        if start is None:
+            start = prev = p
+        elif p is not None and p == prev + 1:
+            prev = p
+        else:
+            out.append(f"{start}" if start == prev else f"{start}-{prev}")
+            start = prev = p
+    return ", ".join(out)
+
+
 def _text_layer_sample(path: str, max_pages: int = 6) -> str:
     import pymupdf
 
@@ -171,8 +280,19 @@ def load(path: str | Path, settings: Optional[FormatSettings] = None, ocr_engine
     if engine is not None:
         available = engine.languages()
         ocr_langs = [l for l in ocr_langs if l in available] or ["en"]
-    raw = read_pdf(path, engine, ocr_langs, progress, pages, split_spreads=settings.split_spreads,
+    options = dict(pages=pages, split_spreads=settings.split_spreads,
                    prefer_text_layer=settings.scan_text_source == "text_layer")
+    check_langs = ocr_langs if settings.ocr_language == "auto" else [settings.ocr_language]
+    known_word = Dictionary(check_langs, custom_words).known
+    cache_key = _cache_key(path, ocr_langs, engine, options)
+    raw = _cache_load(cache_key)
+    if raw is not None:
+        if progress:
+            progress("Using the saved text recognition of this document", 0.9)
+    else:
+        raw = read_pdf(path, engine, ocr_langs, progress, known_word=known_word, **options)
+        if any(p.info.ocr_used for p in raw.pages):
+            _cache_store(cache_key, raw)
 
     sample = " ".join(l.text for p in raw.pages[:5] for l in p.lines)
     language = settings.ocr_language if settings.ocr_language != "auto" else detect_language(sample)
@@ -183,8 +303,17 @@ def load(path: str | Path, settings: Optional[FormatSettings] = None, ocr_engine
         progress("Detecting document structure", 0.9)
     doc = StructureDetector(dehyphenator(dictionary), word_rejoiner(dictionary)).detect(raw, path)
     doc.language = language
-    if any(p.info.kind != "text" for p in raw.pages) and engine is None:
-        doc.warnings.append("No OCR engine found. Install Tesseract to convert scanned pages.")
+
+    pictured = sorted({p.info.source_page + 1 for p in raw.pages
+                       if any(f.image.kind == "unreadable-text" for f in p.figures)})
+    if pictured:
+        doc.warnings.append(f"The text the scanner stored for page(s) {_page_list(pictured)} of the PDF is "
+                            "unreadable, so (parts of) these pages are shown as pictures. Install Tesseract OCR "
+                            "to convert them to text.")
+    bad = [pg for pg in _garbled_scanner_pages(raw, dictionary) if pg not in pictured]
+    if bad:
+        doc.warnings.append(f"The text the scanner stored for page(s) {_page_list(bad)} of the PDF contains "
+                            "errors. Install Tesseract OCR for a cleaner result.")
 
     session = Session(doc, custom)
     if doc.ocr_used:
