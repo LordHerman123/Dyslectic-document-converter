@@ -330,6 +330,73 @@ def _unspace(text: str, styles: list[StyleRange], positions: list[tuple[int, flo
     return " " * lead + out, [st for st in moved if st.end > st.start]
 
 
+def _rotated_blocks(page: pymupdf.Page, taken: list[Rect]) -> list[RawFigure]:
+    """Text set sideways (a landscape table, a rotated diagram) cannot be reflowed; keep it as a picture.
+
+    Single rotated lines are left out: those are margin stamps (arXiv identifiers) or axis titles.
+    """
+    to_page, to_dir = _page_mapper(page)
+    boxes: list[tuple[Rect, str]] = []
+    try:
+        blocks = page.get_text("dict")["blocks"]
+    except Exception:
+        return []
+    for block in blocks:
+        for line in block.get("lines", []):
+            dx, dy = to_dir(line["dir"])
+            if abs(dy) <= 0.1 and dx >= 0:
+                continue
+            text = "".join(sp["text"] for sp in line["spans"]).strip()
+            if text:
+                boxes.append((to_page(line["bbox"]), text, (round(dx), round(dy))))
+    boxes = [x for x in boxes if not any(overlap_ratio(x[0], r) > 0.5 for r in taken)]
+    clusters: list[list] = [[b, [t], [d]] for b, t, d in boxes]
+    merged = True
+    while merged:
+        merged = False
+        for i in range(len(clusters)):
+            for j in range(i + 1, len(clusters)):
+                if _area(_intersect(_expand(clusters[i][0], 22), clusters[j][0])) > 0:
+                    clusters[i][0] = _union(clusters[i][0], clusters[j][0])
+                    clusters[i][1] += clusters[j][1]
+                    clusters[i][2] += clusters[j][2]
+                    del clusters[j]
+                    merged = True
+                    break
+            if merged:
+                break
+    out: list[RawFigure] = []
+    for rect, texts, dirs in clusters:
+        if len(texts) < 3:
+            continue
+        try:
+            for d in page.get_drawings():  # the rules of a rotated table
+                r = tuple(d["rect"])
+                if _area(_intersect(_expand(rect, 6), r)) > 0 and _area(r) < 4 * _area(rect):
+                    rect = _union(rect, r)
+        except Exception:
+            pass
+        img = render_clip(page, _expand(rect, 3))
+        # turn it so that its text reads left to right
+        direction = Counter(dirs).most_common(1)[0][0]
+        angle = {(0, -1): -90, (0, 1): 90, (-1, 0): 180}.get(direction, 0)
+        if angle:
+            try:
+                from PIL import Image
+                im = Image.open(io.BytesIO(img.data)).rotate(angle, expand=True)
+                buf = io.BytesIO()
+                im.save(buf, "PNG")
+                img = ImageData(buf.getvalue(), "png", im.width, im.height)
+                rect = (rect[0], rect[1], rect[0] + (rect[3] - rect[1]), rect[1] + (rect[2] - rect[0])) \
+                    if abs(angle) == 90 else rect
+            except Exception:
+                pass
+        img.kind = "figure"
+        img.alt = " ".join(texts)
+        out.append(RawFigure(rect, img))
+    return out
+
+
 def _page_spans(page: pymupdf.Page) -> list[_Span]:
     d = page.get_text("rawdict", flags=pymupdf.TEXTFLAGS_RAWDICT & ~pymupdf.TEXT_PRESERVE_IMAGES)
     to_page, to_dir = _page_mapper(page)
@@ -961,7 +1028,12 @@ def _figures(page: pymupdf.Page, doc: pymupdf.Document, lines: list[RawLine],
                 if overlap_ratio(l.bbox, reg[0]) > 0.5:
                     continue
                 near = _area(_intersect(_expand(reg[0], 10), l.bbox)) > 0
-                if near and len(l.text) < 40 and l.size < body_size * 0.93 and (l.x1 - l.x0) < (reg[0][2] - reg[0][0]) * 1.05:
+                # tick labels ("0.5 1.0 1.5") and a short axis title can be as large as the text
+                tick = bool(re.fullmatch(r"[\d.,−\-+%×\s]+", l.text)) or len(l.text.strip()) <= 2 or (
+                    len(l.text) <= 20 and len(l.text.split()) <= 2 and not l.text.rstrip().endswith((".", ":"))
+                    and reg[0][0] - 5 <= l.x0 and l.x1 <= reg[0][2] + 5)
+                if near and len(l.text) < 40 and (l.size < body_size * 0.93 or tick) and \
+                        (l.x1 - l.x0) < (reg[0][2] - reg[0][0]) * 1.05:
                     reg[0] = _union(reg[0], l.bbox)
                     reg[1] = 0
                     grown = True
@@ -1436,11 +1508,27 @@ def _rule_tables(page: pymupdf.Page, existing: list[RawTable]) -> list[RawTable]
     except Exception:
         return []
     rules = sorted(_horizontal_rules(drawings), key=lambda r: r[1])
+    try:
+        page_lines = [l for b in page.get_text("dict")["blocks"] for l in b.get("lines", [])]
+    except Exception:
+        page_lines = []
+
+    def caption_between(y0: float, y1: float, x0: float, x1: float) -> bool:
+        for l in page_lines:
+            b = l["bbox"]
+            if y0 < b[1] and b[3] < y1 and b[0] < x1 and b[2] > x0 and \
+                    CAPTION_RE.match("".join(sp["text"] for sp in l["spans"])):
+                return True
+        return False
+
     groups: list[list[Rect]] = []
     for r in rules:
         for g in reversed(groups):
             # same table: booktabs rules share both edges and follow each other within a table's height
-            if abs(g[-1][0] - r[0]) < 4 and abs(g[-1][2] - r[2]) < 4 and r[1] - g[-1][1] < 220:
+            # (a long table may run far, but another table's caption between them starts a new one)
+            gap = r[1] - g[-1][1]
+            if abs(g[-1][0] - r[0]) < 4 and abs(g[-1][2] - r[2]) < 4 and \
+                    (gap < 220 or (gap < 600 and not caption_between(g[-1][1], r[1], r[0], r[2]))):
                 g.append(r)
                 break
         else:
@@ -1655,6 +1743,8 @@ def _caption_tables(page: pymupdf.Page, lines: list[RawLine], existing: list[Raw
             row_lines = [l for l in region if any(l.text and l.text[:12] in " ".join(r) for r in rows)]
             bottom = max((l.y1 for l in row_lines), default=tab.bbox[3])
             rect = (tab.bbox[0], tab.bbox[1], tab.bbox[2], min(tab.bbox[3], bottom + 0.5))
+            if any(overlap_ratio(rect, t.bbox) > 0.3 or overlap_ratio(t.bbox, rect) > 0.3 for t in existing + out):
+                break  # already found (by its rules)
             out.append(RawTable(rect, TableData(rows, render_clip(page, _expand(rect, 3)), n_cols <= 10)))
             break
     return out
@@ -2090,6 +2180,7 @@ def read_pdf(path: str, ocr_engine: Optional[OcrEngine] = None, languages: Optio
                 table_rects = [t.bbox for t in rp.tables]
                 lines = [l for l in all_lines if not any(overlap_ratio(l.bbox, t) > 0.6 for t in table_rects)]
                 rp.figures = _figures(page, doc, lines, table_rects, repeated)
+                rp.figures += _rotated_blocks(page, [f.bbox for f in rp.figures] + table_rects)
                 fig_rects = [f.bbox for f in rp.figures]
                 lines = [l for l in lines if not any(overlap_ratio(l.bbox, f) > 0.6 for f in fig_rects)]
                 equations, rp.lines = _equations(page, lines)
