@@ -182,9 +182,13 @@ def test_windows_voice_speaks_and_reports_each_word(tmp_path):
     engine.setProperty("rate", 400)
     engine.say("Reading aloud works on Windows.")
     engine.runAndWait()
+    info = engine.diagnostics()
     engine.close()
-    assert [p for p, _ in positions] == sorted(p for p, _ in positions) and len(positions) >= 4
-    assert positions[0][0] == 0 and wav.stat().st_size > 2000  # sound was produced
+    info["wav_bytes"] = wav.stat().st_size if wav.exists() else -1
+    print("SAPI diagnostics:", info)
+    assert info["wav_bytes"] > 2000, info  # sound was produced
+    assert [p for p, _ in positions] == sorted(p for p, _ in positions) and len(positions) >= 4, (positions, info)
+    assert positions[0][0] == 0, (positions, info)
 
 
 @windows_only

@@ -171,11 +171,13 @@ class SapiEngine:
             def OnWord(self, stream_number, stream_position, character_position, length):  # noqa: N802
                 sink(int(character_position), int(length), event=True)
 
+        self.mode = "events"
         try:
             self._voice = win32com.client.DispatchWithEvents("SAPI.SpVoice", _Events)
             self._voice.EventInterests = 33790  # SVEAllEvents: includes word boundaries
-        except Exception:  # no type library wrappers: poll the status only
+        except Exception as e:  # no type library wrappers: poll the status only
             log.info("SAPI events unavailable; polling the speech status", exc_info=True)
+            self.mode = f"polling ({type(e).__name__}: {e})"
             self._voice = win32com.client.Dispatch("SAPI.SpVoice")
         self._stream = None
         if output_wav:
@@ -254,6 +256,17 @@ class SapiEngine:
 
     def stop(self) -> None:
         self._stopped = True  # the speaking thread sees this within POLL_MS and stops the voice
+
+    def diagnostics(self) -> dict:
+        """What happened, for finding problems on a particular computer."""
+        info = {"mode": self.mode, "events": self._events, "last_word_at": self._last}
+        try:
+            st = self._voice.Status
+            info.update(running=st.RunningState, word_pos=st.InputWordPosition, word_len=st.InputWordLength,
+                        last_result=st.LastHResult, voice=self._voice.Voice.GetDescription())
+        except Exception as e:
+            info["status_error"] = repr(e)
+        return info
 
     def close(self) -> None:
         if self._stream is not None:
