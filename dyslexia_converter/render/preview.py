@@ -51,11 +51,12 @@ _page_cache: dict = {}
 
 
 def render_highlight(pdf: bytes | str, index: int, width_px: int, sentence: list, word: list,
-                     dark: bool = False) -> bytes:
+                     dark: bool = False, marks: list = ()) -> bytes:
     """PNG of a page with the sentence being read aloud marked, and the word being said boxed.
 
-    ``sentence`` and ``word`` are rectangles in PDF points. The plain page is rendered once and kept, so
-    moving the highlight from word to word is quick.
+    ``sentence`` and ``word`` are rectangles in PDF points; ``marks`` are the reader's own coloured
+    highlights as (rectangle, RGBA). The plain page is rendered once and kept, so moving the highlight
+    from word to word is quick.
     """
     import io
 
@@ -63,7 +64,7 @@ def render_highlight(pdf: bytes | str, index: int, width_px: int, sentence: list
 
     key = (id(pdf), len(pdf), index, width_px)
     if key not in _page_cache:
-        if len(_page_cache) > 6:
+        if len(_page_cache) > 24:
             _page_cache.clear()
         with _open(pdf) as doc:
             page = doc[max(0, min(index, doc.page_count - 1))]
@@ -73,6 +74,8 @@ def render_highlight(pdf: bytes | str, index: int, width_px: int, sentence: list
     base, z = _page_cache[key]
     layer = Image.new("RGBA", base.size, (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
+    for (x0, y0, x1, y1), rgba in marks:  # the reader's marker colours, under the read-aloud highlight
+        d.rounded_rectangle([x0 * z - 2, y0 * z - 1, x1 * z + 2, y1 * z + 2], radius=3, fill=tuple(rgba))
     for x0, y0, x1, y1 in sentence:  # soft yellow behind the whole sentence
         d.rectangle([x0 * z - 2, y0 * z - 1, x1 * z + 2, y1 * z + 1], fill=(255, 214, 90, 105))
     edge = (122, 46, 58, 255) if not dark else (200, 60, 80, 255)
