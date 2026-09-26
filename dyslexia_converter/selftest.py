@@ -53,9 +53,9 @@ def _speak_test() -> str:
         sp.start([Sentence(words)], 0, on_word=lambda s, w: heard.append(w), on_done=lambda f: done.set())
         done.wait(30)
         size = wav.stat().st_size if wav.exists() else 0
-        if sp.last_error or not heard or size < 2000:
-            return f"Speech test FAILED: words {len(heard)}, WAV {size} bytes, {sp.last_error}"
-        return f"Speech test: OK, {len(set(heard))} of {len(words)} words tracked, WAV {size} bytes"
+        if sp.last_error or size < 2000:
+            return f"Speech test FAILED: WAV {size} bytes, {sp.last_error}"
+        return f"Speech test: OK, WAV {size} bytes ({len(set(heard))} words reported while writing a file)"
 
 
 def run(argv: list[str]) -> int:

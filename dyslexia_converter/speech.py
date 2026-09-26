@@ -12,6 +12,7 @@ import logging
 import re
 import sys
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
@@ -289,6 +290,7 @@ class Speaker:
     """
 
     BASE_RATE = 165  # words per minute at speed 1.0: a calm reading pace
+    WAIT_FOR_WORDS = 0.35  # seconds to wait for the engine to report words before pacing the highlight
 
     def __init__(self, engine_factory: Optional[Callable[[], object]] = None):
         self._factory = engine_factory
@@ -395,11 +397,28 @@ class Speaker:
                     except Exception:
                         pass
                 current = {"s": index}
+                real = {"seen": False}  # the engine reports the word it is saying
+                # characters per second, to pace the highlight when the engine does not say which word it is
+                # on; calibrated with the time each sentence really took
+                pace = {"cps": self.BASE_RATE * max(0.4, min(2.5, speed)) * 6.0 / 60.0}
 
                 def word_cb(name, location, length):
                     if not stop.is_set():
+                        real["seen"] = True
                         s = current["s"]
                         on_word(s, sentences[s].word_at(location))
+
+                def estimate(si: int, t0: float, sentence_done: threading.Event) -> None:
+                    """Move the highlight along the sentence by the length of its words."""
+                    if sentence_done.wait(self.WAIT_FOR_WORDS) or real["seen"]:
+                        return
+                    for wi, w in enumerate(sentences[si].words):
+                        if wi == 0:
+                            continue  # the first word is shown when the sentence starts
+                        wait = w.start / pace["cps"] - (time.monotonic() - t0)
+                        if (wait > 0 and sentence_done.wait(wait)) or stop.is_set() or real["seen"]:
+                            return
+                        on_word(si, wi)
 
                 eng.connect("started-word", word_cb)
                 for si in range(index, len(sentences)):
@@ -407,8 +426,20 @@ class Speaker:
                         break
                     current["s"] = si
                     on_sentence(si)
+                    sentence_done = threading.Event()
+                    t0 = time.monotonic()
+                    pacer = None
+                    if not real["seen"]:
+                        pacer = threading.Thread(target=estimate, args=(si, t0, sentence_done), daemon=True)
+                        pacer.start()
                     eng.say(sentences[si].text)
                     eng.runAndWait()
+                    took = time.monotonic() - t0
+                    sentence_done.set()
+                    if pacer is not None:
+                        pacer.join(1.0)
+                    if took > 0.5 and not stop.is_set():  # learn how fast this voice really speaks
+                        pace["cps"] = 0.6 * pace["cps"] + 0.4 * (len(sentences[si].text) + 1) / took
                 else:
                     finished = not stop.is_set()
             except Exception as e:  # tell the user instead of staying silent

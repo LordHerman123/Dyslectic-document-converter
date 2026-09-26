@@ -62,10 +62,11 @@ def test_very_long_sentences_are_read_in_parts():
 class FakeEngine:
     instances = []
 
-    def __init__(self, delay=0.0, fail=False):
+    def __init__(self, delay=0.0, fail=False, silent=False):
         if fail:
             raise RuntimeError("no speech engine")
         self.delay, self.cb, self.said, self.props, self.stopped = delay, None, [], {}, False
+        self.silent = silent  # speaks, but never says which word (like Windows into a file)
         FakeEngine.instances.append(self)
 
     def getProperty(self, key):
@@ -91,7 +92,8 @@ class FakeEngine:
         for w in self.said[-1].split(" "):
             if self.stopped:
                 return
-            self.cb(None, pos, len(w))
+            if not self.silent:
+                self.cb(None, pos, len(w))
             pos += len(w) + 1
             time.sleep(self.delay)
 
@@ -186,9 +188,10 @@ def test_windows_voice_speaks_and_reports_each_word(tmp_path):
     engine.close()
     info["wav_bytes"] = wav.stat().st_size if wav.exists() else -1
     print("SAPI diagnostics:", info)
-    assert info["wav_bytes"] > 2000, info  # sound was produced
-    assert [p for p, _ in positions] == sorted(p for p, _ in positions) and len(positions) >= 4, (positions, info)
-    assert positions[0][0] == 0, (positions, info)
+    assert info["wav_bytes"] > 2000, info  # the voice really spoke
+    # into a file Windows reports no word positions (tested: neither events nor status); with speakers the
+    # app uses them when they come, and otherwise paces the highlight itself (see the pacing test)
+    assert positions == sorted(positions), (positions, info)
 
 
 @windows_only
@@ -207,7 +210,7 @@ def test_windows_voice_through_the_speaker_and_stopping(tmp_path):
     sp.start(units, 0, speed=2.0, on_word=lambda s, w: words.append((s, w)),
              on_done=lambda finished: (result.update(finished=finished), done.set()))
     assert done.wait(30) and result["finished"] is True, sp.last_error
-    assert (0, 0) in words and (1, 3) in words
+    assert all((tmp_path / f"out{i}.wav").stat().st_size > 2000 for i in range(2, n["i"] + 1))  # it spoke
     # stopping in the middle of a long sentence
     done.clear()
     # (into a file, speech is made far faster than it is spoken: a long text keeps it busy long enough)
@@ -218,58 +221,24 @@ def test_windows_voice_through_the_speaker_and_stopping(tmp_path):
     assert done.wait(5) and result["finished"] is False and not sp.speaking
 
 
-@windows_only
-def test_windows_voice_experiments(tmp_path):
-    """Reports (as a warning) how word tracking behaves on this machine with different set-ups."""
-    import warnings
 
-    import pythoncom
-    import win32com.client
+def test_highlight_is_paced_when_the_engine_does_not_report_words():
+    sp = speech.Speaker(engine_factory=lambda: FakeEngine(delay=0.12, silent=True))
+    sp.WAIT_FOR_WORDS = 0.05
+    units = units_of("Short one here.", "A somewhat longer second sentence follows now.")
+    words, done = [], threading.Event()
+    sp.start(units, 0, speed=2.0, on_word=lambda s, w: words.append((s, w)), on_done=lambda f: done.set())
+    assert done.wait(10)
+    for si in (0, 1):  # every sentence moves forward word by word, never backwards
+        mine = [w for s, w in words if s == si]
+        assert mine == sorted(mine) and len(set(mine)) == len(mine)
+    assert len([w for s, w in words if s == 1]) >= 3  # most of the long sentence was followed
 
-    text = "Reading aloud works on Windows today."
-    results = {}
 
-    def run(name, with_events, to_file, pump_only):
-        seen, events = [], []
-
-        class Ev:
-            def OnWord(self, a, b, pos, length):  # noqa: N802
-                events.append(int(pos))
-
-        try:
-            v = win32com.client.DispatchWithEvents("SAPI.SpVoice", Ev) if with_events \
-                else win32com.client.Dispatch("SAPI.SpVoice")
-            v.EventInterests = 33790
-            fs = None
-            if to_file:
-                fs = win32com.client.Dispatch("SAPI.SpFileStream")
-                fs.Open(str(tmp_path / f"{name}.wav"), 3)
-                v.AudioOutputStream = fs
-            v.Speak(text, 1)
-            t0 = time.time()
-            while time.time() - t0 < 15:
-                pythoncom.PumpWaitingMessages()
-                if pump_only:
-                    time.sleep(0.01)
-                    done = v.Status.RunningState == 1
-                else:
-                    done = v.WaitUntilDone(50)
-                st = v.Status
-                if st.InputWordLength and (not seen or seen[-1] != st.InputWordPosition):
-                    seen.append(int(st.InputWordPosition))
-                if done:
-                    break
-            for _ in range(20):
-                pythoncom.PumpWaitingMessages()
-                time.sleep(0.01)
-            if fs is not None:
-                fs.Close()
-            results[name] = {"events": events, "polled": seen, "secs": round(time.time() - t0, 2)}
-        except Exception as e:
-            results[name] = {"error": repr(e)[:200]}
-
-    run("file_events_waituntil", True, True, False)
-    run("file_events_pumponly", True, True, True)
-    run("speakers_events_pumponly", True, False, True)
-    run("speakers_polling", False, False, False)
-    warnings.warn(f"SAPI experiments: {results}")
+def test_engine_words_win_over_pacing():
+    sp = speech.Speaker(engine_factory=lambda: FakeEngine(delay=0.02))
+    units = units_of("One two three four.", "Five six seven.")
+    words, done = [], threading.Event()
+    sp.start(units, 0, on_word=lambda s, w: words.append((s, w)), on_done=lambda f: done.set())
+    assert done.wait(10)
+    assert words == [(0, 0), (0, 1), (0, 2), (0, 3), (1, 0), (1, 1), (1, 2)]  # no paced duplicates
