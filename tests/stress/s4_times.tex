@@ -1,0 +1,32 @@
+\documentclass[12pt]{article}
+\usepackage[a4paper,margin=3cm]{geometry}
+\usepackage{mathptmx,amsmath}
+\title{Stress Test Four: Times Fonts and Margins}
+\author{E. Edge}
+\date{}
+\begin{document}
+\maketitle
+\section{Physics in Times}
+Newton's second law $F = ma$ and the energy $E = mc^2$ are set in Times, as many journals do.\marginpar{A note in the margin.}
+The Schr\"odinger equation reads
+\begin{equation}
+ i\hbar\frac{\partial}{\partial t}\Psi(\mathbf{r},t) = \left[-\frac{\hbar^2}{2m}\nabla^2 + V(\mathbf{r},t)\right]\Psi(\mathbf{r},t).
+\end{equation}
+Maxwell's equations in differential form:
+\begin{align}
+ \nabla\cdot\mathbf{E} &= \frac{\rho}{\varepsilon_0}, & \nabla\cdot\mathbf{B} &= 0,\\
+ \nabla\times\mathbf{E} &= -\frac{\partial\mathbf{B}}{\partial t}, & \nabla\times\mathbf{B} &= \mu_0\mathbf{J} + \mu_0\varepsilon_0\frac{\partial\mathbf{E}}{\partial t}.
+\end{align}
+A footnote with maths.\footnote{Here $\hbar = h/2\pi \approx 1.055\times10^{-34}$\,J\,s.}
+\begin{itemize}
+\item Kinetic energy: $K = \tfrac12 m v^2$.
+\item Momentum: $p = mv$, so $K = p^2/(2m)$.
+\item Work: $W = \int_a^b F(x)\,dx$.
+\end{itemize}
+Plain text keeps flowing after the list: this sentence contains no mathematics at all and should look exactly
+like ordinary text, without any change of font, size or spacing. Words such as \emph{emphasis} and
+\textbf{bold} are ordinary formatting, not formulas.
+\section{Chemistry}
+Water is H$_2$O, carbon dioxide is CO$_2$, and the reaction 2H$_2$ + O$_2$ $\rightarrow$ 2H$_2$O releases energy.
+The ion NH$_4^+$ carries a charge. Temperatures of 25\,$^\circ$C and concentrations of 0.1\,mol\,L$^{-1}$ are typical.
+\end{document}

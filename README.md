@@ -133,7 +133,7 @@ pip install pytest
 python -m pytest            # OCR tests are skipped automatically if Tesseract is missing
 ```
 
-`tests/fixtures` holds small LaTeX stress documents (mathematics in every shape, a two-column paper,
+`tests/stress` holds small LaTeX stress documents (mathematics in every shape, a two-column paper,
 wrapped/rotated/long/wide tables and charts, Times-font maths with margin notes) that the tests convert.
 
 The tests check, among other things, that every paragraph of the original appears word for word in the

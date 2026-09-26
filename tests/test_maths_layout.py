@@ -1,4 +1,4 @@
-"""Stress documents: mathematics, two-column layout, figures and tables (see tests/fixtures)."""
+"""Stress documents: mathematics, two-column layout, figures and tables (see tests/stress)."""
 from pathlib import Path
 
 import pytest
@@ -7,7 +7,7 @@ from dyslexia_converter import pipeline
 from dyslexia_converter.extract import pdf_reader
 from dyslexia_converter.model import BlockKind
 
-FIX = Path(__file__).parent / "fixtures"
+FIX = Path(__file__).parent / "stress"
 
 
 def load(name):
