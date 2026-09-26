@@ -5,6 +5,10 @@ Missing entries fall back to English. tests/test_i18n.py checks that every text 
 """
 
 T: dict[str, dict[str, str]] = {
+    "Reading aloud stopped because of an error:": {
+        "nl": "Het voorlezen is gestopt door een fout:", "fr": "La lecture à voix haute s'est arrêtée à cause d'une erreur :",
+        "de": "Das Vorlesen wurde wegen eines Fehlers beendet:", "es": "La lectura en voz alta se detuvo por un error:",
+        "it": "La lettura ad alta voce si è interrotta a causa di un errore:"},
     # ---------------------------------------------------------------- help: updates
     'Updates and source code': {
         'nl': 'Updates en broncode',

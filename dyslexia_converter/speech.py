@@ -8,6 +8,7 @@ unavailable.
 """
 from __future__ import annotations
 
+import logging
 import re
 import sys
 import threading
@@ -17,6 +18,7 @@ from typing import Callable, Optional
 import pymupdf
 
 Rect = tuple[float, float, float, float]
+log = logging.getLogger(__name__)
 
 # words that end with a full stop but do not end a sentence
 _ABBREVIATIONS = {"e.g.", "i.e.", "etc.", "et", "al.", "cf.", "vs.", "dr.", "mr.", "mrs.", "ms.", "prof.", "fig.",
@@ -133,12 +135,114 @@ def _com_init():
     if sys.platform != "win32":
         return None
     try:
-        import comtypes
+        import pythoncom
 
-        comtypes.CoInitialize()
-        return comtypes
+        pythoncom.CoInitialize()
+        return pythoncom
     except Exception:
         return None
+
+
+# Windows language ids (the low bits of an LCID, as SAPI voices report them) -> language codes
+_LANG_IDS = {0x09: "en", 0x13: "nl", 0x07: "de", 0x0C: "fr", 0x0A: "es", 0x10: "it", 0x16: "pt"}
+
+
+class SapiEngine:
+    """The Windows speech engine (SAPI), used directly.
+
+    Speaking is started asynchronously and the word being said is read from the engine's status a few
+    times per second, so no COM callbacks are needed (those often never arrive on a background thread,
+    which left reading aloud silent). Offers the small part of the pyttsx3 engine interface the Speaker
+    uses. ``output_wav``: speak into a WAV file instead of the speakers (for tests on machines without
+    sound).
+    """
+
+    POLL_MS = 60
+    DEFAULT_WPM = 180  # SAPI rate 0
+
+    def __init__(self, output_wav: Optional[str] = None):
+        import win32com.client
+
+        self._voice = win32com.client.Dispatch("SAPI.SpVoice")
+        self._stream = None
+        if output_wav:
+            self._stream = win32com.client.Dispatch("SAPI.SpFileStream")
+            self._stream.Open(output_wav, 3)  # SSFMCreateForWrite
+            self._voice.AudioOutputStream = self._stream
+        self._cb = None
+        self._text = ""
+        self._stopped = False
+
+    def getProperty(self, key: str):
+        if key != "voices":
+            return None
+        out = []
+        tokens = self._voice.GetVoices()
+        for i in range(tokens.Count):
+            tok = tokens.Item(i)
+            langs = []
+            try:
+                for part in str(tok.GetAttribute("Language")).split(";"):
+                    code = _LANG_IDS.get(int(part, 16) & 0x3FF)
+                    if code:
+                        langs.append(code)
+            except Exception:
+                pass
+            out.append(_VoiceInfo(tok.Id, tok.GetDescription(), langs))
+        return out
+
+    def setProperty(self, key: str, value) -> None:
+        if key == "rate":  # words per minute -> SAPI's -10..10 (10 = three times as fast)
+            import math
+
+            rate = 10 * math.log(max(0.1, float(value) / self.DEFAULT_WPM)) / math.log(3)
+            self._voice.Rate = max(-10, min(10, int(round(rate))))
+        elif key == "voice":
+            tokens = self._voice.GetVoices()
+            for i in range(tokens.Count):
+                if tokens.Item(i).Id == value:
+                    self._voice.Voice = tokens.Item(i)
+                    break
+
+    def connect(self, name: str, cb) -> None:
+        if name == "started-word":
+            self._cb = cb
+
+    def say(self, text: str) -> None:
+        self._text = text
+
+    def runAndWait(self) -> None:
+        if self._stopped:
+            return
+        self._voice.Speak(self._text, 1 | 2)  # SVSFlagsAsync | SVSFPurgeBeforeSpeak
+        last = -1
+        while True:
+            done = self._voice.WaitUntilDone(self.POLL_MS)
+            if self._stopped:
+                self._voice.Speak("", 1 | 2)  # stop at once
+                return
+            st = self._voice.Status
+            pos = st.InputWordPosition
+            if pos != last and st.InputWordLength > 0 and self._cb is not None:
+                last = pos
+                self._cb(None, pos, st.InputWordLength)
+            if done:
+                return
+
+    def stop(self) -> None:
+        self._stopped = True  # the speaking thread sees this within POLL_MS and stops the voice
+
+    def close(self) -> None:
+        if self._stream is not None:
+            self._stream.Close()
+            self._stream = None
+
+
+@dataclass
+class _VoiceInfo:
+    id: str
+    name: str
+    languages: list
 
 
 class Speaker:
@@ -157,10 +261,16 @@ class Speaker:
         self._engine = None
         self._available: Optional[bool] = None
         self._voices: Optional[list[tuple[str, str, str]]] = None
+        self.last_error = ""  # why speaking failed, for the user
 
     def _make(self):
         if self._factory is not None:
             return self._factory()
+        if sys.platform == "win32":
+            try:
+                return SapiEngine()
+            except Exception:
+                log.warning("Windows speech (SAPI) unavailable, trying pyttsx3", exc_info=True)
         from pyttsx3.engine import Engine
 
         # a new engine every time: pyttsx3.init() would hand back one made on another thread, and the
@@ -170,6 +280,7 @@ class Speaker:
     # ---------------------------------------------------------------- facts
     def available(self) -> bool:
         if self._available is None:
+            _com_init()
             try:
                 eng = self._make()
                 self._voices = [(v.id, v.name, " ".join(str(x) for x in (getattr(v, "languages", None) or [])))
@@ -179,7 +290,9 @@ class Speaker:
                     eng.stop()
                 except Exception:
                     pass
-            except Exception:
+            except Exception as e:
+                log.warning("No speech engine: %s", e, exc_info=True)
+                self.last_error = f"{type(e).__name__}: {e}"
                 self._available = False
                 self._voices = []
         return self._available
@@ -231,6 +344,7 @@ class Speaker:
         self.stop()
         self._stop = threading.Event()
         stop = self._stop
+        self.last_error = ""
 
         def run():
             finished = False
@@ -261,10 +375,18 @@ class Speaker:
                     eng.runAndWait()
                 else:
                     finished = not stop.is_set()
-            except Exception:
+            except Exception as e:  # tell the user instead of staying silent
+                log.exception("reading aloud failed")
+                self.last_error = f"{type(e).__name__}: {e}"
                 finished = False
             finally:
+                eng_done = self._engine
                 self._engine = None
+                if eng_done is not None and hasattr(eng_done, "close"):
+                    try:
+                        eng_done.close()
+                    except Exception:
+                        pass
                 if com is not None:
                     com.CoUninitialize()
                 on_done(finished)

@@ -81,6 +81,11 @@ class ConverterApp:
     def fs(self, base: float = 15) -> float:
         return round(base * float(self.ui.get("text_scale", 1.0)), 1)
 
+    @staticmethod
+    def end_space() -> ft.Control:
+        """Room below the last control of a scrolling tab, so it does not sit against the window edge."""
+        return ft.Container(height=56)
+
     def text(self, value: str, size: float = 15, **kw) -> ft.Text:
         return ft.Text(value, size=self.fs(size), **kw)
 
@@ -424,6 +429,7 @@ class ConverterApp:
                 ft.FilledButton(t("Save as My Settings"), icon=ft.Icons.SAVE, on_click=self.on_save_settings),
                 ft.OutlinedButton(t("Restore defaults"), icon=ft.Icons.RESTORE, on_click=self.on_restore_defaults),
             ], wrap=True),
+            self.end_space(),
         ], scroll=ft.ScrollMode.AUTO, spacing=8, expand=True)
         self.tf_first, self.tf_last = tf_first, tf_last
 
@@ -552,7 +558,7 @@ class ConverterApp:
                         ft.Icon(ft.Icons.ARROW_FORWARD, size=18, tooltip=t("suggested")),
                         self.text(c.replacement, 16, weight=ft.FontWeight.BOLD),
                         self.text(info + "  ·  " + source_names.get(c.source, c.source), 12)], wrap=True),
-                self.text(t("In the text:"), 12, color=self.pal["muted"]),
+                self.text(t("In the text:"), 12, color=ft.Colors.ON_SURFACE_VARIANT),
                 # the whole sentence, with the uncertain word highlighted
                 ft.Text(spans=[
                     ft.TextSpan(before),
@@ -685,6 +691,7 @@ class ConverterApp:
                     ft.OutlinedButton(t("Clear log"), icon=ft.Icons.DELETE_OUTLINE, on_click=self.on_clear_ai_log)],
                    wrap=True),
             self.ai_log_list,
+            self.end_space(),
         ], scroll=ft.ScrollMode.AUTO, spacing=10, expand=True), padding=16, expand=True)
 
     LOG_SHOWN = 50  # latest requests shown in the AI tab; the saved log has them all
@@ -717,11 +724,11 @@ class ConverterApp:
         def block(label: str, value: str) -> ft.Control:
             return ft.Column([self.text(label, 13, weight=ft.FontWeight.BOLD),
                               ft.Container(self.text(value, 12, selectable=True),
-                                           padding=8, border_radius=6, bgcolor=self.pal["surface_low"])],
+                                           padding=8, border_radius=6, bgcolor=ft.Colors.SURFACE_CONTAINER_LOW)],
                              spacing=4)
 
         return ft.ExpansionTile(
-            title=self.text(title, 14), subtitle=self.text(sub, 12, color=self.pal["muted"]),
+            title=self.text(title, 14), subtitle=self.text(sub, 12, color=ft.Colors.ON_SURFACE_VARIANT),
             controls=[ft.Container(ft.Column([
                 block(t("Document snippets sent"), e.prompt),
                 block(t("Answer received"), e.answer or e.error),
@@ -875,7 +882,7 @@ class ConverterApp:
             label = t("Citations") if r.task.name == "citations" else t("OCR words")
             lines.append(ft.Text(label, size=self.fs(13), weight=ft.FontWeight.BOLD))
             lines.append(ft.Container(ft.Text(r.prompt, size=self.fs(12), selectable=True),
-                                      padding=8, border_radius=6, bgcolor=self.pal["surface_low"]))
+                                      padding=8, border_radius=6, bgcolor=ft.Colors.SURFACE_CONTAINER_LOW))
         return ft.Container(ft.Column(lines, spacing=8, scroll=ft.ScrollMode.AUTO), width=640, height=420)
 
     # ---------------------------------------------------------------- settings tab
@@ -928,6 +935,7 @@ class ConverterApp:
                               "completely optional and changes nothing in the app."), 13),
                   ft.Row([self.coffee_button()])]),
             self.text(f"Dyslexia Converter {__version__}", 12),
+            self.end_space(),
         ], scroll=ft.ScrollMode.AUTO, spacing=12, expand=True, horizontal_alignment=ft.CrossAxisAlignment.STRETCH),
             padding=16, expand=True)
 
@@ -984,7 +992,8 @@ class ConverterApp:
                 ft.OutlinedButton(t("Project on GitHub"), icon=ft.Icons.OPEN_IN_NEW, url=PROJECT_URL,
                                   tooltip=t("Opens GitHub in your web browser")),
             ], wrap=True),
-            self.text(PROJECT_URL, 12, selectable=True, color=self.pal["muted"]),
+            self.text(PROJECT_URL, 12, selectable=True, color=ft.Colors.ON_SURFACE_VARIANT),
+            self.end_space(),
         ], scroll=ft.ScrollMode.AUTO, spacing=10, expand=True), padding=16, expand=True)
 
     # ================================================================ dialogs
@@ -1173,13 +1182,14 @@ class ConverterApp:
         available = bool(voices)
         if not available:
             self.read_btn.disabled = True
-            self.read_btn.tooltip = t("No speech voices were found on this device.")
+            self.read_btn.tooltip = t("No speech voices were found on this device.") + (
+                f" ({self.speaker.last_error})" if self.speaker.last_error else "")
         return ft.Container(ft.Row([
             self.read_btn, self.pause_btn, self.stop_btn,
             self.text(t("Speed"), 13), self.speed_slider, self.speed_label, self.voice_dd, self.follow_cb,
         ], wrap=True, spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER),
             padding=ft.Padding.symmetric(horizontal=8, vertical=2), border_radius=10,
-            bgcolor=self.pal["surface_low"], visible=self._speech_allowed())
+            bgcolor=ft.Colors.SURFACE_CONTAINER_LOW, visible=self._speech_allowed())
 
     def _speech_allowed(self) -> bool:
         """Speech plays on the computer running the app: in the web version that is the server, not the reader."""
@@ -1271,6 +1281,9 @@ class ConverterApp:
         self._reading = False
         if finished:
             self._read_pos = None
+        elif was_reading and self.speaker.last_error:
+            self.notify(self.t("Reading aloud stopped because of an error:") + " " + self.speaker.last_error,
+                        error=True)
         self._update_read_buttons()
         if finished and was_reading:
             await self.show_pages()  # remove the highlight

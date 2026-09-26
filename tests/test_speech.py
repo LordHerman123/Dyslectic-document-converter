@@ -153,3 +153,61 @@ def test_converted_document_can_be_read(paper):
     assert len(units) > 5 and all(s.words for s in units)
     text = " ".join(s.text for s in units)
     assert "  " not in text and len(text) > 500
+
+
+# ------------------------------------------------------------------ the real Windows voice (CI runs on Windows)
+import sys  # noqa: E402
+
+import pytest  # noqa: E402
+
+windows_only = pytest.mark.skipif(sys.platform != "win32", reason="the Windows speech engine")
+
+
+def _sapi_or_skip(wav):
+    engine = speech.SapiEngine(output_wav=str(wav))
+    if not engine.getProperty("voices"):
+        engine.close()
+        pytest.skip("no voices installed on this machine")
+    return engine
+
+
+@windows_only
+def test_windows_voice_speaks_and_reports_each_word(tmp_path):
+    wav = tmp_path / "speech.wav"
+    engine = _sapi_or_skip(wav)
+    voices = engine.getProperty("voices")
+    assert all(v.id and v.name for v in voices)
+    positions = []
+    engine.connect("started-word", lambda name, loc, length: positions.append((loc, length)))
+    engine.setProperty("rate", 400)
+    engine.say("Reading aloud works on Windows.")
+    engine.runAndWait()
+    engine.close()
+    assert [p for p, _ in positions] == sorted(p for p, _ in positions) and len(positions) >= 4
+    assert positions[0][0] == 0 and wav.stat().st_size > 2000  # sound was produced
+
+
+@windows_only
+def test_windows_voice_through_the_speaker_and_stopping(tmp_path):
+    _sapi_or_skip(tmp_path / "probe.wav").close()
+    n = {"i": 0}
+
+    def factory():
+        n["i"] += 1
+        return speech.SapiEngine(output_wav=str(tmp_path / f"out{n['i']}.wav"))
+
+    sp = speech.Speaker(engine_factory=factory)
+    assert sp.available() and sp.voices()
+    units = units_of("One two three.", "Four five six seven.")
+    words, done, result = [], threading.Event(), {}
+    sp.start(units, 0, speed=2.0, on_word=lambda s, w: words.append((s, w)),
+             on_done=lambda finished: (result.update(finished=finished), done.set()))
+    assert done.wait(30) and result["finished"] is True, sp.last_error
+    assert (0, 0) in words and (1, 3) in words
+    # stopping in the middle of a long sentence
+    done.clear()
+    sp.start(units_of(" ".join(["word"] * 200)), 0, on_done=lambda finished: (result.update(finished=finished),
+                                                                           done.set()))
+    time.sleep(1.0)
+    sp.stop()
+    assert done.wait(5) and result["finished"] is False and not sp.speaking
