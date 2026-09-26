@@ -5,6 +5,18 @@ Missing entries fall back to English. tests/test_i18n.py checks that every text 
 """
 
 T: dict[str, dict[str, str]] = {
+    'Tip: click on the converted page to start reading there.': {
+        'nl': 'Tip: klik op de omgezette pagina om daar te beginnen met voorlezen.',
+        'fr': 'Astuce : cliquez sur la page convertie pour commencer la lecture à cet endroit.',
+        'de': 'Tipp: Klicken Sie auf die umgewandelte Seite, um dort mit dem Vorlesen zu beginnen.',
+        'es': 'Consejo: haz clic en la página convertida para empezar a leer desde allí.',
+        'it': 'Suggerimento: fai clic sulla pagina convertita per iniziare a leggere da lì.'},
+    'No {language} voice is installed on this computer, so another voice reads the text. You can add one in Windows Settings > Time & language > Speech > Add voices, then restart the app.': {
+        'nl': 'Er is geen stem voor het {language} geïnstalleerd op deze computer, dus een andere stem leest de tekst. Je kunt er een toevoegen via Windows-instellingen > Tijd en taal > Spraak > Stemmen toevoegen, en daarna de app opnieuw starten.',
+        'fr': "Aucune voix en {language} n'est installée sur cet ordinateur ; une autre voix lit donc le texte. Vous pouvez en ajouter une dans Paramètres Windows > Heure et langue > Voix > Ajouter des voix, puis redémarrer l'appli.",
+        'de': 'Auf diesem Computer ist keine Stimme für {language} installiert, daher liest eine andere Stimme den Text. Sie können eine hinzufügen unter Windows-Einstellungen > Zeit und Sprache > Sprachausgabe > Stimmen hinzufügen und danach die App neu starten.',
+        'es': 'No hay ninguna voz en {language} instalada en este ordenador, así que otra voz lee el texto. Puedes añadir una en Configuración de Windows > Hora e idioma > Voz > Agregar voces y luego reiniciar la app.',
+        'it': "Su questo computer non è installata una voce in {language}, quindi il testo viene letto da un'altra voce. Puoi aggiungerne una in Impostazioni di Windows > Data/ora e lingua > Voce > Aggiungi voci e poi riavviare l'app."},
     "Reading aloud stopped because of an error:": {
         "nl": "Het voorlezen is gestopt door een fout:", "fr": "La lecture à voix haute s'est arrêtée à cause d'une erreur :",
         "de": "Das Vorlesen wurde wegen eines Fehlers beendet:", "es": "La lectura en voz alta se detuvo por un error:",

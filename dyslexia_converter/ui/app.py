@@ -464,8 +464,11 @@ class ConverterApp:
                                                   border=ft.Border.all(1, self.pal["frame"]))],
                                     expand=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                                     visible=self.view_mode in ("orig", "side"))
+        conv_view = ft.GestureDetector(content=self.conv_img, on_tap_down=self.on_page_tap,
+                                       on_size_change=self.on_conv_size, mouse_cursor=ft.MouseCursor.CLICK,
+                                       expand=True)
         self.conv_panel = ft.Column([nav("conv", self.conv_label),
-                                     ft.Container(self.conv_img, expand=True,
+                                     ft.Container(conv_view, expand=True,
                                                   border=ft.Border.all(1, self.pal["frame"]))],
                                     expand=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                                     visible=self.view_mode in ("conv", "side"))
@@ -1165,8 +1168,6 @@ class ConverterApp:
                                         tooltip=t("Reads the converted document aloud with the voices on this "
                                                   "computer, from the page you are looking at. Nothing leaves "
                                                   "this device."))
-        self.pause_btn = ft.IconButton(ft.Icons.PAUSE, tooltip=t("Pause"), on_click=self.on_read_pause,
-                                       disabled=True)
         self.stop_btn = ft.IconButton(ft.Icons.STOP, tooltip=t("Stop"), on_click=self.on_read_stop, disabled=True)
         speed = float(self.ui.get("read_speed", 1.0))
         self.speed_label = self.text(_speed_text(speed), 13)
@@ -1185,8 +1186,10 @@ class ConverterApp:
             self.read_btn.tooltip = t("No speech voices were found on this device.") + (
                 f" ({self.speaker.last_error})" if self.speaker.last_error else "")
         return ft.Container(ft.Row([
-            self.read_btn, self.pause_btn, self.stop_btn,
+            self.read_btn, self.stop_btn,
             self.text(t("Speed"), 13), self.speed_slider, self.speed_label, self.voice_dd, self.follow_cb,
+            self.text(t("Tip: click on the converted page to start reading there."), 12,
+                      color=ft.Colors.ON_SURFACE_VARIANT),
         ], wrap=True, spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER),
             padding=ft.Padding.symmetric(horizontal=8, vertical=2), border_radius=10,
             bgcolor=ft.Colors.SURFACE_CONTAINER_LOW, visible=self._speech_allowed())
@@ -1196,11 +1199,28 @@ class ConverterApp:
         return not self.page.web
 
     def _update_read_buttons(self) -> None:
+        """One button: Read aloud -> Pause while reading -> Continue when paused."""
         t = self.t
-        self.read_btn.content = t("Read aloud") if self._read_pos is None or self._reading else t("Continue")
-        self.read_btn.disabled = self._reading or not self.speaker.voices()
-        self.pause_btn.disabled = not self._reading
+        if self._reading:
+            self.read_btn.content, self.read_btn.icon = t("Pause"), ft.Icons.PAUSE
+        elif self._read_pos is not None:
+            self.read_btn.content, self.read_btn.icon = t("Continue"), ft.Icons.PLAY_ARROW
+        else:
+            self.read_btn.content, self.read_btn.icon = t("Read aloud"), ft.Icons.VOLUME_UP
+        self.read_btn.disabled = not self.speaker.voices()
         self.stop_btn.disabled = not self._reading and self._read_pos is None
+
+    def _check_voice_language(self) -> None:
+        """Say once per document when no voice for its language is installed, and how to add one."""
+        if self.ui.get("read_voice", "auto") != "auto" or not self.session:
+            return
+        lang = self.session.document.language
+        if getattr(self, "_voice_warned", None) == (self.source_path, lang) or self.speaker.voice_for(lang):
+            return
+        self._voice_warned = (self.source_path, lang)
+        self.notify(self.t("No {language} voice is installed on this computer, so another voice reads the text. "
+                           "You can add one in Windows Settings > Time & language > Speech > Add voices, then "
+                           "restart the app.", language=self.lang_name(lang)), error=True)
 
     def _voice(self) -> Optional[str]:
         v = self.ui.get("read_voice", "auto")
@@ -1210,20 +1230,56 @@ class ConverterApp:
         return self.speaker.voice_for(lang)
 
     async def on_read(self, e):
-        if not self.converted_pdf or self._reading:
-            return
+        """The read / pause / continue button."""
+        if self._reading:
+            await self.on_read_pause(e)
+        else:
+            await self.start_reading()
+
+    async def _units(self) -> list:
         if self._read_units is None:
             pages = sorted(self._page_map())
             skip = frozenset(range(pages[0])) if pages else frozenset()  # the contents page(s)
             self._read_units = await self.in_thread(lambda: speech.reading_units(self.converted_pdf,
                                                                                  skip_pages=skip))
-        units = self._read_units
+        return self._read_units
+
+    async def on_page_tap(self, e):
+        """Clicking on the converted page starts reading from the sentence clicked."""
+        if not self.converted_pdf or not self._speech_allowed() or not self.speaker.voices():
+            return
+        size = getattr(self, "_conv_box", None)
+        if not size:
+            return
+        page_w, page_h = await self.in_thread(preview.page_size, self.converted_pdf, self.conv_page)
+        pt = preview.tap_to_page(e.local_position.x, e.local_position.y, size[0], size[1], page_w, page_h)
+        if pt is None:
+            return  # beside the page
+        units = await self._units()
+        si = speech.sentence_at(units, self.conv_page, pt[0], pt[1])
+        if si is None:
+            return
+        if self._reading:
+            self._reading = False
+            self.speaker.stop()
+        await self.start_reading(si)
+
+    def on_conv_size(self, e):
+        self._conv_box = (e.width, e.height)
+
+    async def start_reading(self, start: Optional[int] = None) -> None:
+        """Read from sentence ``start``, or from where reading was paused / the page being looked at."""
+        if not self.converted_pdf or self._reading:
+            return
+        units = await self._units()
         if not units:
             self.notify(self.t("There is no text to read on these pages."))
             return
-        start = self._read_pos
-        if start is None or start >= len(units) or units[start].page != self.conv_page:
-            start = speech.first_sentence_on(units, self.conv_page)  # read from the page being looked at
+        if start is None:
+            start = self._read_pos
+            if start is None or start >= len(units) or units[start].page != self.conv_page:
+                start = speech.first_sentence_on(units, self.conv_page)  # read from the page being looked at
+        self._check_voice_language()
         loop = asyncio.get_running_loop()
 
         def post(coro):

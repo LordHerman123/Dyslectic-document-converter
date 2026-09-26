@@ -121,6 +121,22 @@ def reading_units(pdf: bytes | str, max_words: int = MAX_WORDS, skip_pages: froz
     return sentences
 
 
+def sentence_at(sentences: list[Sentence], page: int, x: float, y: float) -> Optional[int]:
+    """The sentence of the word nearest to a point on a page (a click on the preview)."""
+    best, best_d = None, None
+    for si, s in enumerate(sentences):
+        for w in s.words:
+            if w.page != page:
+                continue
+            for x0, y0, x1, y1 in w.rects:
+                dx = max(x0 - x, 0.0, x - x1)
+                dy = max(y0 - y, 0.0, y - y1)
+                d = dx * dx + (dy * 3) ** 2  # a line above or below counts more than a gap in the line
+                if best_d is None or d < best_d:
+                    best, best_d = si, d
+    return best
+
+
 def first_sentence_on(sentences: list[Sentence], page: int) -> int:
     """Where reading starts when the reader is looking at ``page``."""
     for i, s in enumerate(sentences):
@@ -275,6 +291,147 @@ class SapiEngine:
             self._stream = None
 
 
+def _lang_code(tag: str) -> list[str]:
+    """ "nl-NL" -> ["nl", "nl-nl"] (the language, then the exact tag)."""
+    t = (tag or "").strip().lower().replace("_", "-")
+    return [t.split("-")[0], t] if t else []
+
+
+class WinRtEngine:
+    """The modern Windows speech engine (Windows 10/11).
+
+    Unlike SAPI it sees every voice installed in Windows Settings (Time & language > Speech), so documents
+    in Dutch, German, French, ... are read with a voice for their language. It makes the audio and reports
+    when each word starts, so the highlight follows the voice exactly: the audio is played and the words
+    are reported at their times. Offers the part of the pyttsx3 engine interface the Speaker uses.
+    ``play=False`` makes the audio without playing it (tests on machines without sound).
+    """
+
+    DEFAULT_WPM = 170  # speaking rate 1.0
+
+    def __init__(self, play: bool = True):
+        from winrt.windows.media.speechsynthesis import SpeechSynthesizer
+
+        self._cls = SpeechSynthesizer
+        self._synth = SpeechSynthesizer()
+        self._synth.options.include_word_boundary_metadata = True
+        self._play = play
+        self._cb = None
+        self._text = ""
+        self._stopped = False
+        self.last_wav = b""
+        self.last_words: list[tuple[float, int, int]] = []  # (seconds, position, length) of the last text
+
+    def getProperty(self, key: str):
+        if key != "voices":
+            return None
+        return [_VoiceInfo(v.id, f"{v.display_name} ({v.language})", _lang_code(v.language))
+                for v in self._cls.all_voices]
+
+    def setProperty(self, key: str, value) -> None:
+        if key == "rate":
+            self._synth.options.speaking_rate = max(0.5, min(6.0, float(value) / self.DEFAULT_WPM))
+        elif key == "voice":
+            for v in self._cls.all_voices:
+                if v.id == value:
+                    self._synth.voice = v
+                    break
+
+    def connect(self, name: str, cb) -> None:
+        if name == "started-word":
+            self._cb = cb
+
+    def say(self, text: str) -> None:
+        self._text = text
+
+    async def _synthesize(self, text: str) -> tuple[bytes, list[tuple[float, int, int]]]:
+        from winrt.windows.media.core import SpeechCue
+        from winrt.windows.storage.streams import DataReader
+
+        stream = await self._synth.synthesize_text_to_stream_async(text)
+        words = []
+        for track in stream.timed_metadata_tracks:
+            for cue in track.cues:
+                c = cue.as_(SpeechCue)
+                pos = c.start_position_in_input
+                pos = getattr(pos, "value", pos)
+                if pos is None:
+                    continue
+                end = c.end_position_in_input
+                end = getattr(end, "value", end)
+                length = (end - pos + 1) if end is not None else len(c.text or "")
+                words.append((c.start_time.total_seconds(), int(pos), max(1, int(length))))
+        words.sort()
+        size = int(stream.size)
+        reader = DataReader(stream.get_input_stream_at(0))
+        await reader.load_async(size)
+        buf = bytearray(size)
+        reader.read_bytes(buf)
+        return bytes(buf), words
+
+    def runAndWait(self) -> None:
+        import asyncio
+
+        if self._stopped:
+            return
+        self.last_wav, self.last_words = asyncio.run(self._synthesize(self._text))
+        if not self._play:
+            for _, pos, length in self.last_words:
+                if self._stopped:
+                    return
+                if self._cb is not None:
+                    self._cb(None, pos, length)
+            return
+        self._play_and_follow()
+
+    def _play_and_follow(self) -> None:
+        import os
+        import tempfile
+        import winsound
+
+        duration = _wav_seconds(self.last_wav)
+        fd, path = tempfile.mkstemp(suffix=".wav", prefix="dc-read-")
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(self.last_wav)
+            winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT)
+            t0 = time.monotonic()
+            pending = list(self.last_words)
+            while True:
+                now = time.monotonic() - t0
+                while pending and pending[0][0] <= now:
+                    _, pos, length = pending.pop(0)
+                    if self._cb is not None:
+                        self._cb(None, pos, length)
+                if self._stopped:
+                    winsound.PlaySound(None, 0)  # stop the sound
+                    return
+                if now >= duration:
+                    return
+                nxt = pending[0][0] - now if pending else duration - now
+                time.sleep(max(0.01, min(0.05, nxt)))
+        finally:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+    def stop(self) -> None:
+        self._stopped = True
+
+
+def _wav_seconds(data: bytes) -> float:
+    """Length of a WAV file's sound."""
+    import io
+    import wave
+
+    try:
+        with wave.open(io.BytesIO(data)) as w:
+            return w.getnframes() / float(w.getframerate() or 1)
+    except Exception:
+        return 0.0
+
+
 @dataclass
 class _VoiceInfo:
     id: str
@@ -305,6 +462,12 @@ class Speaker:
         if self._factory is not None:
             return self._factory()
         if sys.platform == "win32":
+            try:
+                eng = WinRtEngine()  # all installed voices, exact word timings
+                if eng.getProperty("voices"):
+                    return eng
+            except Exception:
+                log.info("modern Windows speech unavailable, using SAPI", exc_info=True)
             try:
                 return SapiEngine()
             except Exception:

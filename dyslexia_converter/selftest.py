@@ -40,7 +40,7 @@ def _speak_test() -> str:
     import tempfile
     import threading
 
-    from .speech import SapiEngine, Sentence, Speaker, Word
+    from .speech import SapiEngine, Sentence, Speaker, Word, WinRtEngine
 
     with tempfile.TemporaryDirectory() as d:
         wav = Path(d) / "speech.wav"
@@ -49,13 +49,26 @@ def _speak_test() -> str:
         for w in words:
             w.start, pos = pos, pos + len(w.text) + 1
         heard, done = [], threading.Event()
-        sp = Speaker(engine_factory=lambda: SapiEngine(output_wav=str(wav)))
+        modern = None
+        try:
+            modern = WinRtEngine(play=False)
+            voices = modern.getProperty("voices")
+        except Exception as e:  # noqa: BLE001
+            voices, note = [], f"modern voices unavailable: {e}"
+        if voices:  # the engine the app uses on Windows 10/11
+            note = "modern voices: " + ", ".join(sorted({v.languages[0] for v in voices if v.languages}))
+            sp = Speaker(engine_factory=lambda: modern)
+        else:
+            sp = Speaker(engine_factory=lambda: SapiEngine(output_wav=str(wav)))
         sp.start([Sentence(words)], 0, on_word=lambda s, w: heard.append(w), on_done=lambda f: done.set())
-        done.wait(30)
+        done.wait(60)
+        if voices:
+            wav.write_bytes(modern.last_wav)
         size = wav.stat().st_size if wav.exists() else 0
         if sp.last_error or size < 2000:
             return f"Speech test FAILED: WAV {size} bytes, {sp.last_error}"
-        return f"Speech test: OK, WAV {size} bytes ({len(set(heard))} words reported while writing a file)"
+        return (f"Speech test: OK, WAV {size} bytes, {len(set(heard))} of {len(words)} words timed; "
+                f"{note}")
 
 
 def run(argv: list[str]) -> int:

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dyslexia-converter"
-version = "1.6.1"
+version = "1.6.2"
 description = "Convert PDFs (papers, textbooks, reports) into cleaner, dyslexia-friendly, printable layouts without changing the text."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -21,7 +21,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-app = ["flet>=1.0,<2", "pyttsx3>=2.90", "pywin32>=306; sys_platform == 'win32'"]
+app = ["flet>=1.0,<2", "pyttsx3>=2.90", "pywin32>=306; sys_platform == 'win32'",
+       "winrt-runtime>=2.3; sys_platform == 'win32'", "winrt-Windows.Media.SpeechSynthesis>=2.3; sys_platform == 'win32'", "winrt-Windows.Media.Core>=2.3; sys_platform == 'win32'", "winrt-Windows.Storage.Streams>=2.3; sys_platform == 'win32'", "winrt-Windows.Foundation>=2.3; sys_platform == 'win32'", "winrt-Windows.Foundation.Collections>=2.3; sys_platform == 'win32'"]
 ai = ["anthropic>=1.0"]
 keyring = ["keyring>=24"]
 dev = ["pytest>=8", "fonttools>=4", "brotli"]

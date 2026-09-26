@@ -16,11 +16,11 @@ Recipients don't need Python or Tesseract: both are included.
 
 The GitHub workflow `.github/workflows/windows-release.yml` builds the release on a Windows machine:
 
-* **Publishing a release:** push a tag such as `v1.6.1` (or create a release on GitHub with that tag). The
+* **Publishing a release:** push a tag such as `v1.6.2` (or create a release on GitHub with that tag). The
   workflow builds, runs a real conversion with the finished `.exe` as a self-test, and attaches two
   downloads to the GitHub release:
-  * `DyslexiaConverter-1.6.1-setup.exe` — an installer (per user, no administrator rights needed), or
-  * `DyslexiaConverter-1.6.1-windows.zip` — unzip anywhere and double-click `DyslexiaConverter.exe`.
+  * `DyslexiaConverter-1.6.2-setup.exe` — an installer (per user, no administrator rights needed), or
+  * `DyslexiaConverter-1.6.2-windows.zip` — unzip anywhere and double-click `DyslexiaConverter.exe`.
 * **Test builds:** every pull request that touches the app also builds, and the files are available
   under the workflow run's *Artifacts*. You can also start a build manually from the *Actions* tab.
 
@@ -29,8 +29,8 @@ The GitHub workflow `.github/workflows/windows-release.yml` builds the release o
 ```powershell
 # once: Python 3.11+, Tesseract (https://github.com/UB-Mannheim/tesseract/wiki), and optionally Inno Setup
 pip install -r requirements.txt pyinstaller "flet-cli>=1.0,<2" "flet-desktop>=1.0,<2"
-python windows\build.py                    # -> dist\DyslexiaConverter\ and dist\DyslexiaConverter-1.6.1-windows.zip
-iscc windows\installer.iss                 # optional -> dist\DyslexiaConverter-1.6.1-setup.exe
+python windows\build.py                    # -> dist\DyslexiaConverter\ and dist\DyslexiaConverter-1.6.2-windows.zip
+iscc windows\installer.iss                 # optional -> dist\DyslexiaConverter-1.6.2-setup.exe
 ```
 
 `build.py` copies the installed Tesseract (from `C:\Program Files\Tesseract-OCR`, or `--tesseract-dir`)
