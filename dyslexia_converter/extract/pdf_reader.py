@@ -362,12 +362,20 @@ def _page_spans(page: pymupdf.Page) -> list[_Span]:
 
 def _attach_small(sp: _Span, rows: list[dict], rules: Optional[list[Rect]]) -> bool:
     """Put a sub-/superscript, limit or fraction part on the line it belongs to; False if none fits."""
+    # maths indices and limits can sit a little apart from their line; small print in the text font (a
+    # footnote marker, 'th') follows its word directly, and a smaller line beyond a column gutter is not part
+    # of it at all
+    math = is_math_font(sp.font) or bool(re.match(r"^(CMEX|MTEX|TXEX|PXEX|RMTEX)", base_font(sp.font), re.I))
+    if not math and len(sp.text.strip()) > 12:
+        return False
+
     def nearest(expand: float, key) -> Optional[dict]:
         best, best_d = None, None
         for row in rows:
             lo = row["baseline"] - (1.05 + expand) * row["size"]
             hi = row["baseline"] + (0.5 + expand) * row["size"]
-            if lo <= sp.mid_y <= hi and row["x0"] - 1.5 * row["size"] <= sp.x0 <= row["x1"] + 1.5 * row["size"]:
+            reach = (1.5 if math else 0.6) * row["size"]
+            if lo <= sp.mid_y <= hi and row["x0"] - reach <= sp.x0 <= row["x1"] + reach:
                 d = key(row)
                 if best is None or d < best_d:
                     best, best_d = row, d
@@ -428,16 +436,26 @@ def _rows(spans: list[_Span], rules: Optional[list[Rect]] = None) -> list[list[_
             if by_box:
                 # PyMuPDF sometimes reports a symbol's baseline at the height of a neighbouring index;
                 # its box still sits where the characters of its line do
-                if not row["baseline"] - 0.8 * size <= sp.mid_y <= row["baseline"] + 0.05 * size:
+                if sp.text.strip() in ("√", "∛", "∜"):
+                    # a radical sign's box sits high; it belongs to the line of the radicand right after it
+                    if not any(abs(o.x0 - sp.x1) < 1.5 and o.bbox[1] >= sp.bbox[1] - 1 for o in row["spans"]):
+                        continue
+                elif not row["baseline"] - 0.8 * size <= sp.mid_y <= row["baseline"] + 0.05 * size:
                     continue
             elif abs(sp.baseline - row["baseline"]) > 0.25 * size:
                 continue
             if any(sp.x0 < o.x1 - 1 and o.x0 < sp.x1 - 1 for o in row["spans"]):
                 continue
             # the PDF may split one line over several blocks; a column gutter is wider than a word gap
-            near = -1 <= sp.x0 - row["x1"] < 1.6 * sp.size or -1 <= row["x0"] - sp.x1 < 1.6 * sp.size \
+            # (formula pieces can be spaced further apart; plain words next to a narrow gutter cannot)
+            reach = (1.6 if is_math_font(sp.font) or any(is_math_font(o.font) for o in row["spans"]) else 0.7) \
+                * sp.size
+            near = -1 <= sp.x0 - row["x1"] < reach or -1 <= row["x0"] - sp.x1 < reach \
                 or (row["x0"] - 1 <= sp.x0 and sp.x1 <= row["x1"] + 1)  # fills a gap inside the line
-            if sp.block_no in row["blocks"] or near:
+            # the same PDF block, but not across a wide empty stretch (labels of side-by-side charts)
+            same_block = sp.block_no in row["blocks"] and (sp.x0 - row["x1"] < 5 * sp.size and
+                                                           row["x0"] - sp.x1 < 5 * sp.size)
+            if same_block or near:
                 row["spans"].append(sp)
                 row["blocks"].add(sp.block_no)
                 row["x0"] = min(row["x0"], sp.x0)
@@ -470,17 +488,20 @@ def _rows(spans: list[_Span], rules: Optional[list[Rect]] = None) -> list[list[_
                 size = max(a["size"], b["size"])
                 if abs(a["baseline"] - b["baseline"]) > 0.25 * size:
                     continue
-                touching = a["x0"] - 1.6 * size <= b["x1"] and b["x0"] - 1.6 * size <= a["x1"]
+                math_rows = any(is_math_font(o.font) for o in a["spans"] + b["spans"])
+                reach = (1.6 if math_rows else 0.7) * size
+                touching = a["x0"] - reach <= b["x1"] and b["x0"] - reach <= a["x1"]
                 if not touching:
                     # an integral sign with its limits (placed later, by position) can fill the gap
                     g0, g1 = min(a["x1"], b["x1"]), max(a["x0"], b["x0"])
                     fill = sorted((max(g0, o.x0), min(g1, o.x1)) for o in small
-                                  if o.x1 > g0 and o.x0 < g1 and abs(o.mid_y - a["baseline"]) < 1.2 * size)
+                                  if o.x1 > g0 and o.x0 < g1 and abs(o.mid_y - a["baseline"]) < 1.2 * size
+                                  and is_math_font(o.font))
                     covered, end = 0.0, g0
                     for f0, f1 in fill:
                         covered += max(0.0, f1 - max(f0, end))
                         end = max(end, f1)
-                    touching = g1 - g0 - covered < 1.6 * size
+                    touching = bool(fill) and g1 - g0 - covered < 1.6 * size
                 clash = any(x.x0 < y.x1 - 1 and y.x0 < x.x1 - 1 for x in a["spans"] for y in b["spans"])
                 if touching and not clash:
                     a["spans"] += b["spans"]
@@ -528,12 +549,14 @@ def _rows(spans: list[_Span], rules: Optional[list[Rect]] = None) -> list[list[_
     small_rows: list[dict] = []
     for sp in orphans:
         for row in small_rows:
-            if abs(sp.baseline - row["baseline"]) <= 0.3 * row["size"] and sp.x0 - row["x1"] < 3 * row["size"]:
+            if abs(sp.baseline - row["baseline"]) <= 0.3 * row["size"] and sp.x0 - row["x1"] < 3 * row["size"] \
+                    and row["x0"] - sp.x1 < 3 * row["size"]:
                 row["spans"].append(sp)
+                row["x0"] = min(row["x0"], sp.x0)
                 row["x1"] = max(row["x1"], sp.x1)
                 break
         else:
-            small_rows.append({"baseline": sp.baseline, "size": sp.size, "spans": [sp], "x1": sp.x1})
+            small_rows.append({"baseline": sp.baseline, "size": sp.size, "spans": [sp], "x0": sp.x0, "x1": sp.x1})
     out = []
     for row in rows + small_rows:
         row["spans"].sort(key=lambda sp: sp.x0)
@@ -816,7 +839,8 @@ def _text_lines(page: pymupdf.Page, pno: int) -> list[RawLine]:
 def _continues_line(prev: RawLine, ln: RawLine) -> bool:
     gap = ln.x0 - prev.x1
     size = max(prev.size, ln.size)
-    if prev.baseline and ln.baseline and abs(prev.baseline - ln.baseline) < 0.25 * size \
+    has_math = any(st.math for st in prev.styles + ln.styles)
+    if has_math and prev.baseline and ln.baseline and abs(prev.baseline - ln.baseline) < 0.25 * size \
             and abs(prev.size - ln.size) < 1.5 and -1 <= gap < 1.6 * size:
         return True  # same baseline: indices and formulas can make the boxes differ in height
     # Fragments of one PyMuPDF block may be far apart in justified text; across
@@ -905,20 +929,22 @@ def _figures(page: pymupdf.Page, doc: pymupdf.Document, lines: list[RawLine],
             continue
         regions.append([r, 0])
 
-    # merge overlapping regions
-    merged = True
-    while merged:
-        merged = False
-        for i in range(len(regions)):
-            for j in range(i + 1, len(regions)):
-                if _area(_intersect(_expand(regions[i][0], 4), regions[j][0])) > 0:
-                    regions[i][0] = _union(regions[i][0], regions[j][0])
-                    regions[i][1] = 0
-                    del regions[j]
-                    merged = True
+    def merge_overlapping(grow: float) -> None:
+        merged = True
+        while merged:
+            merged = False
+            for i in range(len(regions)):
+                for j in range(i + 1, len(regions)):
+                    if _area(_intersect(_expand(regions[i][0], grow), regions[j][0])) > 0:
+                        regions[i][0] = _union(regions[i][0], regions[j][0])
+                        regions[i][1] = 0
+                        del regions[j]
+                        merged = True
+                        break
+                if merged:
                     break
-            if merged:
-                break
+
+    merge_overlapping(4)
 
     # absorb labels (axis titles, legends) belonging to the figure; labels are
     # set smaller than body text, so body lines next to a figure are never taken
@@ -941,6 +967,7 @@ def _figures(page: pymupdf.Page, doc: pymupdf.Document, lines: list[RawLine],
                     grown = True
             if not grown:
                 break
+    merge_overlapping(0)  # labels taken in may make two regions overlap: one picture, not the same part twice
 
     figures: list[RawFigure] = []
     for rect, xref in regions:
@@ -1277,6 +1304,24 @@ def _ink_bands(pix: pymupdf.Pixmap, body: float) -> list[tuple[int, int]]:
             bands.append([int(y), int(y) + 1])
         else:
             bands[-1][1] = int(y) + 1
+    # a band much narrower than the picture (the limits of a sum, a lone denominator) is not a line of
+    # its own: it stays with the neighbouring band
+    cols = alpha > 20
+
+    def width(b0: int, b1: int) -> int:
+        inked_x = np.flatnonzero(cols[b0:b1].any(axis=0))
+        return int(inked_x[-1] - inked_x[0]) if len(inked_x) else 0
+    changed = True
+    while changed and len(bands) > 1:
+        changed = False
+        for i, (b0, b1) in enumerate(bands):
+            if width(b0, b1) < 0.3 * pix.width:
+                j = i - 1 if i > 0 and (i == len(bands) - 1 or b0 - bands[i - 1][1] <= bands[i + 1][0] - b1) else i + 1
+                lo, hi = min(i, j), max(i, j)
+                bands[lo] = [bands[lo][0], bands[hi][1]]
+                del bands[hi]
+                changed = True
+                break
     pad = int(0.1 * body * EQUATION_DPI / 72.0)
     return [(max(0, b0 - pad), min(pix.height, b1 + pad)) for b0, b1 in bands]
 
@@ -1435,6 +1480,13 @@ def _rule_tables(page: pymupdf.Page, existing: list[RawTable]) -> list[RawTable]
                 rows[-1][1].append(w)
             else:
                 rows.append([cy, [w]])
+        # a caption set between the top rules ("Table 1. ...") is not a row of the table
+        if rows and CAPTION_RE.match(" ".join(w[4] for w in sorted(rows[0][1], key=lambda w: w[0]))):
+            cap_bottom = max(w[3] for w in rows[0][1])
+            rows = rows[1:]
+            rect = (rect[0], cap_bottom + 0.5, rect[2], rect[3])
+            top = cap_bottom + 0.5
+            ys = [r for r in ys if r[1] > cap_bottom] or ys
         if len(rows) < 2:
             continue
         # hyphenated line ends mean running prose between two rules (a highlights box), not a table

@@ -12,7 +12,7 @@ from typing import Sequence, TypeVar
 
 T = TypeVar("T")
 
-MIN_GUTTER = 7.0  # points
+MIN_GUTTER = 5.0  # points (equation pictures are cropped with a little room)
 MIN_HGAP = 3.0
 
 
@@ -54,6 +54,19 @@ def _rows_left_to_right(items: list[T], bbox_of) -> list[T]:
     return out
 
 
+def _shared_gutter(a: list, b: list, bbox_of) -> bool:
+    if len(a) < 2 or len(b) < 2:
+        return False
+    boxes = [bbox_of(it) for it in a + b]
+    gaps = _gaps([(x[0], x[2]) for x in boxes], MIN_GUTTER)
+    for g0, g1 in gaps:
+        mid = (g0 + g1) / 2
+        if all(sum(1 for it in part if bbox_of(it)[2] <= mid) >= 1 for part in (a, b)) and \
+                sum(1 for x in boxes if x[0] >= mid) >= 2 and sum(1 for x in boxes if x[2] <= mid) >= 2:
+            return True
+    return False
+
+
 def reading_order(items: Sequence[T], bbox_of=lambda it: it.bbox) -> list[T]:
     items = list(items)
     if len(items) <= 1:
@@ -66,24 +79,30 @@ def _xycut(items: list[T], bbox_of, depth: int) -> list[T]:
         return _rows_left_to_right(items, bbox_of)
     boxes = [bbox_of(it) for it in items]
 
-    # 1) vertical gutter -> columns
-    x_gaps = _gaps([(b[0], b[2]) for b in boxes], MIN_GUTTER)
+    # 1) vertical gutter -> columns. A page number or other tiny mark at the very top or bottom may sit on
+    # the gutter; it must not hide the columns
+    top, bottom = min(b[1] for b in boxes), max(b[3] for b in boxes)
+    region_w = max(b[2] for b in boxes) - min(b[0] for b in boxes)
+
+    def stray(b) -> bool:
+        return b[2] - b[0] < max(20.0, 0.05 * region_w) and b[3] - b[1] < 15 and (b[1] - top < 1 or bottom - b[3] < 1)
+    x_gaps = _gaps([(b[0], b[2]) for b in boxes if not stray(b)], MIN_GUTTER)
     if x_gaps:
         region_h = max(b[3] for b in boxes) - min(b[1] for b in boxes)
         # choose the widest gutter whose both sides hold real text columns
         best = None
         for g0, g1 in sorted(x_gaps, key=lambda g: g[1] - g[0], reverse=True):
             mid = (g0 + g1) / 2
-            left = [b for b in boxes if b[2] <= mid]
-            right = [b for b in boxes if b[0] >= mid]
+            left = [b for b in boxes if b[2] <= mid and not stray(b)]
+            right = [b for b in boxes if b[0] >= mid and not stray(b)]
             tall_l = max((b[3] for b in left), default=0) - min((b[1] for b in left), default=0)
             tall_r = max((b[3] for b in right), default=0) - min((b[1] for b in right), default=0)
             if (len(left) >= 2 and len(right) >= 2) or (tall_l > region_h * 0.3 and tall_r > region_h * 0.3):
                 best = mid
                 break
         if best is not None:
-            left = [it for it in items if bbox_of(it)[2] <= best]
-            right = [it for it in items if bbox_of(it)[0] >= best]
+            left = [it for it in items if (bbox_of(it)[0] + bbox_of(it)[2]) / 2 <= best]
+            right = [it for it in items if (bbox_of(it)[0] + bbox_of(it)[2]) / 2 > best]
             return _xycut(left, bbox_of, depth + 1) + _xycut(right, bbox_of, depth + 1)
 
     # 2) horizontal white space -> bands
@@ -100,6 +119,15 @@ def _xycut(items: list[T], bbox_of, depth: int) -> list[T]:
             idx = sum(1 for c in cuts if cy > c)
             bands[idx].append(it)
         bands = [b for b in bands if b]
+        # two columns where one runs longer than the other leave white space across the page; bands that
+        # share one gutter are still one pair of columns
+        merged_bands: list[list[T]] = []
+        for band in bands:
+            if merged_bands and _shared_gutter(merged_bands[-1], band, bbox_of):
+                merged_bands[-1] = merged_bands[-1] + band
+            else:
+                merged_bands.append(band)
+        bands = merged_bands
         if len(bands) > 1:
             out: list[T] = []
             for band in bands:
