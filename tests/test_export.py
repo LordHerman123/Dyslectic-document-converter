@@ -166,3 +166,67 @@ def test_other_exports_keep_the_pdf_page_map(paper):
     session.export("docx", FormatSettings())
     session.export("printable_pdf", FormatSettings())
     assert session.page_map == before
+
+
+def _untagged_content(data: bytes) -> list:
+    """Text or images drawn outside any marked content (a screen reader would skip them)."""
+    bad = []
+    with pymupdf.open(stream=data, filetype="pdf") as d:
+        for pno in range(len(d)):
+            depth = 0
+            for tok in re.findall(r"\bBDC\b|\bBMC\b|\bEMC\b|\bTj\b|\bTJ\b|\bDo\b",
+                                  d[pno].read_contents().decode("latin1")):
+                if tok in ("BDC", "BMC"):
+                    depth += 1
+                elif tok == "EMC":
+                    depth -= 1
+                elif depth == 0:
+                    bad.append((pno, tok))
+            if depth:
+                bad.append((pno, "unbalanced"))
+    return bad
+
+
+@pytest.mark.parametrize("fmt", ["pdf", "printable_pdf"])
+def test_pdf_is_tagged_for_screen_readers(paper, fmt):
+    from dyslexia_converter.render.pdf_tags import read_structure
+
+    session = pipeline.load(paper)
+    data = session.export(fmt, FormatSettings(include_contents=False))
+    with pymupdf.open(stream=data, filetype="pdf") as d:
+        cat = d.pdf_catalog()
+        assert d.xref_get_key(cat, "MarkInfo")[1].replace(" ", "") == "<</Markedtrue>>"
+        assert d.xref_get_key(cat, "Lang") == ("string", "en")
+    structure = read_structure(data)
+    kinds = [k for k, _, _ in structure]
+    assert kinds[0] == "H1" and "P" in kinds and any(k.startswith("H") for k in kinds[1:])
+    assert all(n >= 1 for _, _, n in structure)  # every element has content on a page
+    assert not _untagged_content(data)
+    # the reading order of the structure follows the text: headings appear in document order
+    headings = [b.text.strip() for b in session.document.blocks if b.kind == BlockKind.HEADING]
+    assert len([k for k in kinds if k.startswith("H")]) >= len(headings)
+
+
+def test_tagged_pdf_odd_documents():
+    from dyslexia_converter.model import Block, Document, ImageData
+    from dyslexia_converter.render import pdf_writer
+    from dyslexia_converter.render.compose import compose
+    from dyslexia_converter.render.pdf_tags import read_structure
+
+    # nothing at all: the "no text" note is still a tagged paragraph
+    empty = Document(blocks=[], pages=[], source_path="x.pdf")
+    data = pdf_writer.build_pdf(compose(empty, FormatSettings()), FormatSettings())
+    assert [k for k, _, _ in read_structure(data)] == ["P"] and not _untagged_content(data)
+    # a formula with a description and one without: both get /Alt text
+    png = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 60, 20), False)
+    png.clear_with(255)
+    img = ImageData(png.tobytes("png"), "png", 60, 20, kind="equation", alt="E = mc²", text_size=10)
+    blank = ImageData(png.tobytes("png"), "png", 60, 20, kind="equation", alt="", text_size=10)
+    doc = Document(blocks=[Block("b1", BlockKind.PARAGRAPH, "Energy is", 0, (0, 0, 100, 10)),
+                           Block("e1", BlockKind.IMAGE, "", 0, (0, 20, 60, 40), image=img),
+                           Block("e2", BlockKind.IMAGE, "", 0, (0, 50, 60, 70), image=blank)],
+                   pages=[], source_path="x.pdf")
+    data = pdf_writer.build_pdf(compose(doc, FormatSettings()), FormatSettings())
+    formulas = [(k, a) for k, a, _ in read_structure(data) if k == "Formula"]
+    assert formulas and formulas[0][1] == "E = mc²" and all(a for _, a in formulas)
+    assert not _untagged_content(data)

@@ -7,6 +7,8 @@ from __future__ import annotations
 
 LABELS: dict[str, dict[str, str]] = {
     "en": {
+        "figure": "Figure",  # read out for a picture without a description
+        "formula": "Formula",
         "contents": "Contents",
         "notes": "Notes",
         "note": "Note {n}",
@@ -23,6 +25,8 @@ LABELS: dict[str, dict[str, str]] = {
         "about_notes": "Footnotes were moved to the Notes section at the end.",
     },
     "nl": {
+        "figure": "Figuur",  # read out for a picture without a description
+        "formula": "Formule",
         "contents": "Inhoud",
         "notes": "Noten",
         "note": "Noot {n}",
@@ -40,6 +44,8 @@ LABELS: dict[str, dict[str, str]] = {
         "about_notes": "Voetnoten zijn verplaatst naar het deel Noten aan het einde.",
     },
     "fr": {
+        "figure": "Figure",  # read out for a picture without a description
+        "formula": "Formule",
         "contents": "Sommaire",
         "notes": "Notes",
         "note": "Note {n}",
@@ -57,6 +63,8 @@ LABELS: dict[str, dict[str, str]] = {
         "about_notes": "Les notes de bas de page ont été déplacées dans la section Notes à la fin.",
     },
     "de": {
+        "figure": "Abbildung",  # read out for a picture without a description
+        "formula": "Formel",
         "contents": "Inhalt",
         "notes": "Anmerkungen",
         "note": "Anm. {n}",
@@ -74,6 +82,8 @@ LABELS: dict[str, dict[str, str]] = {
         "about_notes": "Fußnoten wurden in den Abschnitt Anmerkungen am Ende verschoben.",
     },
     "es": {
+        "figure": "Figura",  # read out for a picture without a description
+        "formula": "Fórmula",
         "contents": "Índice",
         "notes": "Notas",
         "note": "Nota {n}",
@@ -91,6 +101,8 @@ LABELS: dict[str, dict[str, str]] = {
         "about_notes": "Las notas al pie se trasladaron a la sección Notas al final.",
     },
     "it": {
+        "figure": "Figura",  # read out for a picture without a description
+        "formula": "Formula",
         "contents": "Indice",
         "notes": "Note",
         "note": "Nota {n}",
@@ -108,6 +120,8 @@ LABELS: dict[str, dict[str, str]] = {
         "about_notes": "Le note a piè di pagina sono state spostate nella sezione Note alla fine.",
     },
     "pt": {
+        "figure": "Figura",  # read out for a picture without a description
+        "formula": "Fórmula",
         "contents": "Índice",
         "notes": "Notas",
         "note": "Nota {n}",
