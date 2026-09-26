@@ -12,6 +12,24 @@ import traceback
 from pathlib import Path
 
 
+def _speech_report() -> str:
+    """Whether reading aloud works in this build: a missing module is a packaging error; a computer
+    without voices is not."""
+    try:
+        import pyttsx3  # noqa: F401
+        from .speech import Speaker
+    except ImportError as e:
+        return f"Speech: MISSING MODULE {e.name}"
+    sp = Speaker()
+    try:
+        if sys.platform == "win32":
+            import pyttsx3.drivers.sapi5  # noqa: F401  the Windows driver must be in the build
+    except ImportError as e:
+        return f"Speech: MISSING MODULE {e.name}"
+    n = len(sp.voices()) if sp.available() else 0
+    return f"Speech: {'available' if n else 'no voices on this computer'} ({n} voices)"
+
+
 def run(argv: list[str]) -> int:
     src = Path(argv[0]) if argv else None
     out = Path(argv[1]) if len(argv) > 1 else None
@@ -23,6 +41,7 @@ def run(argv: list[str]) -> int:
 
         lines.append(f"Dyslexia Converter {__version__}")
         lines.append(f"Tesseract: {find_tesseract()}")
+        lines.append(_speech_report())
         if src is None or out is None:
             raise SystemExit("usage: --selftest input.pdf output.pdf [log.txt]")
         session = pipeline.load(src)

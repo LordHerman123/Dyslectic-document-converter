@@ -56,6 +56,9 @@ jobs:
           if (-not (Select-String -Path selftest\report.txt -Pattern "DyslexiaConverter\\tesseract" -Quiet)) {
             throw "the bundled Tesseract was not used"
           }
+          if (Select-String -Path selftest\report.txt -Pattern "MISSING MODULE" -Quiet) {
+            throw "a module needed for reading aloud is missing from the build"
+          }
 
       - name: Build installer
         shell: pwsh
