@@ -1307,7 +1307,7 @@ def _equations(page: pymupdf.Page, lines: list[RawLine]) -> tuple[list[RawFigure
                 math, _f, _t, words = _math_profile(l)
                 rx1 = max(m.x1 for m in reg)
                 # a lone denominator or limit hanging just below or above (partly outside the region)
-                piece = bool(re.fullmatch(r"[\w′'∗*+−-]{1,3}", l.text.strip())) and overlap > -0.2 * body and rx0 - 1 <= l.x0 and l.x1 <= rx1 + 1
+                piece = bool(re.fullmatch(r"[\w′'∗*+−-]{1,3}|[⎧⎨⎩⎪⎛⎜⎝⎞⎟⎠⎡⎢⎣⎤⎥⎦\s]{1,6}", l.text.strip())) and overlap > -0.2 * body and rx0 - 1 <= l.x0 and l.x1 <= rx1 + 1
                 beside = piece or overlap > 0.4 * l.height and (len(l.text) <= 25 or (
                     len(l.text) <= 70 and words <= 4 and l.x0 >= rx0 - body))
                 # rows of a cases block above or below, indented from the region's left edge
