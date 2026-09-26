@@ -14,7 +14,7 @@ from . import pipeline
 from .fonts import FONT_CHOICES, get_family
 from .settings import PRESETS, SettingsStore
 
-EXT = {"pdf": ".pdf", "printable_pdf": ".pdf", "docx": ".docx", "txt": ".txt", "md": ".md"}
+EXT = {"pdf": ".pdf", "printable_pdf": ".pdf", "docx": ".docx", "epub": ".epub", "txt": ".txt", "md": ".md"}
 
 
 def main(argv: list[str] | None = None) -> int:

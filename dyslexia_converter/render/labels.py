@@ -7,6 +7,7 @@ from __future__ import annotations
 
 LABELS: dict[str, dict[str, str]] = {
     "en": {
+        "table_picture": "Table (picture of the original)",
         "figure": "Figure",  # read out for a picture without a description
         "formula": "Formula",
         "contents": "Contents",
@@ -25,6 +26,7 @@ LABELS: dict[str, dict[str, str]] = {
         "about_notes": "Footnotes were moved to the Notes section at the end.",
     },
     "nl": {
+        "table_picture": "Tabel (afbeelding van het origineel)",
         "figure": "Figuur",  # read out for a picture without a description
         "formula": "Formule",
         "contents": "Inhoud",
@@ -44,6 +46,7 @@ LABELS: dict[str, dict[str, str]] = {
         "about_notes": "Voetnoten zijn verplaatst naar het deel Noten aan het einde.",
     },
     "fr": {
+        "table_picture": "Tableau (image de l'original)",
         "figure": "Figure",  # read out for a picture without a description
         "formula": "Formule",
         "contents": "Sommaire",
@@ -63,6 +66,7 @@ LABELS: dict[str, dict[str, str]] = {
         "about_notes": "Les notes de bas de page ont été déplacées dans la section Notes à la fin.",
     },
     "de": {
+        "table_picture": "Tabelle (Bild des Originals)",
         "figure": "Abbildung",  # read out for a picture without a description
         "formula": "Formel",
         "contents": "Inhalt",
@@ -82,6 +86,7 @@ LABELS: dict[str, dict[str, str]] = {
         "about_notes": "Fußnoten wurden in den Abschnitt Anmerkungen am Ende verschoben.",
     },
     "es": {
+        "table_picture": "Tabla (imagen del original)",
         "figure": "Figura",  # read out for a picture without a description
         "formula": "Fórmula",
         "contents": "Índice",
@@ -101,6 +106,7 @@ LABELS: dict[str, dict[str, str]] = {
         "about_notes": "Las notas al pie se trasladaron a la sección Notas al final.",
     },
     "it": {
+        "table_picture": "Tabella (immagine dell'originale)",
         "figure": "Figura",  # read out for a picture without a description
         "formula": "Formula",
         "contents": "Indice",
@@ -120,6 +126,7 @@ LABELS: dict[str, dict[str, str]] = {
         "about_notes": "Le note a piè di pagina sono state spostate nella sezione Note alla fine.",
     },
     "pt": {
+        "table_picture": "Tabela (imagem do original)",
         "figure": "Figura",  # read out for a picture without a description
         "formula": "Fórmula",
         "contents": "Índice",

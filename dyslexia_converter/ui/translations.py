@@ -5,6 +5,8 @@ Missing entries fall back to English. tests/test_i18n.py checks that every text 
 """
 
 T: dict[str, dict[str, str]] = {
+    "EPUB (e-reader)": {"nl": "EPUB (e-reader)", "fr": "EPUB (liseuse)", "de": "EPUB (E-Reader)",
+                        "es": "EPUB (lector electrónico)", "it": "EPUB (e-reader)"},
     # ---------------------------------------------------------------- read aloud
     'Read aloud': {
         'nl': 'Voorlezen',

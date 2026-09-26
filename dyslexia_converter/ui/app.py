@@ -32,7 +32,7 @@ log = logging.getLogger("dyslexia_converter")
 RELOAD_KEYS = {"split_spreads", "scan_text_source", "ocr_language"}
 
 EXPORTS = [("pdf", "PDF", "pdf"), ("printable_pdf", "Printable PDF", "pdf"), ("docx", "Word (DOCX)", "docx"),
-           ("txt", "Plain text", "txt"), ("md", "Markdown", "md")]
+           ("epub", "EPUB (e-reader)", "epub"), ("txt", "Plain text", "txt"), ("md", "Markdown", "md")]
 # document languages (codes used by the core) and their English names (translated in the UI)
 DOC_LANGUAGES = [("en", "English"), ("nl", "Dutch"), ("de", "German"), ("fr", "French"), ("es", "Spanish"),
                  ("it", "Italian"), ("pt", "Portuguese")]
