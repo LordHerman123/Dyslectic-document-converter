@@ -310,7 +310,10 @@ class StructureDetector:
         running_on = bool(re.match(r"^\s*\((?:[a-z]|[ivx]{1,4}|\d{1,2})\)\s", c.text)) and \
             not p.text.rstrip().endswith(TERMINAL) and abs(c.x0 - p.x0) < 2 and \
             not LIST_RE.match(para.lines[0].text) and len(para.lines) >= 1
-        if (LIST_RE.match(c.text) and not running_on) or REF_BRACKET_RE.match(c.text):
+        # "cli-" + "- mate deniers": OCR read the line-end hyphen twice; not a new "- " list item
+        hyphen_run = c.source == "ocr" and bool(re.search(r"[A-Za-z][-–][^\w\s]{0,2}$", p.text.rstrip())) \
+            and bool(re.match(r"^\s*[-–]\s?[a-z]", c.text))
+        if (LIST_RE.match(c.text) and not running_on and not hyphen_run) or REF_BRACKET_RE.match(c.text):
             return False
         if re.search(r" … \S+\s*$", p.text):
             return False  # an entry of a printed table of contents
@@ -352,11 +355,15 @@ class StructureDetector:
         styles: list[StyleRange] = []
         conf: list[OcrWordConfidence] = []
         for l in lines:
+            skip = 0  # characters of junk at the start of this line to drop
             if text:
                 last_word = re.search(r"(\w+)[-­]$", text)
                 first_word = re.match(r"(\w+)", l.text)
+                junk = self._junk_hyphen(text, l.text) if l.source == "ocr" else None
                 if text.endswith("­"):
                     text = text[:-1]
+                elif junk is not None:
+                    text, skip = junk  # "mecha-" + "“nisms", "mal--." + "function": OCR junk around the hyphen
                 elif last_word and first_word and l.text[:1].islower() and \
                         self.dehyphenate(last_word.group(1), first_word.group(1)):
                     text = text[:-1]
@@ -366,13 +373,25 @@ class StructureDetector:
                     text = self._lost_hyphen(text, l.text)  # "describ" + "ing": OCR lost the hyphen
                 else:
                     text += " "
-            base = len(text)
-            text += l.text
+            base = len(text) - skip
+            text += l.text[skip:]
             styles += [s.moved(base) for s in l.styles]
             conf += [OcrWordConfidence(c.start + base, c.end + base, c.confidence) for c in l.conf]
             if l.bold and not any(s.bold for s in l.styles):
                 styles.append(StyleRange(base, base + len(l.text), bold=True))
         return text, styles, conf
+
+    def _junk_hyphen(self, text: str, nxt: str) -> Optional[tuple[str, int]]:
+        """A word hyphenated at a line end with stray OCR marks next to the hyphen ("mal--." + "function",
+        "mecha-" + "“nisms", "cli-" + "- mate"). Returns (text without hyphen and junk, number of junk
+        characters to drop from the next line), or None."""
+        m = re.search(r"([A-Za-z]+)-([-.,:~·'’“”‘\"]{0,2})\s*$", text)
+        r = re.match(r"([-–.,:·'’“”‘\"]{0,2}\s?)([a-z]+)", nxt)
+        if not m or not r or not (m.group(2) or r.group(1)):
+            return None  # no junk: the normal hyphen handling applies
+        if not self.dehyphenate(m.group(1), r.group(2)):
+            return None
+        return text[: m.end(1)], len(r.group(1))
 
     def _lost_hyphen(self, text: str, nxt: str) -> Optional[str]:
         """If OCR lost or misread a line-end hyphen ("describ" / "singu." + "larly"),

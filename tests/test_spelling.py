@@ -140,3 +140,26 @@ def test_unchanged_edit_does_nothing(tmp_path):
     session, doc, _ = _session_with(tmp_path, "One two thre four. Five.", "thre", "three")
     assert session.edit_text(doc.corrections[0], "One two thre four.") is None
     assert len(doc.corrections) == 1
+
+
+def test_words_run_together_are_split(tmp_path):
+    c = corrector(tmp_path)
+    for glued, split in (("forthe", "for the"), ("toa", "to a"), ("ofa", "of a"), ("inthe", "in the"),
+                         ("andthe", "and the")):
+        ctx = f"it is {glued} people"
+        assert c.suggest(glued, ctx, 6, Counter()) == (split, 0.93), glued
+    ctx = "and Inthe end"  # capitalised in the middle of a sentence: treated as a name
+    assert c.suggest("Inthe", ctx, 4, Counter()) is None
+    assert c.suggest("Inthe", "Inthe end", 0, Counter()) == ("In the", 0.93)  # sentence start
+    # real compounds and rare words are never split
+    for w in ("woodstoves", "machinelike", "polycultures", "tata", "ujamaa", "cannot", "into"):
+        res = c.suggest(w, "x " + w, 2, Counter())
+        assert res is None or " " not in res[0], w
+    # a word used several times in the document is a real term
+    assert c.suggest("forthe", "x forthe", 2, Counter({"forthe": 3})) is None
+
+
+def test_more_ocr_confusions(tmp_path):
+    c = corrector(tmp_path)
+    assert c.suggest("jnitiative", "lack of jnitiative", 8, Counter())[0] == "initiative"
+    assert c.suggest("ihe", "established ihe link", 12, Counter())[0] == "the"
