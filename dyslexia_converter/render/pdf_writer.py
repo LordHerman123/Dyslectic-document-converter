@@ -58,8 +58,16 @@ def register_font(family: str, bold: bool, italic: bool) -> str:
     return name
 
 
-def _glyphs(font_name: str) -> dict:
-    return pdfmetrics.getFont(font_name).face.charToGlyph
+_GLYPH_CACHE: dict[str, frozenset] = {}
+
+
+def _glyphs(font_name: str) -> frozenset:
+    """The characters a font can really draw (ReportLab maps missing ones to the empty glyph 0)."""
+    found = _GLYPH_CACHE.get(font_name)
+    if found is None:
+        found = frozenset(c for c, g in pdfmetrics.getFont(font_name).face.charToGlyph.items() if g)
+        _GLYPH_CACHE[font_name] = found
+    return found
 
 
 # --------------------------------------------------------------------------- text flowable

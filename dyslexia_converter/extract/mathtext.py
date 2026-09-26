@@ -74,7 +74,8 @@ def math_char(font: str, ch: str) -> str:
         return _DOUBLE_STRUCK[ch]
     if name.startswith(("CMSY", "CMBSY", "MTSY")) and ch == "7":
         return ""  # the bar of a "maps to" arrow; the arrow follows as its own character
-    if name.startswith(("CMSY", "CMBSY", "TXSY", "PXSY")) and "A" <= ch <= "Z":  # calligraphic capitals
+    if name.startswith(("CMSY", "CMBSY", "TXSY", "PXSY", "RSFS", "EUSM", "EUSB")) and "A" <= ch <= "Z":
+        # calligraphic and script capitals
         return _SCRIPT.get(ch, ch)
     if o < 0x20:
         return ""

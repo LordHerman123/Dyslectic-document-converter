@@ -360,7 +360,39 @@ def _page_spans(page: pymupdf.Page) -> list[_Span]:
     return spans
 
 
-def _rows(spans: list[_Span]) -> list[list[_Span]]:
+def _attach_small(sp: _Span, rows: list[dict], rules: Optional[list[Rect]]) -> bool:
+    """Put a sub-/superscript, limit or fraction part on the line it belongs to; False if none fits."""
+    def nearest(expand: float, key) -> Optional[dict]:
+        best, best_d = None, None
+        for row in rows:
+            lo = row["baseline"] - (1.05 + expand) * row["size"]
+            hi = row["baseline"] + (0.5 + expand) * row["size"]
+            if lo <= sp.mid_y <= hi and row["x0"] - 1.5 * row["size"] <= sp.x0 <= row["x1"] + 1.5 * row["size"]:
+                d = key(row)
+                if best is None or d < best_d:
+                    best, best_d = row, d
+        return best
+
+    best = nearest(0.0, lambda row: abs(sp.mid_y - (row["baseline"] - 0.3 * row["size"])))
+    # the numerator or denominator of a small fraction in running text belongs to the line that holds the
+    # fraction bar, not to the line above or below (a display fraction has lines of its own above and below)
+    bar = next((r for r in rules or [] if r[0] - 1 <= (sp.x0 + sp.x1) / 2 <= r[2] + 1 and r[2] - r[0] < 20 * sp.size
+                and (0 <= r[1] - sp.bbox[3] < 0.9 * sp.size or 0 <= sp.bbox[1] - r[3] < 0.9 * sp.size)), None)
+    if bar is not None:
+        bar_y = (bar[1] + bar[3]) / 2
+        own_part = best is not None and abs(best["baseline"] - bar_y) < 1.2 * best["size"] and \
+            (best["baseline"] < bar_y) == (sp.mid_y < bar_y)
+        if not own_part:
+            best = nearest(0.4, lambda row: abs(bar_y - (row["baseline"] - 0.25 * row["size"]))) or best
+    if best is None:
+        return False
+    best["spans"].append(sp)
+    best["x0"] = min(best["x0"], sp.x0)
+    best["x1"] = max(best["x1"], sp.x1)
+    return True
+
+
+def _rows(spans: list[_Span], rules: Optional[list[Rect]] = None) -> list[list[_Span]]:
     """Group a page's spans into lines by baseline.
 
     Full-size spans form lines within their PDF text block. Sub- and superscripts (smaller type, shifted up
@@ -439,6 +471,16 @@ def _rows(spans: list[_Span]) -> list[list[_Span]]:
                 if abs(a["baseline"] - b["baseline"]) > 0.25 * size:
                     continue
                 touching = a["x0"] - 1.6 * size <= b["x1"] and b["x0"] - 1.6 * size <= a["x1"]
+                if not touching:
+                    # an integral sign with its limits (placed later, by position) can fill the gap
+                    g0, g1 = min(a["x1"], b["x1"]), max(a["x0"], b["x0"])
+                    fill = sorted((max(g0, o.x0), min(g1, o.x1)) for o in small
+                                  if o.x1 > g0 and o.x0 < g1 and abs(o.mid_y - a["baseline"]) < 1.2 * size)
+                    covered, end = 0.0, g0
+                    for f0, f1 in fill:
+                        covered += max(0.0, f1 - max(f0, end))
+                        end = max(end, f1)
+                    touching = g1 - g0 - covered < 1.6 * size
                 clash = any(x.x0 < y.x1 - 1 and y.x0 < x.x1 - 1 for x in a["spans"] for y in b["spans"])
                 if touching and not clash:
                     a["spans"] += b["spans"]
@@ -452,20 +494,17 @@ def _rows(spans: list[_Span]) -> list[list[_Span]]:
     for row in rows:
         row["x0"] = min(o.x0 for o in row["spans"])
         row["x1"] = max(o.x1 for o in row["spans"])
-    orphans: list[_Span] = []
-    for sp in small:
-        best, best_d = None, None
-        for row in rows:
-            lo, hi = row["baseline"] - 1.05 * row["size"], row["baseline"] + 0.5 * row["size"]
-            if lo <= sp.mid_y <= hi and row["x0"] - 1.5 * row["size"] <= sp.x0 <= row["x1"] + 1.5 * row["size"]:
-                dist = abs(sp.mid_y - (row["baseline"] - 0.3 * row["size"]))
-                if best is None or dist < best_d:
-                    best, best_d = row, dist
-        if best is not None:
-            best["spans"].append(sp)
-            best["x1"] = max(best["x1"], sp.x1)
-        else:
-            orphans.append(sp)
+    orphans: list[_Span] = list(small)
+    # repeated, so that a chain of pieces (a sum sign, its index, then the text) grows its line leftwards
+    progress = True
+    while progress and orphans:
+        progress = False
+        pending, orphans = orphans, []
+        for sp in pending:
+            if _attach_small(sp, rows, rules):
+                progress = True
+            else:
+                orphans.append(sp)
     # second chance for the limits of a sum or the parts of a small fraction in running text, which sit
     # further above or below the line: join the nearest line if it is clearly the closest one
     still: list[_Span] = []
@@ -528,8 +567,9 @@ def _stacks(row: list[_Span], rules: list[Rect], baseline: float, size: float) -
     for r in rules:
         if not (baseline - 1.3 * size <= r[1] <= baseline + 0.4 * size) or r[2] - r[0] > 14 * size:
             continue
-        above = [sp for sp in row if r[0] - 1 <= cx(sp) <= r[2] + 1 and sp.bbox[3] <= r[1] + 1.5]
-        below = [sp for sp in row if r[0] - 1 <= cx(sp) <= r[2] + 1 and sp.bbox[1] >= r[3] - 1.5]
+        # numerator and denominator: next to the bar (not the limits of a sum on the line below)
+        above = [sp for sp in row if r[0] - 1.5 <= sp.x0 and sp.x1 <= r[2] + 1.5 and -1.5 <= r[1] - sp.bbox[3] < 1.2 * size]
+        below = [sp for sp in row if r[0] - 1.5 <= sp.x0 and sp.x1 <= r[2] + 1.5 and -1.5 <= sp.bbox[1] - r[3] < 1.2 * size]
         if above and below:
             spans = above + below
             rect = _union(r, (min(sp.bbox[0] for sp in spans), min(sp.bbox[1] for sp in spans),
@@ -541,8 +581,11 @@ def _stacks(row: list[_Span], rules: list[Rect], baseline: float, size: float) -
         t = math_text(op.font, op.text).strip() if is_math_font(op.font) else op.text.strip()
         if t not in BIG_OPERATORS:
             continue
-        lower = [sp for sp in row if sp is not op and op.x0 - 2 <= cx(sp) <= op.x1 + 2 and sp.bbox[1] >= op.bbox[3] - 0.35 * size]
-        upper = [sp for sp in row if sp is not op and op.x0 - 2 <= cx(sp) <= op.x1 + 2 and sp.bbox[3] <= op.bbox[1] + 0.35 * size]
+        # limits set under and over the sign (not beside it, as the scripts of an integral in running text)
+        lower = [sp for sp in row if sp is not op and op.x0 - 2 <= cx(sp) <= op.x1 + 2 and sp.x0 < op.x1 - 1
+                 and sp.bbox[1] >= op.bbox[3] - 0.35 * size]
+        upper = [sp for sp in row if sp is not op and op.x0 - 2 <= cx(sp) <= op.x1 + 2 and sp.x0 < op.x1 - 1
+                 and sp.bbox[3] <= op.bbox[1] + 0.35 * size]
         if lower or upper:
             spans = [op] + lower + upper
             rect = (min(sp.bbox[0] for sp in spans), min(sp.bbox[1] for sp in spans),
@@ -572,6 +615,34 @@ def _stacks(row: list[_Span], rules: list[Rect], baseline: float, size: float) -
     return [(tuple(m[0]), m[1], m[2]) for m in merged]
 
 
+def _group_scripts(row: list[_Span], baseline: float, ref_size: float, skip: dict) -> list[_Span]:
+    """Order a row's spans for reading. A subscript and a superscript on the same symbol overlap in x
+    (a_{i1 i2}^{(k)}); taken strictly by position their characters would interleave. Each cluster of scripts is
+    written subscript first, then superscript."""
+    out: list[_Span] = []
+    cluster: list[_Span] = []
+
+    def flush() -> None:
+        subs = [sp for sp in cluster if sp.baseline > baseline]
+        sups = [sp for sp in cluster if sp.baseline <= baseline]
+        if subs and sups and min(sp.x0 for sp in sups) < max(sp.x1 for sp in subs) - 0.5 and \
+                min(sp.x0 for sp in subs) < max(sp.x1 for sp in sups) - 0.5:
+            out.extend(subs + sups)
+        else:
+            out.extend(cluster)
+        cluster.clear()
+
+    for sp in row:
+        script = sp.size < ref_size * 0.85 and id(sp) not in skip and abs(sp.baseline - baseline) > 0.08 * ref_size
+        if script:
+            cluster.append(sp)
+        else:
+            flush()
+            out.append(sp)
+    flush()
+    return out
+
+
 def _text_lines(page: pymupdf.Page, pno: int) -> list[RawLine]:
     spans = _page_spans(page)
     try:
@@ -589,7 +660,7 @@ def _text_lines(page: pymupdf.Page, pno: int) -> list[RawLine]:
 
     lines: list[RawLine] = []
     if True:
-        for row in _rows(spans):
+        for row in _rows(spans, rules):
             bno = Counter(sp.block_no for sp in row).most_common(1)[0][0]
             full = [sp for sp in row if sp.size >= max(o.size for o in row) * 0.85]
             weights = Counter()
@@ -630,6 +701,7 @@ def _text_lines(page: pymupdf.Page, pno: int) -> list[RawLine]:
                 for sp in members:
                     stack_of[id(sp)] = k
             emitted: set[int] = set()
+            row = _group_scripts(row, baseline, ref_size, stack_of)
             for sp in row:
                 if id(sp) in stack_of:
                     k = stack_of[id(sp)]
@@ -1035,6 +1107,14 @@ def _equations(page: pymupdf.Page, lines: list[RawLine]) -> tuple[list[RawFigure
 
     def inline(l: RawLine) -> bool:
         left = column(l)[0]
+        # the last line of a paragraph that happens to be all formula: it starts where the text above starts
+        # and follows it at the normal line distance
+        above = [p for p in lines if p is not l and p.y1 <= l.y0 + 1 and min(p.x1, l.x1) - max(p.x0, l.x0) > 0]
+        if above:
+            a = max(above, key=lambda p: p.y1)
+            if _math_profile(a)[3] >= 3 and abs(a.x0 - l.x0) < 2 and a.x0 - left > 0.8 * a.size \
+                    and l.y0 - a.y1 < typical_gap + 0.35 * l.size:
+                return True
         for p in lines:
             # the rest of a text line: something that is not a formula starts the row at the margin
             if p is l or id(p) in candidates or p.x1 > l.x0 + 1:
@@ -1121,7 +1201,11 @@ def _equations(page: pymupdf.Page, lines: list[RawLine]) -> tuple[list[RawFigure
                 touching = (l.y0 < y1 + 0.5 * body and l.y1 > y1) or (l.y1 > y0 - 0.5 * body and l.y0 < y0)
                 row = touching and l.x0 > rx0 + body and words <= 1 and len(l.text) <= 70 and math > 0 \
                     and not inline(l)
-                if beside or row:
+                # the last row of a matrix or array: numbers and symbols only, within the region's width
+                prof = _math_profile(l)
+                cells = touching and rx0 - 1 <= l.x0 and l.x1 <= rx1 + 1 and prof[3] == 0 and prof[2] > 0 \
+                    and prof[1] / prof[2] >= 0.8 and len(l.text) <= 40 and not inline(l)
+                if beside or row or cells:
                     reg.append(l)
                     used.add(id(l))
                     grown = True
@@ -1150,18 +1234,60 @@ def _equations(page: pymupdf.Page, lines: list[RawLine]) -> tuple[list[RawFigure
         # the letter boxes already hold the ink; more room would catch accents of the next line
         clip = (rect[0] - 3, rect[1] - 0.3, rect[2] + 3, rect[3] + 0.3)
         pix = page.get_pixmap(clip=pymupdf.Rect(clip), dpi=EQUATION_DPI, alpha=True)
-        ordered = sorted(reg, key=lambda l: (round(l.y0 / 3), l.x0))
-        alt = " ".join(l.text for l in ordered)
-        for l in reg:
-            for ph, im in l.inline_images.items():
-                alt = alt.replace(ph, im.alt or "")
-        png, width, height = _close_number_gap(pix, body)
-        if width != pix.width:
-            clip = (clip[0], clip[1], clip[0] + width * 72.0 / EQUATION_DPI, clip[3])
-        img = ImageData(png, "png", width, height, kind="equation", alt=alt, text_size=float(body))
-        figures.append(RawFigure(clip, img))
+
+        def alt_of(members: list[RawLine]) -> str:
+            ordered = sorted(members, key=lambda l: (round(l.y0 / 3), l.x0))
+            alt = " ".join(l.text for l in ordered)
+            for l in members:
+                for ph, im in l.inline_images.items():
+                    alt = alt.replace(ph, im.alt or "")
+            return alt
+        left, right = column(reg[0])
+        # a long equation broken over lines (multline) spans the whole column: its lines go one below the
+        # other as separate pictures, so that each keeps a readable size
+        bands = _ink_bands(pix, body) if rect[2] - rect[0] > 0.7 * (right - left) else []
+        if len(bands) < 2:
+            bands = [(0, pix.height)]
+        scale = 72.0 / EQUATION_DPI
+        for b0, b1 in bands:
+            part = pix if (b0, b1) == (0, pix.height) else _crop_rows(pix, b0, b1)
+            y0, y1 = clip[1] + b0 * scale, clip[1] + b1 * scale
+            members = [l for l in reg if y0 - 1 <= (l.y0 + l.y1) / 2 <= y1 + 1] if len(bands) > 1 else reg
+            png, width, height = _close_number_gap(part, body)
+            box = (clip[0], y0, clip[0] + width * scale, y1)
+            img = ImageData(png, "png", width, height, kind="equation", alt=alt_of(members), text_size=float(body))
+            figures.append(RawFigure(box, img))
     rest = [l for l in lines if id(l) not in used]
     return figures, rest
+
+
+def _ink_bands(pix: pymupdf.Pixmap, body: float) -> list[tuple[int, int]]:
+    """Rows of a picture separated by clear horizontal gaps (at least a third of a line high)."""
+    try:
+        alpha = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, -1]
+    except Exception:
+        return []
+    inked = np.flatnonzero(alpha.max(axis=1) > 20)
+    if len(inked) == 0:
+        return []
+    min_gap = 0.2 * body * EQUATION_DPI / 72.0
+    bands: list[list[int]] = [[int(inked[0]), int(inked[0]) + 1]]
+    for y in inked[1:]:
+        if y - bands[-1][1] > min_gap:
+            bands.append([int(y), int(y) + 1])
+        else:
+            bands[-1][1] = int(y) + 1
+    pad = int(0.1 * body * EQUATION_DPI / 72.0)
+    return [(max(0, b0 - pad), min(pix.height, b1 + pad)) for b0, b1 in bands]
+
+
+def _crop_rows(pix: pymupdf.Pixmap, y0: int, y1: int) -> pymupdf.Pixmap:
+    part = pymupdf.Pixmap(pix.colorspace, pymupdf.IRect(0, 0, pix.width, y1 - y0), pix.alpha)
+    stride = pix.stride
+    part.set_origin(0, 0)
+    samples = pix.samples[y0 * stride:y1 * stride]
+    part.samples_mv[:] = samples
+    return part
 
 
 def _close_number_gap(pix: pymupdf.Pixmap, body: float) -> tuple[bytes, int, int]:

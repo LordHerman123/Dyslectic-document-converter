@@ -38,6 +38,10 @@ SPECIAL_HEADINGS = re.compile(
     r"acknowledg(e)?ments?|dankwoord|appendix|bijlage|contents|inhoud|inhoudsopgave)\b[\s:.]*$", re.I)
 
 Item = Union[RawLine, RawFigure, RawTable]
+# run-in headings of theorem-like blocks
+RUN_IN_RE = re.compile(r"^\s*(theorem|lemma|proposition|corollary|definition|remark|example|proof|claim|conjecture|"
+                       r"assumption|question|exercise|note|stelling|bewijs|definitie|opmerking|voorbeeld|satz|beweis|"
+                       r"théorème|lemme|preuve|démonstration|teorema|lema|prueba|dimostrazione)\b", re.I)
 
 
 def _caption_start(text: str) -> bool:
@@ -300,6 +304,9 @@ class StructureDetector:
             return False
         if re.search(r" … \S+\s*$", p.text):
             return False  # an entry of a printed table of contents
+        if p.text.rstrip().endswith(TERMINAL) and RUN_IN_RE.match(c.text) and any(
+                (st.bold or st.italic) and st.start == 0 for st in c.styles):
+            return False  # "Lemma 3.2. ..." or "Proof. ...": a new block right after a sentence ends
         if _caption_start(c.text) and (p.text.rstrip().endswith(TERMINAL) or abs(p.size - c.size) > 0.3):
             return False  # "... presented in" + "Fig. 2. When ..." is one sentence running on
         if p.font and c.font and _family(p.font) != _family(c.font) and len(para.lines) == 1 \
