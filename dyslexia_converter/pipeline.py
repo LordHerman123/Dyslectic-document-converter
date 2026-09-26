@@ -51,6 +51,7 @@ class Session:
     custom_words: CustomWords
     ai_citation_decisions: dict[str, bool] = field(default_factory=dict)
     ai_log: list[str] = field(default_factory=list)
+    page_map: dict[int, list[int]] = field(default_factory=dict)  # converted page -> original pages (preview)
 
     # ------------------------------------------------------------ corrections
     def recompute_corrections(self, settings: FormatSettings) -> None:
@@ -172,16 +173,13 @@ class Session:
         return before, c.original, after.rstrip()
 
     # --------------------------------------------------------------------- AI
-    def run_ai(self, assistant, settings: FormatSettings, progress: Optional[ProgressFn] = None) -> str:
-        """Ask the (optional) AI about items local rules could not decide.
-
-        Only uncertain snippets are sent. Returns a short summary for the user.
-        """
-        sent = []
+    def _ai_items(self, assistant, settings: FormatSettings):
+        """The uncertain items the AI may be asked about: citation candidates and OCR corrections, each with
+        the text they sit in and their position (the assistant sends only a few words around them)."""
         ai = assistant.settings
+        cands = []
         if ai.use_for_citations and settings.move_citations:
             result = compose(self.document, settings, self.ai_citation_decisions)
-            cands = []
             seen: set[str] = set()
             for block_id, c in result.uncertain_citations:
                 if c.key in seen:
@@ -189,20 +187,41 @@ class Session:
                 seen.add(c.key)
                 b = self.document.block(block_id)
                 text = self.document.display_text(b) if b else c.text
-                ctx = text[max(0, c.start - 120): c.end + 60]
-                cands.append((c.key, c.text, ctx))
-            if cands:
-                self.ai_citation_decisions.update(assistant.classify_citations(cands, progress))
-                sent.append(f"{len(cands)} uncertain citation(s)")
+                if not b:
+                    cands.append((c.key, c.text, 0, len(c.text)))
+                else:
+                    cands.append((c.key, text, c.start, c.end))
+        words = []
         if ai.use_for_ocr:
-            items = []
             for c in self.pending_corrections():
                 b = self.document.block(c.block_id)
                 if b is not None:
-                    items.append((c, b.text[max(0, c.start - 80): c.end + 80]))
-            if items:
-                assistant.review_ocr_words(items, progress)
-                sent.append(f"{len(items)} uncertain OCR word(s)")
+                    words.append((c, b.text, c.start, c.end))
+        return cands, words
+
+    def ai_preview(self, assistant, settings: FormatSettings) -> list:
+        """The requests that asking the AI now would send (answers known from earlier are not sent again)."""
+        cands, words = self._ai_items(assistant, settings)
+        requests = []
+        if cands:
+            requests += assistant.plan_citations(cands)[0]
+        if words:
+            requests += assistant.plan_ocr(words)[0]
+        return requests
+
+    def run_ai(self, assistant, settings: FormatSettings, progress: Optional[ProgressFn] = None) -> str:
+        """Ask the (optional) AI about items local rules could not decide.
+
+        Only a few words around each uncertain item are sent. Returns a short summary for the user.
+        """
+        sent = []
+        cands, words = self._ai_items(assistant, settings)
+        if cands:
+            self.ai_citation_decisions.update(assistant.classify_citations(cands, progress))
+            sent.append(f"{len(cands)} uncertain citation(s)")
+        if words:
+            assistant.review_ocr_words(words, progress)
+            sent.append(f"{len(words)} uncertain OCR word(s)")
         summary = ("Sent to AI: " + ", ".join(sent)) if sent else "Nothing needed AI help."
         self.ai_log.append(summary)
         return summary
@@ -217,8 +236,11 @@ class Session:
         result = self.compose(settings)
         doc = self.document
         if fmt in ("pdf", "printable_pdf"):
-            return pdf_writer.build_pdf(result, settings, doc.title or _first_title(result), doc.author,
+            data = pdf_writer.build_pdf(result, settings, doc.title or _first_title(result), doc.author,
                                         printable=fmt == "printable_pdf")
+            if fmt == "pdf":
+                self.page_map = pdf_writer.last_page_map()  # for the side-by-side preview
+            return data
         if fmt == "docx":
             return docx_writer.build_docx(result, settings, doc.title or _first_title(result), doc.author)
         if fmt == "txt":

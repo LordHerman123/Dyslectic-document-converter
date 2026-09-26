@@ -11,9 +11,9 @@ Your original PDF is only ever read, never modified.
 Everything works **locally and without AI**. AI is an optional extra that you turn on with your own
 API key. When it's on, it only sees small snippets that the local rules couldn't decide.
 
-## Download for Windows (version 1.4)
+## Download for Windows (version 1.5)
 
-Get `DyslexiaConverter-1.4.0-setup.exe` (installer) or `DyslexiaConverter-1.4.0-windows.zip` (unzip and
+Get `DyslexiaConverter-1.5.0-setup.exe` (installer) or `DyslexiaConverter-1.5.0-windows.zip` (unzip and
 double-click `DyslexiaConverter.exe`) from the repository's **Releases** page. Text recognition (Tesseract)
 is included; nothing else needs to be installed. How the Windows build is made: [windows/README.md](windows/README.md).
 
@@ -57,7 +57,7 @@ python -m dyslexia_converter chapter.pdf --pages 3-18 --move-citations -f printa
 | Citations | Optional: author-year citations become `[n]` markers that point to the numbered reference list. Unmatched citations get their own list, and the original citation text is always kept. Numeric citations, ranges (`[3–7]`) and lists (`[2, 5, 8]`) are recognised. Uncertain cases are left unchanged, or passed to the AI if you allow it. |
 | Footnotes | Optional: footnotes move to a Notes section at the end, with `[Note n]` markers in the text. Page notes such as affiliations and licences are kept too. |
 | Document map | Clickable headings in the app, PDF bookmarks, and a Contents page. Headings in DOCX exports show up in Word's Navigation pane. |
-| Preview | Original, converted, or both side by side, with page navigation. Changing a setting re-renders the preview without re-reading the PDF. |
+| Preview | Original, converted, or both side by side, with page navigation. In *Both*, turning a page on one side turns the other side along to the matching content. Changing a setting re-renders the preview without re-reading the PDF. |
 | Export | PDF, printable PDF (no tints or backgrounds, black text), DOCX, plain text and Markdown. PDFs are A4, keep selectable Unicode text and embed font subsets. Headings stay with the text that follows them, and paragraphs avoid widow and orphan lines. |
 | Settings | Presets: Standard, Spacious, High Readability, Compact print and My Settings. Settings are saved between sessions and can be reset to the defaults. |
 | App settings | A Settings tab with the app language (English, Nederlands, Français, Deutsch, Español, Italiano; the device language is used at first start), dark mode, high-contrast colours and app text size. These change straight away, even with a document open, and only affect the app, not your exported documents. The tab also shows where Tesseract was found, lets you clear saved OCR results, and shows where your settings are stored. The look is burgundy & champagne on warm cream (a dark wine colour in dark mode), matching the "Dc" logo. |
@@ -82,10 +82,29 @@ will be sent to your provider using your key, and nothing is sent until you conf
   Otherwise they're saved in a private file on your device. Keys never go into settings, logs,
   error messages or exports.
 * The AI is only asked narrow questions: "is this parenthesis a citation?" and "is this word an OCR
-  error?". It gets short snippets, a few at a time. It can't rewrite text: answers that aren't a
-  single-word fix are thrown away. AI word suggestions always go to your review list.
-* Answers are cached, so the same content is never sent twice. The app shows how many requests were
-  made and roughly how many characters were sent.
+  error?". It can't rewrite text: answers that aren't a single-word fix are thrown away. AI word
+  suggestions always go to your review list.
+* **As little data as possible.** Each uncertain item is sent with only a few words around it (about 8
+  before and 6 after), never whole paragraphs or pages, with the item marked `[[like this]]`. E-mail
+  addresses, web links, account numbers and long numbers such as phone numbers are masked first (`[email]`,
+  `[link]`, `[number]`); years and year ranges are kept because citations need them.
+* **Preview before sending.** *Ask AI about uncertain items now* first shows exactly which document text
+  would be sent and how much. Nothing leaves the device until you press *Send*.
+* **Privacy log.** Every request is written to a log on your device: the time, provider and model, the
+  exact text that was sent, the answer that came back, and the number of tokens. See it in the AI settings
+  tab, save it as a text file or clear it. The last 500 requests are kept. The key is never part of it.
+* **Few tokens.** Up to 30 items go in one request. Answers only list the exceptions (the ids that are
+  citations, the words that are OCR errors), so they are a few tokens long, and the maximum answer
+  length is set to match. Answers are cached per item, so the same item is never sent twice, even across
+  documents; duplicate snippets in one document are sent once. Gemini's "thinking" is switched off and
+  Anthropic runs at low effort, since these are simple yes/no questions. Anthropic gets a JSON schema,
+  Mistral and Gemini JSON mode, and an answer that isn't valid JSON is rejected.
+* **Worked examples (few-shot).** Each question comes with fixed instructions and 8-10 made-up worked
+  examples, including tricky ones (a statistic in brackets, a date range, an abbreviation, a Dutch
+  citation, a name that looks misspelled, a wrong spelling suggestion). This part holds nothing from your
+  document and is the same for every request. Providers cache repeated prompt starts only above a minimum
+  length, which this part (about 350 tokens) is below, so it is
+  paid for with each request; sharing it across 30 items keeps that small.
 * Your AI provider may charge for API usage. **Local-only** mode stops everything from leaving the device.
 
 ## Project layout
@@ -111,7 +130,8 @@ dyslexia_converter/
     text_writer.py      text / Markdown export
     preview.py          page images for the preview
     labels.py           words the converter adds (Contents, Notes...) in the document's language
-  ai/                   optional: providers, consent, cache, key storage, redaction
+  ai/                   optional: providers, prompts (few-shot), privacy masking, request log,
+                        consent, cache, key storage, redaction
   pipeline.py           load() once, then compose/export as often as settings change
   cli.py                command line
   ui/app.py             Flet app (desktop / web / Android)

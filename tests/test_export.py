@@ -133,3 +133,36 @@ def test_added_labels_follow_the_document_language(paper):
     assert "Inhoud" in out and "Noten" in out and "reader [Noot 1]" in out
     assert "[Note 1]" not in out and "Contents" not in out
     assert "Individual differences are discussed in Section 4." in out
+
+
+def test_page_map_links_converted_pages_to_their_original_pages(paper):
+    """The side-by-side view turns the other side along using this map."""
+    session = pipeline.load(paper)
+    data = session.export("pdf", FormatSettings())
+    with pymupdf.open(stream=data, filetype="pdf") as d:
+        n_conv = len(d)
+    with pymupdf.open(paper) as d:
+        n_orig = len(d)
+    m = session.page_map
+    assert m and all(0 <= k < n_conv for k in m)
+    assert all(0 <= p < n_orig for v in m.values() for p in v)
+    assert {p for v in m.values() for p in v} == set(range(n_orig))  # every original page is reachable
+    firsts = [min(m[k]) for k in sorted(m)]
+    assert firsts == sorted(firsts)  # reading order: going forward never goes back in the original
+
+
+def test_page_map_of_a_book_spread_uses_physical_pages(samples):
+    session = pipeline.load(samples / "book_spread.pdf")
+    session.export("pdf", FormatSettings())
+    with pymupdf.open(samples / "book_spread.pdf") as d:
+        n = len(d)
+    assert all(0 <= p < n for v in session.page_map.values() for p in v)
+
+
+def test_other_exports_keep_the_pdf_page_map(paper):
+    session = pipeline.load(paper)
+    session.export("pdf", FormatSettings())
+    before = dict(session.page_map)
+    session.export("docx", FormatSettings())
+    session.export("printable_pdf", FormatSettings())
+    assert session.page_map == before

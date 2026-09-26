@@ -5,6 +5,133 @@ Missing entries fall back to English. tests/test_i18n.py checks that every text 
 """
 
 T: dict[str, dict[str, str]] = {
+    # ---------------------------------------------------------------- AI privacy log and preview
+    'Answer received': {
+        'nl': 'Ontvangen antwoord',
+        'fr': 'Réponse reçue',
+        'de': 'Erhaltene Antwort',
+        'es': 'Respuesta recibida',
+        'it': 'Risposta ricevuta'},
+    'Citations': {
+        'nl': 'Verwijzingen',
+        'fr': 'Citations',
+        'de': 'Zitate',
+        'es': 'Citas',
+        'it': 'Citazioni'},
+    'Clear log': {
+        'nl': 'Logboek wissen',
+        'fr': 'Effacer le journal',
+        'de': 'Protokoll löschen',
+        'es': 'Borrar registro',
+        'it': 'Cancella registro'},
+    'Document snippets sent': {
+        'nl': 'Verstuurde stukjes tekst',
+        'fr': 'Extraits du document envoyés',
+        'de': 'Gesendete Dokumentausschnitte',
+        'es': 'Fragmentos del documento enviados',
+        'it': 'Estratti del documento inviati'},
+    'Each request is listed with the exact text that left this device and the answer that came back. The log is kept only on this device; your API key is never part of it.': {
+        'nl': 'Elke vraag staat hier met de exacte tekst die dit apparaat verliet en het antwoord dat terugkwam. Het logboek wordt alleen op dit apparaat bewaard; je API-sleutel staat er nooit in.',
+        'fr': "Chaque requête est listée avec le texte exact qui a quitté cet appareil et la réponse reçue. Le journal est conservé uniquement sur cet appareil ; votre clé API n'y figure jamais.",
+        'de': 'Jede Anfrage wird mit dem genauen Text, der dieses Gerät verlassen hat, und der erhaltenen Antwort aufgeführt. Das Protokoll bleibt nur auf diesem Gerät; Ihr API-Schlüssel ist nie darin enthalten.',
+        'es': 'Cada consulta aparece con el texto exacto que salió de este dispositivo y la respuesta recibida. El registro se guarda solo en este dispositivo; tu clave API nunca forma parte de él.',
+        'it': 'Ogni richiesta è elencata con il testo esatto che ha lasciato questo dispositivo e la risposta ricevuta. Il registro resta solo su questo dispositivo; la tua chiave API non ne fa mai parte.'},
+    'Instructions and examples sent (the same for every request of this kind)': {
+        'nl': 'Verstuurde instructies en voorbeelden (hetzelfde voor elke vraag van deze soort)',
+        'fr': 'Instructions et exemples envoyés (identiques pour chaque requête de ce type)',
+        'de': 'Gesendete Anweisungen und Beispiele (gleich für jede Anfrage dieser Art)',
+        'es': 'Instrucciones y ejemplos enviados (iguales en cada consulta de este tipo)',
+        'it': 'Istruzioni ed esempi inviati (uguali per ogni richiesta di questo tipo)'},
+    'Nothing has been sent to an AI provider yet.': {
+        'nl': 'Er is nog niets naar een AI-aanbieder gestuurd.',
+        'fr': "Rien n'a encore été envoyé à un fournisseur d'IA.",
+        'de': 'Bisher wurde nichts an einen KI-Anbieter gesendet.',
+        'es': 'Aún no se ha enviado nada a un proveedor de IA.',
+        'it': 'Non è ancora stato inviato nulla a un fornitore di IA.'},
+    'OCR words': {
+        'nl': 'OCR-woorden',
+        'fr': 'Mots OCR',
+        'de': 'OCR-Wörter',
+        'es': 'Palabras OCR',
+        'it': 'Parole OCR'},
+    'Privacy log saved.': {
+        'nl': 'Privacylogboek opgeslagen.',
+        'fr': 'Journal de confidentialité enregistré.',
+        'de': 'Datenschutzprotokoll gespeichert.',
+        'es': 'Registro de privacidad guardado.',
+        'it': 'Registro privacy salvato.'},
+    'Privacy log: everything sent to the AI provider': {
+        'nl': 'Privacylogboek: alles wat naar de AI-aanbieder is gestuurd',
+        'fr': "Journal de confidentialité : tout ce qui a été envoyé au fournisseur d'IA",
+        'de': 'Datenschutzprotokoll: alles, was an den KI-Anbieter gesendet wurde',
+        'es': 'Registro de privacidad: todo lo enviado al proveedor de IA',
+        'it': 'Registro privacy: tutto ciò che è stato inviato al fornitore di IA'},
+    'Remove the privacy log from this device?': {
+        'nl': 'Het privacylogboek van dit apparaat verwijderen?',
+        'fr': 'Supprimer le journal de confidentialité de cet appareil ?',
+        'de': 'Das Datenschutzprotokoll von diesem Gerät entfernen?',
+        'es': '¿Eliminar el registro de privacidad de este dispositivo?',
+        'it': 'Rimuovere il registro privacy da questo dispositivo?'},
+    'Save log...': {
+        'nl': 'Logboek opslaan...',
+        'fr': 'Enregistrer le journal...',
+        'de': 'Protokoll speichern...',
+        'es': 'Guardar registro...',
+        'it': 'Salva registro...'},
+    'Save privacy log': {
+        'nl': 'Privacylogboek opslaan',
+        'fr': 'Enregistrer le journal de confidentialité',
+        'de': 'Datenschutzprotokoll speichern',
+        'es': 'Guardar registro de privacidad',
+        'it': 'Salva registro privacy'},
+    'Send': {
+        'nl': 'Versturen',
+        'fr': 'Envoyer',
+        'de': 'Senden',
+        'es': 'Enviar',
+        'it': 'Invia'},
+    'Send to the AI provider?': {
+        'nl': 'Naar de AI-aanbieder sturen?',
+        'fr': "Envoyer au fournisseur d'IA ?",
+        'de': 'An den KI-Anbieter senden?',
+        'es': '¿Enviar al proveedor de IA?',
+        'it': 'Inviare al fornitore di IA?'},
+    'This is exactly the document text that will be sent:': {
+        'nl': 'Dit is precies de documenttekst die verstuurd wordt:',
+        'fr': 'Voici exactement le texte du document qui sera envoyé :',
+        'de': 'Genau dieser Dokumenttext wird gesendet:',
+        'es': 'Este es exactamente el texto del documento que se enviará:',
+        'it': 'Questo è esattamente il testo del documento che verrà inviato:'},
+    'This session: {n} request(s), {cached} item(s) answered from earlier answers, {tin} tokens in, {tout} tokens out.': {
+        'nl': 'Deze sessie: {n} vraag/vragen, {cached} item(s) beantwoord uit eerdere antwoorden, {tin} tokens in, {tout} tokens uit.',
+        'fr': 'Cette session : {n} requête(s), {cached} élément(s) résolus par des réponses précédentes, {tin} jetons en entrée, {tout} jetons en sortie.',
+        'de': 'Diese Sitzung: {n} Anfrage(n), {cached} Element(e) aus früheren Antworten beantwortet, {tin} Tokens hinein, {tout} Tokens heraus.',
+        'es': 'Esta sesión: {n} consulta(s), {cached} elemento(s) resueltos con respuestas anteriores, {tin} tokens de entrada, {tout} tokens de salida.',
+        'it': 'Questa sessione: {n} richiesta/e, {cached} elemento/i risolti con risposte precedenti, {tin} token in ingresso, {tout} token in uscita.'},
+    'failed': {
+        'nl': 'mislukt',
+        'fr': 'échec',
+        'de': 'fehlgeschlagen',
+        'es': 'fallida',
+        'it': 'non riuscita'},
+    '{items} item(s), {chars} characters of document text, {tin} tokens in, {tout} tokens out': {
+        'nl': '{items} item(s), {chars} tekens documenttekst, {tin} tokens in, {tout} tokens uit',
+        'fr': '{items} élément(s), {chars} caractères du document, {tin} jetons en entrée, {tout} jetons en sortie',
+        'de': '{items} Element(e), {chars} Zeichen Dokumenttext, {tin} Tokens hinein, {tout} Tokens heraus',
+        'es': '{items} elemento(s), {chars} caracteres del documento, {tin} tokens de entrada, {tout} tokens de salida',
+        'it': '{items} elemento/i, {chars} caratteri del documento, {tin} token in ingresso, {tout} token in uscita'},
+    '{n} request(s) logged: {chars} characters of document text sent, {tin} tokens in ({cached} from cache), {tout} tokens out.': {
+        'nl': '{n} vraag/vragen in het logboek: {chars} tekens documenttekst verstuurd, {tin} tokens in ({cached} uit de cache), {tout} tokens uit.',
+        'fr': '{n} requête(s) enregistrée(s) : {chars} caractères du document envoyés, {tin} jetons en entrée ({cached} depuis le cache), {tout} jetons en sortie.',
+        'de': '{n} Anfrage(n) protokolliert: {chars} Zeichen Dokumenttext gesendet, {tin} Tokens hinein ({cached} aus dem Cache), {tout} Tokens heraus.',
+        'es': '{n} consulta(s) registradas: {chars} caracteres del documento enviados, {tin} tokens de entrada ({cached} desde la caché), {tout} tokens de salida.',
+        'it': '{n} richiesta/e registrate: {chars} caratteri del documento inviati, {tin} token in ingresso ({cached} dalla cache), {tout} token in uscita.'},
+    '{n} request(s) with {items} snippet(s): {chars} characters of document text. Each request also carries fixed instructions with made-up examples ({fixed} characters in all), which contain nothing from your document.': {
+        'nl': '{n} vraag/vragen met {items} stukje(s) tekst: {chars} tekens documenttekst. Elke vraag bevat ook vaste instructies met verzonnen voorbeelden ({fixed} tekens in totaal), waarin niets uit je document staat.',
+        'fr': '{n} requête(s) avec {items} extrait(s) : {chars} caractères du document. Chaque requête contient aussi des instructions fixes avec des exemples inventés ({fixed} caractères au total), qui ne contiennent rien de votre document.',
+        'de': '{n} Anfrage(n) mit {items} Ausschnitt(en): {chars} Zeichen Dokumenttext. Jede Anfrage enthält außerdem feste Anweisungen mit erfundenen Beispielen ({fixed} Zeichen insgesamt), die nichts aus Ihrem Dokument enthalten.',
+        'es': '{n} consulta(s) con {items} fragmento(s): {chars} caracteres del documento. Cada consulta lleva también instrucciones fijas con ejemplos inventados ({fixed} caracteres en total), que no contienen nada de tu documento.',
+        'it': '{n} richiesta/e con {items} estratto/i: {chars} caratteri del documento. Ogni richiesta contiene anche istruzioni fisse con esempi inventati ({fixed} caratteri in tutto), che non contengono nulla del tuo documento.'},
     # ---------------------------------------------------------------- header, status, tabs
     "Open a PDF to start. Your original file is never changed.": {
         "nl": "Open een pdf om te beginnen. Je originele bestand wordt nooit gewijzigd.",
@@ -584,29 +711,40 @@ T: dict[str, dict[str, str]] = {
                                              "it": "Nessuna richiesta IA in questa sessione."},
     "Before using AI": {"nl": "Voordat je AI gebruikt", "fr": "Avant d'utiliser l'IA", "de": "Bevor Sie KI nutzen",
                         "es": "Antes de usar la IA", "it": "Prima di usare l'IA"},
-    "Some document content will be sent to the AI provider using your API key.\n\nOnly short snippets around "
-    "uncertain citations or OCR words are sent - never the whole PDF. Your AI provider may charge you for this "
-    "usage, and its own privacy terms apply. Choose 'Local-only' at any time to keep all content on this device.": {
+    "Some document content will be sent to the AI provider using your API key.\n\nOnly a few words around each "
+    "uncertain citation or OCR word are sent - never the whole PDF - and e-mail addresses, links and long numbers "
+    "in them are masked. Everything that is sent is listed in the privacy log in the AI tab. Your AI provider may "
+    "charge you for this usage, and its own privacy terms apply. Choose 'Local-only' at any time to keep all "
+    "content on this device.": {
         "nl": "Een deel van de documentinhoud wordt met jouw API-sleutel naar de AI-aanbieder gestuurd.\n\n"
-              "Alleen korte stukjes rond twijfelachtige verwijzingen of OCR-woorden worden verstuurd - nooit de "
-              "hele pdf. Je AI-aanbieder kan hiervoor kosten aanrekenen en zijn eigen privacyvoorwaarden gelden. "
-              "Kies op elk moment 'Alleen lokaal' om alles op dit apparaat te houden.",
+              "Alleen enkele woorden rond elke twijfelachtige verwijzing of elk OCR-woord worden verstuurd - nooit "
+              "de hele pdf - en e-mailadressen, links en lange getallen daarin worden gemaskeerd. Alles wat "
+              "verstuurd wordt, staat in het privacylogboek in het AI-tabblad. Je AI-aanbieder kan hiervoor kosten "
+              "aanrekenen en zijn eigen privacyvoorwaarden gelden. Kies op elk moment 'Alleen lokaal' om alles op "
+              "dit apparaat te houden.",
         "fr": "Une partie du contenu du document sera envoyée au fournisseur d'IA avec votre clé API.\n\n"
-              "Seuls de courts extraits autour des citations ou mots OCR incertains sont envoyés - jamais le PDF "
-              "entier. Votre fournisseur d'IA peut facturer cet usage et ses propres règles de confidentialité "
-              "s'appliquent. Choisissez « Local uniquement » à tout moment pour tout garder sur cet appareil.",
+              "Seuls quelques mots autour de chaque citation ou mot OCR incertain sont envoyés - jamais le PDF "
+              "entier - et les adresses e-mail, liens et longs nombres y sont masqués. Tout ce qui est envoyé "
+              "figure dans le journal de confidentialité de l'onglet IA. Votre fournisseur d'IA peut facturer cet "
+              "usage et ses propres règles de confidentialité s'appliquent. Choisissez « Local uniquement » à tout "
+              "moment pour tout garder sur cet appareil.",
         "de": "Ein Teil des Dokumentinhalts wird mit Ihrem API-Schlüssel an den KI-Anbieter gesendet.\n\n"
-              "Nur kurze Ausschnitte um unsichere Zitate oder OCR-Wörter werden gesendet - nie das ganze PDF. "
-              "Ihr KI-Anbieter kann dafür Kosten berechnen, und es gelten seine Datenschutzbedingungen. Wählen "
-              "Sie jederzeit „Nur lokal“, um alles auf diesem Gerät zu behalten.",
+              "Nur einige Wörter um jedes unsichere Zitat oder OCR-Wort werden gesendet - nie das ganze PDF - und "
+              "E-Mail-Adressen, Links und lange Zahlen darin werden maskiert. Alles Gesendete steht im "
+              "Datenschutzprotokoll im KI-Tab. Ihr KI-Anbieter kann dafür Kosten berechnen, und es gelten seine "
+              "Datenschutzbedingungen. Wählen Sie jederzeit „Nur lokal“, um alles auf diesem Gerät zu behalten.",
         "es": "Parte del contenido del documento se enviará al proveedor de IA con tu clave API.\n\n"
-              "Solo se envían fragmentos cortos alrededor de citas o palabras OCR dudosas, nunca el PDF entero. Tu "
-              "proveedor de IA puede cobrar por este uso y se aplican sus propias condiciones de privacidad. Elige "
-              "«Solo local» en cualquier momento para mantener todo en este dispositivo.",
+              "Solo se envían unas pocas palabras alrededor de cada cita o palabra OCR dudosa - nunca el PDF entero "
+              "- y se ocultan los correos electrónicos, enlaces y números largos. Todo lo enviado aparece en el "
+              "registro de privacidad de la pestaña IA. Tu proveedor de IA puede cobrar por este uso y se aplican "
+              "sus propias condiciones de privacidad. Elige «Solo local» en cualquier momento para mantener todo "
+              "en este dispositivo.",
         "it": "Parte del contenuto del documento sarà inviata al fornitore di IA con la tua chiave API.\n\n"
-              "Vengono inviati solo brevi estratti attorno a citazioni o parole OCR incerte, mai l'intero PDF. Il "
-              "fornitore di IA può addebitare questo uso e valgono le sue condizioni sulla privacy. Scegli «Solo "
-              "locale» in qualsiasi momento per tenere tutto su questo dispositivo."},
+              "Vengono inviate solo poche parole attorno a ogni citazione o parola OCR incerta - mai l'intero PDF - "
+              "e indirizzi e-mail, link e numeri lunghi vengono mascherati. Tutto ciò che viene inviato è nel "
+              "registro privacy della scheda IA. Il fornitore di IA può addebitare questo uso e valgono le sue "
+              "condizioni sulla privacy. Scegli «Solo locale» in qualsiasi momento per tenere tutto su questo "
+              "dispositivo."},
     "I understand, enable AI": {"nl": "Begrepen, AI inschakelen", "fr": "J'ai compris, activer l'IA",
                                 "de": "Verstanden, KI einschalten", "es": "Entendido, activar la IA",
                                 "it": "Ho capito, attiva l'IA"},
@@ -639,16 +777,6 @@ T: dict[str, dict[str, str]] = {
         "de": "Unsichere Ausschnitte werden an den KI-Anbieter gesendet...",
         "es": "Enviando los fragmentos dudosos al proveedor de IA...",
         "it": "Invio degli estratti incerti al fornitore di IA..."},
-    "Requests this session: {n} ({cached} answered from cache), about {chars} characters sent.": {
-        "nl": "Vragen in deze sessie: {n} ({cached} uit het geheugen beantwoord), ongeveer {chars} tekens "
-              "verstuurd.",
-        "fr": "Requêtes pendant cette session : {n} ({cached} depuis le cache), environ {chars} caractères "
-              "envoyés.",
-        "de": "Anfragen in dieser Sitzung: {n} ({cached} aus dem Zwischenspeicher), etwa {chars} Zeichen "
-              "gesendet.",
-        "es": "Consultas en esta sesión: {n} ({cached} respondidas desde la caché), unos {chars} caracteres "
-              "enviados.",
-        "it": "Richieste in questa sessione: {n} ({cached} dalla cache), circa {chars} caratteri inviati."},
     "The local result was kept.": {"nl": "Het lokale resultaat is behouden.", "fr": "Le résultat local a été "
                                    "conservé.", "de": "Das lokale Ergebnis wurde beibehalten.",
                                    "es": "Se ha mantenido el resultado local.",

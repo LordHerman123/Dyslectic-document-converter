@@ -617,6 +617,8 @@ class ConverterApp:
 
     async def on_map_click(self, e):
         self.conv_page = int(e.control.data)
+        if self.view_mode == "side":
+            self._original_follows()
         self.tabs.selected_index = self.preview_tab_index
         self.page.update()
         await self.show_pages()
@@ -637,6 +639,9 @@ class ConverterApp:
         self.ai_key_status = self.text("", 13)
         self.ai_note = self.text("", 13, italic=True)
         self.ai_usage = self.text(t("No AI requests made in this session."), 13)
+        self.ai_log_summary = self.text("", 13)
+        self.ai_log_list = ft.Column(spacing=0)
+        self.refresh_ai_log()
         self.ai_cit = ft.Checkbox(label=t("Uncertain citations"), value=a.use_for_citations,
                                   on_change=self.on_ai_tasks)
         self.ai_ocr = ft.Checkbox(label=t("Uncertain OCR words"), value=a.use_for_ocr, on_change=self.on_ai_tasks)
@@ -657,7 +662,81 @@ class ConverterApp:
                                     on_click=self.on_run_ai),
                     ft.OutlinedButton(t("Clear AI cache"), on_click=self.on_clear_cache)], wrap=True),
             self.ai_usage,
+            ft.Divider(),
+            self.text(t("Privacy log: everything sent to the AI provider"), 18, weight=ft.FontWeight.BOLD),
+            self.text(t("Each request is listed with the exact text that left this device and the answer that "
+                        "came back. The log is kept only on this device; your API key is never part of it."), 13),
+            self.ai_log_summary,
+            ft.Row([ft.OutlinedButton(t("Save log..."), icon=ft.Icons.SAVE_ALT, on_click=self.on_save_ai_log),
+                    ft.OutlinedButton(t("Clear log"), icon=ft.Icons.DELETE_OUTLINE, on_click=self.on_clear_ai_log)],
+                   wrap=True),
+            self.ai_log_list,
         ], scroll=ft.ScrollMode.AUTO, spacing=10, expand=True), padding=16, expand=True)
+
+    LOG_SHOWN = 50  # latest requests shown in the AI tab; the saved log has them all
+
+    def refresh_ai_log(self) -> None:
+        t = self.t
+        entries = self.assistant.log.entries()
+        if not entries:
+            self.ai_log_summary.value = t("Nothing has been sent to an AI provider yet.")
+            self.ai_log_list.controls = []
+            return
+        self.ai_log_summary.value = t(
+            "{n} request(s) logged: {chars} characters of document text sent, {tin} tokens in ({cached} from "
+            "cache), {tout} tokens out.", n=len(entries), chars=sum(e.document_chars for e in entries),
+            tin=sum(e.input_tokens for e in entries), cached=sum(e.cached_tokens for e in entries),
+            tout=sum(e.output_tokens for e in entries))
+        self.ai_log_list.controls = [self._log_tile(e) for e in reversed(entries[-self.LOG_SHOWN:])]
+
+    def _log_tile(self, e) -> ft.Control:
+        import time
+        t = self.t
+        task = t("Citations") if e.task == "citations" else t("OCR words")
+        stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(e.when))
+        title = f"{stamp} · {task} · {e.provider} / {e.model}"
+        sub = t("{items} item(s), {chars} characters of document text, {tin} tokens in, {tout} tokens out",
+                items=e.items, chars=e.document_chars, tin=e.input_tokens, tout=e.output_tokens)
+        if e.error:
+            sub += " · " + t("failed")
+
+        def block(label: str, value: str) -> ft.Control:
+            return ft.Column([self.text(label, 13, weight=ft.FontWeight.BOLD),
+                              ft.Container(self.text(value, 12, selectable=True),
+                                           padding=8, border_radius=6, bgcolor=self.pal["surface_low"])],
+                             spacing=4)
+
+        return ft.ExpansionTile(
+            title=self.text(title, 14), subtitle=self.text(sub, 12, color=self.pal["muted"]),
+            controls=[ft.Container(ft.Column([
+                block(t("Document snippets sent"), e.prompt),
+                block(t("Answer received"), e.answer or e.error),
+                block(t("Instructions and examples sent (the same for every request of this kind)"), e.system),
+            ], spacing=10), padding=ft.Padding.only(left=8, right=8, bottom=10))])
+
+    async def on_save_ai_log(self, e):
+        t = self.t
+        data = self.assistant.log.as_text().encode("utf-8")
+        if not data:
+            self.notify(t("Nothing has been sent to an AI provider yet."))
+            return
+        path = await self.file_picker.save_file(dialog_title=t("Save privacy log"), file_name="ai_privacy_log.txt",
+                                                allowed_extensions=["txt"], file_type=ft.FilePickerFileType.CUSTOM,
+                                                src_bytes=data)
+        if path and not self.page.web and not self.page.platform.is_mobile():
+            if not Path(path).exists() or Path(path).stat().st_size != len(data):
+                Path(path).write_bytes(data)
+        if path or self.page.web:
+            self.notify(t("Privacy log saved."))
+
+    async def on_clear_ai_log(self, e):
+        t = self.t
+        if not await self.confirm(t("Clear log"), t("Remove the privacy log from this device?"), t("Clear log"),
+                                  t("Cancel")):
+            return
+        self.assistant.log.clear()
+        self.refresh_ai_log()
+        self.page.update()
 
     def _refresh_ai_controls(self) -> None:
         cls = PROVIDERS.get(self.ai_settings.provider)
@@ -731,14 +810,27 @@ class ConverterApp:
         if self.ai_settings.mode != "ai_assisted":
             self.notify(t("AI is off. Choose 'AI-assisted' above to use it."), error=True)
             return
+        if not self.assistant.has_key:
+            self.notify(t.message("No API key entered. Add one in AI Settings."), error=True)
+            return
+        try:
+            requests = await self.in_thread(self.session.ai_preview, self.assistant, self.settings)
+        except Exception as ex:
+            log.error("AI preview failed: %s", redact(str(ex)))
+            requests = []
+        if requests and not await self.confirm(t("Send to the AI provider?"), self._ai_preview(requests),
+                                               t("Send"), t("Cancel")):
+            return
         self.busy(True, t("Sending uncertain snippets to the AI provider..."))
         try:
             summary = t.message(await self.in_thread(self.session.run_ai, self.assistant, self.settings))
-            chars = sum(u.chars_sent for u in self.assistant.usage)
-            cached = sum(1 for u in self.assistant.usage if u.cached)
+            sent = [u for u in self.assistant.usage if not u.cached]
+            cached = sum(u.items for u in self.assistant.usage if u.cached)
             self.ai_usage.value = summary + ". " + t(
-                "Requests this session: {n} ({cached} answered from cache), about {chars} characters sent.",
-                n=len(self.assistant.usage), cached=cached, chars=chars)
+                "This session: {n} request(s), {cached} item(s) answered from earlier answers, {tin} tokens in, "
+                "{tout} tokens out.", n=len(sent), cached=cached, tin=sum(u.input_tokens for u in sent),
+                tout=sum(u.output_tokens for u in sent))
+            self.status.value = summary
             self.notify(summary)
         except ConsentRequired as ex:
             self.notify(t.message(str(ex).split("\n")[0]), error=True)
@@ -749,8 +841,28 @@ class ConverterApp:
             self.notify(t("The AI request failed; the local result was kept."), error=True)
         finally:
             self.busy(False)
+        self.refresh_ai_log()
         self.refresh_review()
         await self.rerender()
+
+    def _ai_preview(self, requests) -> ft.Control:
+        """What asking the AI now would send: every document snippet, and the size of the fixed part."""
+        t = self.t
+        items = sum(len(r.keys) for r in requests)
+        doc_chars = sum(len(r.prompt) for r in requests)
+        fixed = sum(len(r.system) for r in requests)
+        lines = [ft.Text(t("{n} request(s) with {items} snippet(s): {chars} characters of document text. Each "
+                           "request also carries fixed instructions with made-up examples ({fixed} characters in "
+                           "all), which contain nothing from your document.", n=len(requests), items=items,
+                           chars=doc_chars, fixed=fixed), size=self.fs(14)),
+                 ft.Text(t("This is exactly the document text that will be sent:"), size=self.fs(14),
+                         weight=ft.FontWeight.BOLD)]
+        for r in requests:
+            label = t("Citations") if r.task.name == "citations" else t("OCR words")
+            lines.append(ft.Text(label, size=self.fs(13), weight=ft.FontWeight.BOLD))
+            lines.append(ft.Container(ft.Text(r.prompt, size=self.fs(12), selectable=True),
+                                      padding=8, border_radius=6, bgcolor=self.pal["surface_low"]))
+        return ft.Container(ft.Column(lines, spacing=8, scroll=ft.ScrollMode.AUTO), width=640, height=420)
 
     # ---------------------------------------------------------------- settings tab
     def build_settings_tab(self) -> ft.Control:
@@ -852,7 +964,8 @@ class ConverterApp:
         ], scroll=ft.ScrollMode.AUTO, spacing=10, expand=True), padding=16, expand=True)
 
     # ================================================================ dialogs
-    async def confirm(self, title: str, message: str, yes: str, no: str) -> bool:
+    async def confirm(self, title: str, message, yes: str, no: str) -> bool:
+        """Ask a yes/no question. ``message`` is text or a control (for longer content)."""
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
 
         def close(result: bool):
@@ -863,7 +976,7 @@ class ConverterApp:
             return handler
 
         dlg = ft.AlertDialog(modal=True, title=self.text(title, 18, weight=ft.FontWeight.BOLD),
-                             content=self.text(message, 14),
+                             content=self.text(message, 14) if isinstance(message, str) else message,
                              actions=[ft.TextButton(no, on_click=close(False)),
                                       ft.FilledButton(yes, on_click=close(True))])
         self.page.show_dialog(dlg)
@@ -1023,9 +1136,33 @@ class ConverterApp:
     async def page_step(self, which: str, delta: int) -> None:
         if which == "orig":
             self.orig_page = max(0, min(self.orig_count - 1, self.orig_page + delta))
+            if self.view_mode == "side":
+                self._converted_follows()
         else:
             self.conv_page = max(0, min(self.conv_count - 1, self.conv_page + delta))
+            if self.view_mode == "side":
+                self._original_follows(delta)
         await self.show_pages()
+
+    def _page_map(self) -> dict[int, list[int]]:
+        return getattr(self.session, "page_map", None) or {}
+
+    def _original_follows(self, delta: int = 1) -> None:
+        """Side by side: the original turns once the converted pages have moved past its content."""
+        shown = self._page_map().get(self.conv_page)
+        if not shown or self.orig_page in shown:
+            return  # contents/notes pages, or the original page is still being read
+        target = min(shown) if delta >= 0 else max(shown)
+        self.orig_page = max(0, min(self.orig_count - 1, target))
+
+    def _converted_follows(self) -> None:
+        """Side by side: the converted view jumps to where the original page's content starts."""
+        pages = sorted(self._page_map().items())
+        hit = next((p for p, src in pages if self.orig_page in src), None)
+        if hit is None:  # a page without text (a picture page): the next content after it
+            hit = next((p for p, src in pages if min(src) > self.orig_page), None)
+        if hit is not None:
+            self.conv_page = max(0, min(self.conv_count - 1, hit))
 
     async def on_view_mode(self, e):
         mode = list(e.control.selected)[0] if e.control.selected else "side"
