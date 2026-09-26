@@ -1312,7 +1312,9 @@ def _equations(page: pymupdf.Page, lines: list[RawLine]) -> tuple[list[RawFigure
                     len(l.text) <= 70 and words <= 4 and l.x0 >= rx0 - body))
                 # rows of a cases block above or below, indented from the region's left edge
                 touching = (l.y0 < y1 + 0.5 * body and l.y1 > y1) or (l.y1 > y0 - 0.5 * body and l.y0 < y0)
-                row = touching and l.x0 > rx0 + body and words <= 1 and len(l.text) <= 70 and math > 0 \
+                brace = any(c in l.text for c in "⎧⎨⎩⎪{⎛⎝⎜⌈⌊")  # a row of a cases block or matrix
+                row = touching and l.x0 > rx0 + body and words <= (3 if brace else 1) and len(l.text) <= 70 \
+                    and math > 0 \
                     and not inline(l)
                 # the last row of a matrix or array: numbers and symbols only, within the region's width
                 prof = _math_profile(l)
