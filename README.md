@@ -11,9 +11,9 @@ Your original PDF is only ever read, never modified.
 Everything works **locally and without AI**. AI is an optional extra that you turn on with your own
 API key. When it's on, it only sees small snippets that the local rules couldn't decide.
 
-## Download for Windows (version 1.5)
+## Download for Windows (version 1.6)
 
-Get `DyslexiaConverter-1.5.0-setup.exe` (installer) or `DyslexiaConverter-1.5.0-windows.zip` (unzip and
+Get `DyslexiaConverter-1.6.0-setup.exe` (installer) or `DyslexiaConverter-1.6.0-windows.zip` (unzip and
 double-click `DyslexiaConverter.exe`) from the repository's **Releases** page. Text recognition (Tesseract)
 is included; nothing else needs to be installed. How the Windows build is made: [windows/README.md](windows/README.md).
 
@@ -25,6 +25,7 @@ pip install -r requirements.txt
 #   Ubuntu/Debian: sudo apt install tesseract-ocr tesseract-ocr-nld
 #   macOS:         brew install tesseract tesseract-lang
 #   Windows:       https://github.com/UB-Mannheim/tesseract/wiki
+# reading aloud uses the computer's voices; on Linux install eSpeak: sudo apt install espeak-ng
 
 python main.py                                  # desktop app
 python -m dyslexia_converter paper.pdf          # command line -> paper_readable.pdf
@@ -45,7 +46,7 @@ python -m dyslexia_converter chapter.pdf --pages 3-18 --move-citations -f printa
 |---|---|
 | PDF input | Checks each page for selectable text, scanned images, or both. Reports whether OCR was used. Password-protected PDFs get a clear error. Optional page range. |
 | OCR | Tesseract (English, Dutch, German, French, Spanish, Italian, Portuguese — whichever language packs are installed). Rebuilds lines, paragraphs, headings and reading order. Pictures and ruled tables on scanned pages are kept as images. |
-| Book scans & photocopies | Pages made of image tiles, with or without a copier's hidden text layer, are recognised as scans. Each scan is cleaned before reading: two-page spreads are split at the gutter, gutter shadows and uneven lighting are flattened, dark scanner borders are removed, each page is straightened (deskewed), and sideways or upside-down scans are turned the right way up. Words broken across lines or pages are rejoined. Book running headers ("12 CHAPTER TITLE" / "Section 13") are removed, section headings and epigraphs are recognised, and numbered photo captions stay with their picture. Pages are OCR'd in parallel at 225 dpi, and the result is saved on this device, so reopening the same PDF takes well under a second. Without Tesseract, the scanner's own text layer is used when there is one; pages where that text is garbled are shown as pictures of the original, with a note. |
+| Book scans & photocopies | Pages made of image tiles, with or without a copier's hidden text layer, are recognised as scans. Each scan is cleaned before reading: two-page spreads are split at the gutter, gutter shadows and uneven lighting are flattened, dark scanner borders are removed, each page is straightened (deskewed), lines that curve into the book's spine are straightened too, and sideways or upside-down scans are turned the right way up. Words broken across lines or pages are rejoined, also when OCR read stray marks next to the hyphen, and two words run together ("forthe") are split again. Letters at the page edge are kept when a box edge or scanner border runs down the same column. Book running headers ("12 CHAPTER TITLE" / "Section 13") are removed, section headings and epigraphs are recognised, and numbered photo captions stay with their picture. Pages are OCR'd in parallel at 225 dpi, and the result is saved on this device, so reopening the same PDF takes well under a second. Without Tesseract, the scanner's own text layer is used when there is one; pages where that text is garbled are shown as pictures of the original, with a note. |
 | OCR correction | Uses local dictionaries (pyspellchecker: English, Dutch, German, French, Spanish, Italian, Portuguese) plus the typical OCR mix-ups (`rn`→`m`, `l`→`i`, `0`→`o`, …). Only high-confidence fixes are applied automatically. Modes: Automatic, Review (Accept/Reject in the app) and Off. The review shows the whole sentence around each word, with the word highlighted. If neither the scan nor the suggestion is right (for example a word split in two, like “diffe ent”), the pencil (Edit) lets you retype the sentence; only the words you change are stored, as your own correction, and Undo brings back the scanned text. Names, abbreviations, identifiers, British/American spellings, words that are correct in another of these languages (such as a quoted French term) and your own dictionary words are left alone. |
 | Structure | Title, authors, numbered and unnumbered headings with levels, paragraphs (rejoined across columns and pages), bullet and numbered lists, captions linked to their figure or table, footnotes, references and running headers/footers. All of this uses simple rules based on font size, weight, typeface, position, white space and numbering. The PDF's own bookmarks are used when present. |
 | Reading order | Multi-column aware (recursive XY-cut): column 1 is read before column 2, and full-width titles and figures stay in place. |
@@ -57,8 +58,9 @@ python -m dyslexia_converter chapter.pdf --pages 3-18 --move-citations -f printa
 | Citations | Optional: author-year citations become `[n]` markers that point to the numbered reference list. Unmatched citations get their own list, and the original citation text is always kept. Numeric citations, ranges (`[3–7]`) and lists (`[2, 5, 8]`) are recognised. Uncertain cases are left unchanged, or passed to the AI if you allow it. |
 | Footnotes | Optional: footnotes move to a Notes section at the end, with `[Note n]` markers in the text. Page notes such as affiliations and licences are kept too. |
 | Document map | Clickable headings in the app, PDF bookmarks, and a Contents page. Headings in DOCX exports show up in Word's Navigation pane. |
+| Read aloud | *Read aloud* reads the converted document from the page you are looking at, with the voices already on your computer (it works offline; nothing leaves the device). The sentence being read is highlighted, the word being said is boxed, and the pages turn along. Pause, stop, speed and voice can be set; the voice follows the document's language. Desktop app only. |
 | Preview | Original, converted, or both side by side, with page navigation. In *Both*, turning a page on one side turns the other side along to the matching content. Changing a setting re-renders the preview without re-reading the PDF. |
-| Export | PDF, printable PDF (no tints or backgrounds, black text), DOCX, plain text and Markdown. PDFs are A4, keep selectable Unicode text and embed font subsets. Headings stay with the text that follows them, and paragraphs avoid widow and orphan lines. |
+| Export | PDF, printable PDF (no tints or backgrounds, black text), DOCX, EPUB, plain text and Markdown. PDFs are A4, keep selectable Unicode text and embed font subsets, and are *tagged*: screen readers and read-aloud tools (such as Acrobat's Read Out Loud) follow the headings and paragraphs in order, read formulas and figures from their description, and skip page numbers. The EPUB is a reflowable book for e-readers, tablets and phones: the reading app can change font, size and colours, notes and citations are links, and it passes epubcheck. Headings stay with the text that follows them, and paragraphs avoid widow and orphan lines. |
 | Settings | Presets: Standard, Spacious, High Readability, Compact print and My Settings. Settings are saved between sessions and can be reset to the defaults. |
 | App settings | A Settings tab with the app language (English, Nederlands, Français, Deutsch, Español, Italiano; the device language is used at first start), dark mode, high-contrast colours and app text size. These change straight away, even with a document open, and only affect the app, not your exported documents. The tab also shows where Tesseract was found, lets you clear saved OCR results, and shows where your settings are stored. The look is burgundy & champagne on warm cream (a dark wine colour in dark mode), matching the "Dc" logo. |
 | Document language | Detected automatically from each PDF's text and shown next to *Detect automatically*. You can pick English, Dutch, German, French, Spanish, Italian or Portuguese yourself if the guess is wrong: it sets the dictionary for OCR, OCR corrections and rejoining split words. Words the converter adds to a document (Contents, Notes, `[Note 1]`, the "About this version" note) follow the document's language, e.g. *Inhoud*, *Noten*, `[Noot 1]`. The author's text is never translated. |
@@ -116,6 +118,7 @@ dyslexia_converter/
   fonts.py              bundled + system fonts, substitution notes
   extract/
     pdf_reader.py       page-type detection, text+layout, figures, tables, OCR pages
+    scan.py             scan clean-up: spreads, shadows, borders, skew, curled lines
     ocr.py              OcrEngine interface + Tesseract engine (swap for Android ML Kit)
     layout.py           multi-column reading order (XY-cut)
   structure/detector.py deterministic structure detection
@@ -128,10 +131,13 @@ dyslexia_converter/
     pdf_writer.py       ReportLab PDF with letter/word spacing, font fallback, outline, TOC
     docx_writer.py      Word export
     text_writer.py      text / Markdown export
-    preview.py          page images for the preview
+    preview.py          page images for the preview (with the read-aloud highlight)
+    pdf_tags.py         tagged PDF structure for screen readers
+    epub_writer.py      EPUB 3 export
     labels.py           words the converter adds (Contents, Notes...) in the document's language
   ai/                   optional: providers, prompts (few-shot), privacy masking, request log,
                         consent, cache, key storage, redaction
+  speech.py             reading aloud: sentences with their place on the page, speech thread
   pipeline.py           load() once, then compose/export as often as settings change
   cli.py                command line
   ui/app.py             Flet app (desktop / web / Android)
@@ -142,7 +148,7 @@ tests/                  pytest suite (generates its own sample PDFs, incl. a sca
 
 The processing pipeline is the one from the specification:
 `PDF → type detection → text/OCR → structure → OCR correction → citations (local, then optional AI)
-→ layout/compose → preview → PDF/DOCX/TXT/MD`. The stages are separate modules. The UI only calls
+→ layout/compose → preview → PDF/DOCX/EPUB/TXT/MD`. The stages are separate modules. The UI only calls
 `pipeline.load()`, `Session.export()` and a few session methods, so a different front end, such as a
 native Android app, can reuse the core.
 

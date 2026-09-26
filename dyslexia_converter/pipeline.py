@@ -231,7 +231,7 @@ class Session:
         return compose(self.document, settings, self.ai_citation_decisions)
 
     def export(self, fmt: str, settings: FormatSettings) -> bytes:
-        from .render import docx_writer, pdf_writer, text_writer
+        from .render import docx_writer, epub_writer, pdf_writer, text_writer
 
         result = self.compose(settings)
         doc = self.document
@@ -243,6 +243,8 @@ class Session:
             return data
         if fmt == "docx":
             return docx_writer.build_docx(result, settings, doc.title or _first_title(result), doc.author)
+        if fmt == "epub":
+            return epub_writer.build_epub(result, settings, doc.title or _first_title(result), doc.author)
         if fmt == "txt":
             return text_writer.build_text(result).encode("utf-8")
         if fmt == "md":

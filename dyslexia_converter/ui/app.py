@@ -13,7 +13,7 @@ from typing import Callable, Optional
 
 import flet as ft
 
-from .. import pipeline
+from .. import pipeline, speech
 from ..ai.assistant import PRIVACY_NOTICE, AIAssistant, ConsentRequired
 from ..ai.keystore import KeyStore, install_log_redaction, redact
 from ..ai.providers import PROVIDERS, AIError
@@ -32,10 +32,16 @@ log = logging.getLogger("dyslexia_converter")
 RELOAD_KEYS = {"split_spreads", "scan_text_source", "ocr_language"}
 
 EXPORTS = [("pdf", "PDF", "pdf"), ("printable_pdf", "Printable PDF", "pdf"), ("docx", "Word (DOCX)", "docx"),
-           ("txt", "Plain text", "txt"), ("md", "Markdown", "md")]
+           ("epub", "EPUB (e-reader)", "epub"), ("txt", "Plain text", "txt"), ("md", "Markdown", "md")]
 # document languages (codes used by the core) and their English names (translated in the UI)
 DOC_LANGUAGES = [("en", "English"), ("nl", "Dutch"), ("de", "German"), ("fr", "French"), ("es", "Spanish"),
                  ("it", "Italian"), ("pt", "Portuguese")]
+
+
+def _speed_text(v: float) -> str:
+    """1.0×, 1.25×, 0.5×"""
+    s = f"{v:.2f}".rstrip("0")
+    return (s + "0" if s.endswith(".") else s) + "×"
 
 
 class ConverterApp:
@@ -60,6 +66,12 @@ class ConverterApp:
         self.orig_count = 0
         self.conv_count = 0
         self.view_mode = "side"
+        self.speaker = speech.Speaker()
+        self._read_units: Optional[list] = None  # sentences of the converted PDF, made when reading starts
+        self._read_pos: Optional[int] = None  # sentence being read (kept when paused)
+        self._reading = False
+        self._hl_busy = False
+        self._hl_next: Optional[tuple[int, int]] = None
         self._render_task: Optional[asyncio.Task] = None
         self._controls: dict[str, ft.Control] = {}
         self.file_picker = ft.FilePicker()
@@ -211,6 +223,7 @@ class ConverterApp:
     async def rebuild(self, tab: Optional[int] = None) -> None:
         """Build the whole window again (after changing the app language or text size), keeping the document."""
         first, last = self.tf_first.value, self.tf_last.value
+        self.stop_reading()
         self.page.controls.clear()
         self.build()
         self.tf_first.value, self.tf_last.value = first, last
@@ -417,7 +430,7 @@ class ConverterApp:
         # preview
         self.orig_img = ft.Image(src=_blank_png(), fit=ft.BoxFit.CONTAIN, expand=True,
                                  semantics_label=t("Original page"))
-        self.conv_img = ft.Image(src=_blank_png(), fit=ft.BoxFit.CONTAIN, expand=True,
+        self.conv_img = ft.Image(src=_blank_png(), fit=ft.BoxFit.CONTAIN, expand=True, gapless_playback=True,
                                  semantics_label=t("Converted page"))
         self.orig_label = self.text(t("Original"), 13)
         self.conv_label = self.text(t("Converted"), 13)
@@ -455,6 +468,7 @@ class ConverterApp:
                           for fmt, label, _ in EXPORTS]
         preview_col = ft.Column([
             ft.Row([self.view_seg], wrap=True),
+            self.build_read_bar(),
             ft.Row([self.orig_panel, self.conv_panel], expand=True, vertical_alignment=ft.CrossAxisAlignment.START),
             ft.Row([self.text(t("Export:"), 14, weight=ft.FontWeight.BOLD)] + export_buttons, wrap=True),
         ], expand=True)
@@ -1111,6 +1125,7 @@ class ConverterApp:
     async def rerender(self) -> None:
         if not self.session:
             return
+        self.stop_reading()  # the pages change: what was being read no longer matches
         self.busy(True, self.status.value)
         try:
             self.converted_pdf = await self.in_thread(self.session.export, "pdf", self.settings)
@@ -1123,6 +1138,177 @@ class ConverterApp:
             self.busy(False)
         self.refresh_map()
         await self.show_pages()
+
+    # ---------------------------------------------------------------- read aloud
+    def build_read_bar(self) -> ft.Control:
+        t = self.t
+        self.read_btn = ft.FilledButton(t("Read aloud"), icon=ft.Icons.VOLUME_UP, on_click=self.on_read,
+                                        tooltip=t("Reads the converted document aloud with the voices on this "
+                                                  "computer, from the page you are looking at. Nothing leaves "
+                                                  "this device."))
+        self.pause_btn = ft.IconButton(ft.Icons.PAUSE, tooltip=t("Pause"), on_click=self.on_read_pause,
+                                       disabled=True)
+        self.stop_btn = ft.IconButton(ft.Icons.STOP, tooltip=t("Stop"), on_click=self.on_read_stop, disabled=True)
+        speed = float(self.ui.get("read_speed", 1.0))
+        self.speed_label = self.text(_speed_text(speed), 13)
+        self.speed_slider = ft.Slider(min=0.5, max=2.0, divisions=6, value=speed, width=150,
+                                      on_change_end=self.on_read_speed)
+        voices = self.speaker.voices() if self._speech_allowed() else []
+        self.voice_dd = ft.Dropdown(label=t("Voice"), width=260, text_size=self.fs(13), dense=True,
+                                    options=[ft.DropdownOption(key="auto", text=t("Automatic"))]
+                                    + [ft.DropdownOption(key=vid, text=name) for vid, name in voices],
+                                    value=self.ui.get("read_voice", "auto"), on_select=self.on_read_voice)
+        self.follow_cb = ft.Checkbox(label=t("Turn pages along"), value=bool(self.ui.get("read_follow", True)),
+                                     on_change=self.on_read_follow)
+        available = bool(voices)
+        if not available:
+            self.read_btn.disabled = True
+            self.read_btn.tooltip = t("No speech voices were found on this device.")
+        return ft.Container(ft.Row([
+            self.read_btn, self.pause_btn, self.stop_btn,
+            self.text(t("Speed"), 13), self.speed_slider, self.speed_label, self.voice_dd, self.follow_cb,
+        ], wrap=True, spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            padding=ft.Padding.symmetric(horizontal=8, vertical=2), border_radius=10,
+            bgcolor=self.pal["surface_low"], visible=self._speech_allowed())
+
+    def _speech_allowed(self) -> bool:
+        """Speech plays on the computer running the app: in the web version that is the server, not the reader."""
+        return not self.page.web
+
+    def _update_read_buttons(self) -> None:
+        t = self.t
+        self.read_btn.content = t("Read aloud") if self._read_pos is None or self._reading else t("Continue")
+        self.read_btn.disabled = self._reading or not self.speaker.voices()
+        self.pause_btn.disabled = not self._reading
+        self.stop_btn.disabled = not self._reading and self._read_pos is None
+
+    def _voice(self) -> Optional[str]:
+        v = self.ui.get("read_voice", "auto")
+        if v and v != "auto":
+            return v
+        lang = self.session.document.language if self.session else "en"
+        return self.speaker.voice_for(lang)
+
+    async def on_read(self, e):
+        if not self.converted_pdf or self._reading:
+            return
+        if self._read_units is None:
+            pages = sorted(self._page_map())
+            skip = frozenset(range(pages[0])) if pages else frozenset()  # the contents page(s)
+            self._read_units = await self.in_thread(lambda: speech.reading_units(self.converted_pdf,
+                                                                                 skip_pages=skip))
+        units = self._read_units
+        if not units:
+            self.notify(self.t("There is no text to read on these pages."))
+            return
+        start = self._read_pos
+        if start is None or start >= len(units) or units[start].page != self.conv_page:
+            start = speech.first_sentence_on(units, self.conv_page)  # read from the page being looked at
+        loop = asyncio.get_running_loop()
+
+        def post(coro):
+            try:
+                asyncio.run_coroutine_threadsafe(coro, loop)
+            except RuntimeError:
+                pass  # the app is closing
+
+        self._reading = True
+        self._read_pos = start
+        self._update_read_buttons()
+        self.page.update()
+        self.speaker.start(units, start, float(self.ui.get("read_speed", 1.0)), self._voice(),
+                           on_word=lambda si, wi: post(self._show_word(si, wi)),
+                           on_sentence=lambda si: post(self._show_word(si, 0)),
+                           on_done=lambda finished: post(self._read_done(finished)))
+
+    async def _show_word(self, si: int, wi: int) -> None:
+        """Highlight the sentence and word being read; turn the page when the reading moves on."""
+        if not self._reading or self._read_units is None or si >= len(self._read_units):
+            return
+        self._hl_next = (si, wi)
+        if self._hl_busy:
+            return  # a highlight is being drawn; it picks up the newest position when done
+        self._hl_busy = True
+        try:
+            while self._hl_next is not None and self._reading:
+                si, wi = self._hl_next
+                self._hl_next = None
+                self._read_pos = si
+                sentence = self._read_units[si]
+                word = sentence.words[min(wi, len(sentence.words) - 1)]
+                page = word.page
+                if page != self.conv_page:
+                    if not self.follow_cb.value:
+                        continue
+                    self.conv_page = page
+                    self.conv_label.value = f"{self.t('Converted')} {self.conv_page + 1} / {self.conv_count}"
+                    if self.view_mode == "side":
+                        before = self.orig_page
+                        self._original_follows(1)
+                        if self.orig_page != before and self.source_path:
+                            self.orig_img.src = await self.in_thread(preview.render_page, self.source_path,
+                                                                     self.orig_page, 800)
+                            self.orig_label.value = f"{self.t('Original')} {self.orig_page + 1} / {self.orig_count}"
+                rects = [r for w in sentence.words if w.page == page for r in w.rects]
+                self.conv_img.src = await self.in_thread(preview.render_highlight, self.converted_pdf, page, 800,
+                                                         rects, [r for r in word.rects], bool(self.ui.get("dark_mode")))
+                self.page.update()
+        finally:
+            self._hl_busy = False
+
+    async def _read_done(self, finished: bool) -> None:
+        was_reading = self._reading
+        self._reading = False
+        if finished:
+            self._read_pos = None
+        self._update_read_buttons()
+        if finished and was_reading:
+            await self.show_pages()  # remove the highlight
+        else:
+            self.page.update()
+
+    def stop_reading(self) -> None:
+        """Stop and forget the position (the document or its layout changed)."""
+        self._reading = False
+        self.speaker.stop()
+        self._read_pos = None
+        self._read_units = None
+        if hasattr(self, "read_btn"):
+            self._update_read_buttons()
+
+    async def on_read_pause(self, e):
+        self._reading = False
+        self.speaker.stop()
+        self._update_read_buttons()
+        self.page.update()
+
+    async def on_read_stop(self, e):
+        self._reading = False
+        self.speaker.stop()
+        self._read_pos = None
+        self._update_read_buttons()
+        await self.show_pages()
+
+    async def _restart_reading(self) -> None:
+        if self._reading:
+            await self.on_read_pause(None)
+            await self.on_read(None)
+
+    async def on_read_speed(self, e):
+        self.ui["read_speed"] = round(float(e.control.value), 2)
+        self.speed_label.value = _speed_text(self.ui["read_speed"])
+        self.store.save_ui(self.ui)
+        self.page.update()
+        await self._restart_reading()  # the new speed starts with the current sentence
+
+    async def on_read_voice(self, e):
+        self.ui["read_voice"] = e.control.value
+        self.store.save_ui(self.ui)
+        await self._restart_reading()
+
+    async def on_read_follow(self, e):
+        self.ui["read_follow"] = bool(e.control.value)
+        self.store.save_ui(self.ui)
 
     async def show_pages(self) -> None:
         if self.source_path:

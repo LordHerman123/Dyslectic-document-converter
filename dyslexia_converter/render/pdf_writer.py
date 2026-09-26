@@ -25,6 +25,8 @@ from reportlab.lib.units import cm
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
+from . import pdf_tags
+from .pdf_tags import Tagger, tag
 from reportlab.platypus import (BaseDocTemplate, CondPageBreak, Flowable, Frame, Image, KeepTogether, PageBreak,
                                 PageTemplate, Paragraph, Spacer, Table, TableStyle)
 from reportlab.platypus.tableofcontents import TableOfContents
@@ -324,6 +326,8 @@ class RichParagraph(Flowable):
         b = RichParagraph(self.runs, self.style, "", None, self.keepWithNext, self._lines[fit:], False, self._last)
         for p in (a, b):
             p._lines_width = None
+            if hasattr(self, "_pdf_tag"):
+                p._pdf_tag = self._pdf_tag  # both parts belong to the same paragraph
         return [a, b]
 
     # --------------------------------------------------------------- drawing
@@ -385,8 +389,13 @@ class RichParagraph(Flowable):
                 px = x
                 for pi, p in enumerate(word):
                     if p.image is not None:
+                        spoken = p.image.alt if getattr(c, "_tagger", None) is not None else ""
+                        if spoken:  # read aloud as its text instead of being skipped
+                            pdf_tags.begin_actual_text(c, spoken)
                         c.drawImage(ImageReader(io.BytesIO(p.image.data)), px, baseline + p.rise, p.width, p.height,
                                     mask="auto")
+                        if spoken:
+                            pdf_tags.end_artifact(c)
                         px += p.width
                         continue
                     t = c.beginText(px - p.back, baseline)
@@ -404,6 +413,28 @@ class RichParagraph(Flowable):
             c.setStrokeColor(s.rule_below)
             c.setLineWidth(0.8)
             c.line(x0, 1, x0 + box_w, 1)
+
+
+def _copy_tag_on_split(cls) -> None:
+    orig = cls.split
+
+    def split(self, *args, **kw):
+        parts = orig(self, *args, **kw)
+        t = getattr(self, "_pdf_tag", None)
+        if t is not None:
+            for p in parts:
+                p._pdf_tag = t
+        return parts
+
+    cls.split = split
+
+
+# what these flowables draw becomes marked content of their structure element (tagged PDF);
+# without a tag, or when not building a tagged PDF, drawing is unchanged
+for _cls in (RichParagraph, Image, Table, TableOfContents):
+    _cls.drawOn = pdf_tags.tagged_draw_on(_cls.drawOn)
+for _cls in (Table, TableOfContents):
+    _copy_tag_on_split(_cls)
 
 
 INLINE_FORMULA_BOOST = 1.15
@@ -448,6 +479,8 @@ class _Doc(BaseDocTemplate):
         # every build pass starts afresh: page of the converted PDF -> pages of the original shown on it
         self.page_map: dict[int, set[int]] = {}
         self._source: Optional[int] = None
+        self.tagger.reset()
+        self.canv._tagger = self.tagger
         super().handle_documentBegin()
 
     def afterFlowable(self, flowable):
@@ -601,6 +634,22 @@ def _table_flowable(item: RItem, s: FormatSettings, col_w: float, max_h: float, 
     return t, ""
 
 
+def _spoken(text: str, images: dict) -> str:
+    """Text as a screen reader should say it: inline formula placeholders become the formula's text."""
+    out = []
+    for ch in text:
+        img = images.get(ch)
+        if img is not None:
+            out.append(img.alt)
+        elif not (0xE000 <= ord(ch) <= 0xF8FF or ord(ch) >= 0xF0000):  # other private-use placeholders
+            out.append(ch)
+    return " ".join("".join(out).split())
+
+
+# structure types (tagged PDF) of the kinds of text; everything else is a paragraph
+STRUCT_KINDS = {"caption": "Caption", "endnote": "Note", "footnote": "Note", "quote": "BlockQuote"}
+
+
 def build_pdf(result: ComposeResult, s: FormatSettings, title: str = "", author: str = "",
               printable: bool = False) -> bytes:
     """Render the composed document to PDF bytes."""
@@ -616,6 +665,7 @@ def build_pdf(result: ComposeResult, s: FormatSettings, title: str = "", author:
     pad = 6
 
     def on_page(canv, doc):
+        pdf_tags.begin_artifact(canv)  # page tint and page number: not read out
         canv.saveState()
         if tint is not None:
             canv.setFillColor(tint)
@@ -625,12 +675,14 @@ def build_pdf(result: ComposeResult, s: FormatSettings, title: str = "", author:
             canv.setFillColor(MUTED if tint is not None else colors.black)
             canv.drawCentredString(page_w / 2, max(0.6 * cm, mb / 2 - 4), str(doc.page))
         canv.restoreState()
+        pdf_tags.end_artifact(canv)
 
     doc = _Doc(buf, pagesize=A4, leftMargin=ml, rightMargin=mr, topMargin=mt, bottomMargin=mb,
                title=title or "Converted document", author=author,
                subject="Reformatted for easier reading", creator="Dyslexia Converter")
     frame = Frame(frame_x, mb, col_w, frame_h, leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0)
     doc.addPageTemplates([PageTemplate("main", [frame], onPage=on_page)])
+    tagger = doc.tagger = Tagger()
 
     styles = _styles(s, printable)
     story: list[Flowable] = []
@@ -643,9 +695,9 @@ def build_pdf(result: ComposeResult, s: FormatSettings, title: str = "", author:
                            leading=s.font_size * 1.7, leftIndent=i * s.font_size * 1.4, firstLineIndent=0)
             for i in range(3)]
         toc.dotsMinLevel = -1
-        story.append(RichParagraph([Run(doc_label(result.language, "contents"))], styles["heading1"],
-                                   keep_with_next=True))
-        story.append(toc)
+        story.append(tag(RichParagraph([Run(doc_label(result.language, "contents"))], styles["heading1"],
+                                       keep_with_next=True), tagger, "H1"))
+        story.append(tag(toc, tagger, "TOC"))
         story.append(PageBreak())
 
     # normalise heading levels so the PDF outline never skips a level
@@ -664,10 +716,14 @@ def build_pdf(result: ComposeResult, s: FormatSettings, title: str = "", author:
         if kind == "image":
             fl = _image_flowable(it, col_w, frame_h * 0.7)
             if fl is not None:
-                if i + 1 < len(items) and items[i + 1].kind == "caption":
+                has_caption = i + 1 < len(items) and items[i + 1].kind == "caption"
+                alt = (it.image.alt if it.image else "") or (items[i + 1].text if has_caption else "")
+                alt = _spoken(alt, result.inline_images)
+                tag(fl, tagger, "Figure", alt or doc_label(result.language, "figure"))
+                if has_caption:
                     cap = items[i + 1]
                     story.append(KeepTogether([Spacer(1, s.paragraph_spacing * 0.5), fl, Spacer(1, 4),
-                                               RichParagraph(cap.runs, styles["caption"])]))
+                                               tag(RichParagraph(cap.runs, styles["caption"]), tagger, "Caption")]))
                     i += 2
                     continue
                 story += [Spacer(1, s.paragraph_spacing * 0.5), fl, Spacer(1, s.paragraph_spacing)]
@@ -676,14 +732,16 @@ def build_pdf(result: ComposeResult, s: FormatSettings, title: str = "", author:
         if kind == "equation":
             fl = _equation_flowable(it, s, col_w)
             if fl is not None:
+                tag(fl, tagger, "Formula", _spoken(getattr(fl, "_alt", ""), result.inline_images)
+                    or doc_label(result.language, "formula"))
                 story += [Spacer(1, s.paragraph_spacing * 0.35), fl, Spacer(1, s.paragraph_spacing * 0.6)]
             i += 1
             continue
         if kind == "table":
             fl, note = _table_flowable(it, s, col_w, frame_h * 0.8, printable)
-            story.append(fl)
+            story.append(tag(fl, tagger, "Table"))
             if note:
-                story.append(RichParagraph([Run(note)], styles["small"]))
+                story.append(tag(RichParagraph([Run(note)], styles["small"]), tagger, "P"))
             story.append(Spacer(1, s.paragraph_spacing))
             i += 1
             continue
@@ -701,21 +759,22 @@ def build_pdf(result: ComposeResult, s: FormatSettings, title: str = "", author:
                     need += st.leading * 2 + st.space_before
                     j += 1
                 story.append(CondPageBreak(need))
-            story.append(RichParagraph(it.runs, st, outline=(outline_level, it.text.strip()),
-                                       keep_with_next=True))
+            story.append(tag(RichParagraph(it.runs, st, outline=(outline_level, it.text.strip()),
+                                           keep_with_next=True), tagger, f"H{min(6, outline_level + 1)}"))
             i += 1
             continue
         if kind == "title":
-            story.append(RichParagraph(it.runs, styles["title"], outline=(0, it.text.strip()), keep_with_next=True))
+            story.append(tag(RichParagraph(it.runs, styles["title"], outline=(0, it.text.strip()), keep_with_next=True),
+                             tagger, "H1"))
             prev_level = 0
             i += 1
             continue
         st = styles.get(kind, styles["paragraph"])
         if kind == "caption" and it.keep_with_next and i + 1 < len(items) and items[i + 1].kind == "table":
             fl, note = _table_flowable(items[i + 1], s, col_w, frame_h * 0.8, printable)
-            group = [RichParagraph(it.runs, st), fl]
+            group = [tag(RichParagraph(it.runs, st), tagger, "Caption"), tag(fl, tagger, "Table")]
             if note:
-                group.append(RichParagraph([Run(note)], styles["small"]))
+                group.append(tag(RichParagraph([Run(note)], styles["small"]), tagger, "P"))
             story.append(KeepTogether(group))
             story.append(Spacer(1, s.paragraph_spacing))
             i += 2
@@ -732,14 +791,15 @@ def build_pdf(result: ComposeResult, s: FormatSettings, title: str = "", author:
                          pad_bottom=None if last else s.font_size * 0.2, extend_bg_below=not last,
                          space_after=s.paragraph_spacing * (1.2 if last else 0.4))
         marker = it.marker
-        story.append(RichParagraph(it.runs, st, marker=marker, keep_with_next=it.keep_with_next))
+        story.append(tag(RichParagraph(it.runs, st, marker=marker, keep_with_next=it.keep_with_next), tagger,
+                         STRUCT_KINDS.get(kind, "P")))
         i += 1
 
     if not story:
-        story.append(RichParagraph([Run(doc_label(result.language, "no_text"))], styles["paragraph"]))
+        story.append(tag(RichParagraph([Run(doc_label(result.language, "no_text"))], styles["paragraph"]), tagger, "P"))
     doc.multiBuild(story)
     _render_state.page_map = {page: sorted(src) for page, src in doc.page_map.items()}
-    return buf.getvalue()
+    return pdf_tags.add_structure(buf.getvalue(), tagger, result.language)
 
 
 def last_page_map() -> dict[int, list[int]]:

@@ -33,7 +33,7 @@ OCR_CONFUSIONS = [
     ("rn", "m"), ("m", "rn"), ("l", "i"), ("i", "l"), ("1", "l"), ("1", "i"), ("l", "1"), ("0", "o"),
     ("o", "0"), ("5", "s"), ("8", "B"), ("cl", "d"), ("vv", "w"), ("ii", "u"), ("li", "h"), ("I", "l"),
     ("l", "I"), ("c", "e"), ("e", "c"), ("n", "u"), ("u", "n"), ("h", "b"), ("f", "t"), ("t", "f"),
-    ("y", "v"), ("v", "y"), ("iy", "ry"), ("fi", "ﬁ"), ("|", "l"), ("!", "l"), ("€", "e"), ("é", "e"), ("tl", "d"), ("ri", "n"), ("in", "m"),
+    ("y", "v"), ("v", "y"), ("iy", "ry"), ("fi", "ﬁ"), ("|", "l"), ("!", "l"), ("€", "e"), ("é", "e"), ("tl", "d"), ("ri", "n"), ("in", "m"), ("j", "i"), ("i", "t"),
 ]
 TOKEN_RE = re.compile(r"[^\W_]+(?:['’\-][^\W_]+)*", re.UNICODE)
 STOPWORDS = {
@@ -187,6 +187,48 @@ def ocr_variants(word: str, dictionary: Dictionary, max_edits: int = 2) -> dict[
     return results
 
 
+# short, very common words that OCR often runs into the next or previous word ("forthe", "toa")
+GLUE_WORDS = {
+    "en": {"a", "an", "the", "to", "of", "in", "on", "at", "is", "it", "be", "by", "or", "as", "and", "for",
+           "that", "with", "was", "are", "this", "from", "not", "but", "we", "he", "she", "they", "his", "its"},
+    "nl": {"de", "het", "een", "en", "van", "in", "is", "op", "te", "dat", "met", "voor", "niet", "die"},
+    "de": {"der", "die", "das", "und", "ist", "zu", "in", "den", "von", "mit", "ein", "eine", "auf", "im"},
+    "fr": {"le", "la", "les", "et", "de", "des", "est", "un", "une", "en", "du", "pour", "que", "dans"},
+    "es": {"el", "la", "los", "las", "y", "de", "en", "es", "un", "una", "que", "por", "con", "del"},
+    "it": {"il", "la", "di", "e", "in", "che", "un", "una", "per", "con", "del", "non", "le"},
+    "pt": {"o", "a", "os", "as", "de", "e", "em", "um", "uma", "que", "do", "da", "com", "por"},
+}
+
+
+def run_together_split(word: str, dictionary: "Dictionary") -> Optional[tuple[str, bool]]:
+    """Split two words OCR ran together ("forthe" -> "for the").
+
+    Returns (the two words, whether one of them is a short common word), or None. Both parts must be
+    real words; a single letter is only allowed when it is a common word itself ("toa" -> "to a"), and
+    then the other part must be common too.
+    """
+    w = word.lower()
+    if len(w) < 3 or not w.isalpha() or dictionary.known(w):
+        return None
+    glue = set().union(*(GLUE_WORDS.get(lang, set()) for lang in dictionary.languages))
+    best = None
+    for i in range(1, len(w)):
+        left, right = w[:i], w[i:]
+        short = [p for p in (left, right) if len(p) <= 2]
+        if any(p not in glue for p in short):
+            continue
+        if not (dictionary.known(left) and dictionary.known(right)):
+            continue
+        has_glue = left in glue or right in glue
+        f = min(dictionary.frequency(left), dictionary.frequency(right))
+        if short and f < 1e-5:
+            continue  # "tata" -> "tat a": too rare to be sure
+        score = (has_glue, f)
+        if best is None or score > best[0]:
+            best = (score, f"{left} {right}", has_glue)
+    return (best[1], best[2]) if best else None
+
+
 SPELLING_VARIANTS = [("ise", "ize"), ("isation", "ization"), ("ising", "izing"), ("ised", "ized"),
                      ("yse", "yze"), ("our", "or"), ("tre", "ter"), ("ll", "l"), ("ogue", "og"), ("ence", "ense"),
                      ("ae", "e"), ("oe", "e")]
@@ -270,6 +312,11 @@ class OcrCorrector:
         low_t = token.lower()
         if low_t in WORD_ENDINGS:
             return None  # the end of a word split across lines ("...tion"): nothing to correct
+        split = run_together_split(token, d)
+        if split is not None and split[1]:
+            # "forthe", "toa": a common short word glued on is a typical OCR slip. Two content words
+            # ("woodstoves", "machinelike") are usually a real compound, so those are left alone.
+            return match_case(token, split[0]), 0.93
         if len(low_t) >= 6 and any(d.known(low_t[:i]) and d.known(low_t[i:])
                                    for i in range(2, len(low_t) - 1) if len(low_t[:i]) > 1 and len(low_t[i:]) > 1
                                    and (len(low_t[:i]) > 2 or low_t[:i] in ("a", "an", "to", "of", "in", "on", "at", "is", "it", "be", "by", "or", "as", "we"))

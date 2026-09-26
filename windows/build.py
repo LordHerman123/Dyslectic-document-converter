@@ -30,7 +30,8 @@ APP_NAME = "DyslexiaConverter"
 # Tesseract language data shipped with the app (the app's document languages + orientation detection)
 LANGUAGES = ["eng", "nld", "deu", "fra", "spa", "ita", "por", "osd"]
 PYINSTALLER_EXTRA = ["--collect-data=spellchecker", "--collect-data=docx", "--collect-data=reportlab",
-                     "--collect-submodules=dyslexia_converter", "--hidden-import=pytesseract"]
+                     "--collect-submodules=dyslexia_converter", "--hidden-import=pytesseract",
+                     "--collect-submodules=pyttsx3", "--collect-submodules=comtypes"]  # speech drivers load by name
 TESSDATA_URL = "https://github.com/tesseract-ocr/tessdata/raw/main/{lang}.traineddata"
 
 

@@ -5,6 +5,7 @@ Typical problems with book scans and what is done about them:
 * two book pages on one sheet (a "spread")  -> find the gutter and split
 * dark gutter shadow / grey or yellow paper -> flatten the illumination
 * slightly rotated pages                    -> estimate the skew and straighten
+* lines curving into the spine (book curl)  -> measure the curve strip by strip and straighten it
 * black scanner borders                     -> removed with the illumination step and cropping
 * pages scanned sideways                    -> the PDF page rotation is honoured; OSD as a fallback
 
@@ -158,6 +159,127 @@ def rotate(img: Image.Image, angle: float, fill) -> Image.Image:
     return img.rotate(-angle, resample=Image.BICUBIC, expand=False, fillcolor=fill)
 
 
+# ----------------------------------------------------------------------------- curved lines (book curl)
+
+def _smooth1d(a: np.ndarray, k: int, axis: int = 0) -> np.ndarray:
+    k = max(1, int(k)) | 1
+    ker = np.ones(k) / k
+    pad = k // 2
+    return np.apply_along_axis(lambda v: np.convolve(np.pad(v, pad, mode="edge"), ker, mode="valid"), axis, a)
+
+
+def line_spacing(ink: np.ndarray) -> Optional[int]:
+    """Distance between text lines in pixels (autocorrelation of the row profile)."""
+    prof = ink.sum(axis=1).astype(np.float64)
+    prof -= prof.mean()
+    if not prof.any():
+        return None
+    ac = np.correlate(prof, prof, mode="full")[len(prof) - 1:]
+    lo, hi = 8, min(len(ac) - 1, 400)
+    if hi <= lo:
+        return None
+    return lo + int(np.argmax(ac[lo:hi]))
+
+
+def curl_field(ink: np.ndarray, win_lines: int = 6):
+    """How far the text lines are displaced vertically, per strip and band of lines.
+
+    Near the spine of a book the page curls away from the scanner and the lines bend. The page is cut
+    into narrow vertical strips; for each band of a few lines, the row profile of each strip is matched
+    with its neighbour, working outward from the flat middle, which gives the vertical shift of the
+    lines in every strip. A real curl only grows toward the edge, so values that shrink again are
+    matching errors and are dropped. Returns (shifts, strip x-centres, band y-centres, line spacing),
+    or None for pages without enough text.
+    """
+    h, w = ink.shape
+    L = line_spacing(ink)
+    if not L or L < 12:
+        return None
+    strip = max(16, L)
+    xs = list(range(0, max(1, w - strip + 1), strip))
+    win = L * win_lines
+    ys = list(range(0, max(1, h - win + 1), max(1, win // 2)))
+    if len(xs) < 6 or not ys:
+        return None
+    prof = np.stack([ink[:, x:x + strip].sum(axis=1).astype(np.float64) for x in xs], axis=1)
+    prof = _smooth1d(prof, max(3, L // 5), axis=0)
+    maxd = max(2, L // 4)
+    mid = len(xs) // 2
+    S = np.zeros((len(ys), len(xs)))
+    for j, y0 in enumerate(ys):
+        seg = prof[y0:y0 + win]
+        has = seg.sum(axis=0) > 0.002 * win * strip
+        for rng in (range(mid + 1, len(xs)), range(mid - 1, -1, -1)):
+            cur, prev = 0.0, mid
+            for k in rng:
+                if has[k] and has[prev]:
+                    a, b = seg[:, prev], seg[:, k]
+                    scores = [float(np.dot(a[:len(a) - d], b[d:])) if d >= 0 else float(np.dot(a[-d:], b[:len(b) + d]))
+                              for d in range(-maxd, maxd + 1)]
+                    cur += int(np.argmax(scores)) - maxd
+                    prev = k
+                S[j, k] = cur
+    S = _smooth1d(S, 3, axis=1)
+    if len(ys) >= 3:  # the curl changes smoothly down the page: one band that disagrees is a matching error
+        padded = np.pad(S, ((1, 1), (0, 0)), mode="edge")
+        S = np.median(np.stack([padded[:-2], padded[1:-1], padded[2:]]), axis=0)
+    n = S.shape[1]
+    S -= np.median(S[:, n // 4:3 * n // 4], axis=1, keepdims=True)
+    for j in range(len(ys)):  # a curl grows monotonically toward each edge
+        for part in (S[j, mid:], S[j, :mid + 1][::-1]):
+            sign = 1.0 if part[-1] >= 0 else -1.0
+            part[:] = sign * np.maximum.accumulate(np.clip(sign * part, 0, None))
+    xc = np.array(xs, dtype=np.float64) + strip / 2
+    yc = np.array(ys, dtype=np.float64) + win / 2
+    return S, xc, yc, L
+
+
+def _interp_extrapolate(x: np.ndarray, xp: np.ndarray, fp: np.ndarray) -> np.ndarray:
+    y = np.interp(x, xp, fp)
+    if len(xp) >= 2:
+        lo, hi = x < xp[0], x > xp[-1]
+        y[lo] = fp[0] + (x[lo] - xp[0]) * (fp[1] - fp[0]) / (xp[1] - xp[0])
+        y[hi] = fp[-1] + (x[hi] - xp[-1]) * (fp[-1] - fp[-2]) / (xp[-1] - xp[-2])
+    return y
+
+
+def curl_displacement(ink: np.ndarray, min_lines: float = 0.15, grid: int = 24):
+    """Vertical displacement that straightens curled lines, sampled on a grid, or None when the lines are
+    straight. Returns (grid x positions, grid y positions, displacement[y, x])."""
+    r = curl_field(ink)
+    if r is None:
+        return None
+    S, xc, yc, L = r
+    if float(np.abs(S).max()) < min_lines * L:
+        return None
+    h, w = ink.shape
+    gx = np.unique(np.append(np.arange(0, w, grid), w)).astype(np.float64)
+    gy = np.unique(np.append(np.arange(0, h, grid), h)).astype(np.float64)
+    cols = np.stack([_interp_extrapolate(gx, xc, S[j]) for j in range(len(yc))])  # bands x gx
+    if len(yc) == 1:
+        D = np.repeat(cols, len(gy), axis=0)
+    else:
+        D = np.stack([np.interp(gy, yc, cols[:, i]) for i in range(len(gx))], axis=1)
+    return gx, gy, D
+
+
+def apply_displacement(img: Image.Image, field, fill) -> Image.Image:
+    """Move pixels vertically by the displacement field (output (x, y) comes from (x, y + D)).
+
+    Done with PIL's mesh transform: the field is smooth, so small grid cells mapped to quadrilaterals
+    are exact enough and much faster than moving every pixel in NumPy.
+    """
+    gx, gy, D = field
+    mesh = []
+    for j in range(len(gy) - 1):
+        y0, y1 = gy[j], gy[j + 1]
+        for i in range(len(gx) - 1):
+            x0, x1 = gx[i], gx[i + 1]
+            mesh.append(((int(x0), int(y0), int(x1), int(y1)),
+                         (x0, y0 + D[j, i], x0, y1 + D[j + 1, i], x1, y1 + D[j + 1, i + 1], x1, y0 + D[j, i + 1])))
+    return img.transform(img.size, Image.MESH, mesh, resample=Image.BILINEAR, fillcolor=fill)
+
+
 # ----------------------------------------------------------------------------- cropping
 
 def content_box(ink: np.ndarray, margin: int) -> tuple[int, int, int, int]:
@@ -174,12 +296,24 @@ def content_box(ink: np.ndarray, margin: int) -> tuple[int, int, int, int]:
     return int(x0), int(y0), int(x1), int(y1)
 
 
+def _long_runs(line: np.ndarray, min_len: int) -> np.ndarray:
+    """Mask of the runs of ink in a 1-D line that are at least ``min_len`` long."""
+    edges = np.diff(np.concatenate([[0], line.astype(np.int8), [0]]))
+    starts, ends = np.nonzero(edges == 1)[0], np.nonzero(edges == -1)[0]
+    out = np.zeros(len(line), dtype=bool)
+    for s0, e0 in zip(starts, ends):
+        if e0 - s0 >= min_len:
+            out[s0:e0] = True
+    return out
+
+
 def clear_edge_blobs(ink: np.ndarray, band: float = 0.06) -> np.ndarray:
     """Remove dark borders along the image edges (scanner lid, book edge, shadows).
 
-    Within a band along each edge, rows/columns that are mostly ink are
-    borders, not text (a line of text is at most ~50% ink), as are edge
-    bands that are dense overall.
+    Within a band along each edge, a row/column that is mostly ink is a border or a ruled line, not
+    text (a line of text is at most ~50% ink): only its long unbroken runs are removed, so letters
+    that happen to sit in the same column survive. An edge band that is dense overall (a black scanner
+    border) is cleared from the edge inward, as far as the columns/rows stay dense.
     """
     h, w = ink.shape
     out = ink.copy()
@@ -188,21 +322,29 @@ def clear_edge_blobs(ink: np.ndarray, band: float = 0.06) -> np.ndarray:
     col_frac = out.mean(axis=0)
     for y in list(range(by)) + list(range(h - by, h)):
         if row_frac[y] > 0.5:
-            out[y, :] = False
+            out[y, _long_runs(out[y], max(20, w // 30))] = False
     for x in list(range(bx)) + list(range(w - bx, w)):
         if col_frac[x] > 0.5:
-            out[:, x] = False
-    for sl in (np.s_[:, :bx], np.s_[:, w - bx:], np.s_[:by, :], np.s_[h - by:, :]):
-        region = out[sl]
-        if region.size and region.mean() > 0.35:
-            out[sl] = False
+            out[_long_runs(out[:, x], max(20, h // 30)), x] = False
+    for axis, n, size in ((0, bx, w), (1, by, h)):
+        frac = out.mean(axis=axis)
+        for idx in (range(n), range(size - 1, size - 1 - n, -1)):
+            region = [i for i in idx]
+            if out.take(region, axis=1 - axis).mean() <= 0.35:
+                continue
+            for i in region:  # from the edge inward while the border lasts
+                if frac[i] < 0.2:
+                    break
+                if axis == 0:
+                    out[:, i] = False
+                else:
+                    out[i, :] = False
     return out
-
 
 # ----------------------------------------------------------------------------- pipeline
 
 def prepare_page(rendered: Image.Image, dpi: int, split_spreads: bool = True,
-                 deskew: bool = True) -> list[ScanPage]:
+                 deskew: bool = True, dewarp: bool = True) -> list[ScanPage]:
     """Clean a rendered scan and return one or two pages ready for OCR."""
     gray = to_gray(rendered)
     flat = flatten_illumination(gray, radius=max(15, dpi // 12))
@@ -225,8 +367,14 @@ def prepare_page(rendered: Image.Image, dpi: int, split_spreads: bool = True,
         angle = estimate_skew(part_ink) if deskew else 0.0
         clean = Image.fromarray(part_flat.astype(np.uint8))
         photo = rendered.crop((x0, 0, x1, rendered.height))
+        white = (255, 255, 255) if photo.mode == "RGB" else 255
         clean = rotate(clean, angle, 255)
-        photo = rotate(photo, angle, (255, 255, 255) if photo.mode == "RGB" else 255)
+        photo = rotate(photo, angle, white)
+        if dewarp:
+            field = curl_displacement(binarize(np.asarray(clean, dtype=np.float32)))
+            if field is not None:
+                clean = apply_displacement(clean, field, 255)
+                photo = apply_displacement(photo, field, white)
         c_ink = clear_edge_blobs(binarize(np.asarray(clean, dtype=np.float32)))
         bx0, by0, bx1, by1 = content_box(c_ink, margin=int(dpi * 0.15))
         clean = clean.crop((bx0, by0, bx1, by1))

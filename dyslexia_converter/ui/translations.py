@@ -5,6 +5,69 @@ Missing entries fall back to English. tests/test_i18n.py checks that every text 
 """
 
 T: dict[str, dict[str, str]] = {
+    "EPUB (e-reader)": {"nl": "EPUB (e-reader)", "fr": "EPUB (liseuse)", "de": "EPUB (E-Reader)",
+                        "es": "EPUB (lector electrónico)", "it": "EPUB (e-reader)"},
+    # ---------------------------------------------------------------- read aloud
+    'Read aloud': {
+        'nl': 'Voorlezen',
+        'fr': 'Lire à voix haute',
+        'de': 'Vorlesen',
+        'es': 'Leer en voz alta',
+        'it': 'Leggi ad alta voce'},
+    'Continue': {
+        'nl': 'Verder lezen',
+        'fr': 'Continuer',
+        'de': 'Weiterlesen',
+        'es': 'Continuar',
+        'it': 'Continua'},
+    'Pause': {
+        'nl': 'Pauze',
+        'fr': 'Pause',
+        'de': 'Pause',
+        'es': 'Pausa',
+        'it': 'Pausa'},
+    'Stop': {
+        'nl': 'Stoppen',
+        'fr': 'Arrêter',
+        'de': 'Stopp',
+        'es': 'Detener',
+        'it': 'Ferma'},
+    'Speed': {
+        'nl': 'Snelheid',
+        'fr': 'Vitesse',
+        'de': 'Tempo',
+        'es': 'Velocidad',
+        'it': 'Velocità'},
+    'Voice': {
+        'nl': 'Stem',
+        'fr': 'Voix',
+        'de': 'Stimme',
+        'es': 'Voz',
+        'it': 'Voce'},
+    'Turn pages along': {
+        'nl': "Pagina's mee omslaan",
+        'fr': 'Tourner les pages en même temps',
+        'de': 'Seiten mitblättern',
+        'es': 'Pasar las páginas a la vez',
+        'it': 'Gira le pagine insieme'},
+    'No speech voices were found on this device.': {
+        'nl': 'Er zijn geen voorleesstemmen gevonden op dit apparaat.',
+        'fr': "Aucune voix de lecture n'a été trouvée sur cet appareil.",
+        'de': 'Auf diesem Gerät wurden keine Vorlesestimmen gefunden.',
+        'es': 'No se encontraron voces de lectura en este dispositivo.',
+        'it': 'Nessuna voce di lettura trovata su questo dispositivo.'},
+    'There is no text to read on these pages.': {
+        'nl': "Er is geen tekst om voor te lezen op deze pagina's.",
+        'fr': "Il n'y a pas de texte à lire sur ces pages.",
+        'de': 'Auf diesen Seiten gibt es keinen Text zum Vorlesen.',
+        'es': 'No hay texto para leer en estas páginas.',
+        'it': "Non c'è testo da leggere in queste pagine."},
+    'Reads the converted document aloud with the voices on this computer, from the page you are looking at. Nothing leaves this device.': {
+        'nl': 'Leest het omgezette document voor met de stemmen op deze computer, vanaf de pagina die je bekijkt. Er verlaat niets dit apparaat.',
+        'fr': 'Lit le document converti à voix haute avec les voix de cet ordinateur, à partir de la page affichée. Rien ne quitte cet appareil.',
+        'de': 'Liest das umgewandelte Dokument mit den Stimmen dieses Computers vor, ab der angezeigten Seite. Nichts verlässt dieses Gerät.',
+        'es': 'Lee en voz alta el documento convertido con las voces de este ordenador, desde la página que estás viendo. Nada sale de este dispositivo.',
+        'it': 'Legge ad alta voce il documento convertito con le voci di questo computer, dalla pagina che stai guardando. Nulla lascia questo dispositivo.'},
     # ---------------------------------------------------------------- AI privacy log and preview
     'Answer received': {
         'nl': 'Ontvangen antwoord',

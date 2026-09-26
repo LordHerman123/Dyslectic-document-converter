@@ -51,3 +51,17 @@ def test_page_range(paper):
     doc = pipeline.load(paper, pages=(2, 2)).document
     assert [p.source_page for p in doc.pages] == [1]  # only the second PDF page was read
     assert any("[4] Smith, J. (2020)" in b.text for b in doc.blocks)
+
+
+def test_ocr_junk_around_a_line_end_hyphen():
+    from dyslexia_converter.structure.detector import StructureDetector
+    from dyslexia_converter.transform.spelling import Dictionary, dehyphenator, word_rejoiner
+
+    d = Dictionary(["en"])
+    det = StructureDetector(dehyphenator(d), word_rejoiner(d))
+    assert det._junk_hyphen("known causal mecha-", "“nisms that") == ("known causal mecha", 1)
+    assert det._junk_hyphen("leads to the mal--.", "function of") == ("leads to the mal", 0)
+    assert det._junk_hyphen("strategy for cli-", "- mate deniers") == ("strategy for cli", 2)
+    assert det._junk_hyphen("a well-", "known fact") is None  # no junk: the normal rules decide
+    assert det._junk_hyphen("the self-", "“Upper case") is None
+    assert det._junk_hyphen("no hyphen", "“quote") is None
