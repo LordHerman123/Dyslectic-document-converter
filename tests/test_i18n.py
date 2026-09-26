@@ -14,9 +14,11 @@ OTHER = [code for code in LANGUAGES if code != "en"]
 
 def _ui_texts() -> list[str]:
     """Every literal passed to the translator (t("...") or self.t("...")) in the UI."""
-    tree = ast.parse((PKG / "ui" / "app.py").read_text(encoding="utf-8"))
     out = []
-    for node in ast.walk(tree):
+    nodes = []
+    for name in ("app.py", "focus.py"):
+        nodes += list(ast.walk(ast.parse((PKG / "ui" / name).read_text(encoding="utf-8"))))
+    for node in nodes:
         if isinstance(node, ast.Call) and node.args and isinstance(node.args[0], ast.Constant) \
                 and isinstance(node.args[0].value, str):
             f = node.func

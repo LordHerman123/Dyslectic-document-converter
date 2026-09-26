@@ -23,6 +23,7 @@ from ..fonts import FONT_CHOICES, get_family
 from ..render import preview
 from ..settings import PRESET_DISCLAIMER, PRESETS, FormatSettings, SettingsStore
 from ..transform.spelling import CustomWords
+from .focus import FocusMode
 from .i18n import LANGUAGES, Translator, system_language
 from .theme import make_theme, palette
 
@@ -67,6 +68,7 @@ class ConverterApp:
         self.conv_count = 0
         self.view_mode = "side"
         self.speaker = speech.Speaker()
+        self.focus = FocusMode(self)
         self._read_units: Optional[list] = None  # sentences of the converted PDF, made when reading starts
         self._read_pos: Optional[int] = None  # sentence being read (kept when paused)
         self._reading = False
@@ -229,6 +231,7 @@ class ConverterApp:
         """Build the whole window again (after changing the app language or text size), keeping the document."""
         first, last = self.tf_first.value, self.tf_last.value
         self.stop_reading()
+        self.focus.active = False
         self.page.controls.clear()
         self.build()
         self.tf_first.value, self.tf_last.value = first, last
@@ -475,9 +478,10 @@ class ConverterApp:
         export_buttons = [ft.OutlinedButton(t(label), icon=ft.Icons.DOWNLOAD, data=fmt, on_click=self.on_export,
                                             tooltip=t("Save as {format}", format=t(label)))
                           for fmt, label, _ in EXPORTS]
+        self.build_read_bar()
         preview_col = ft.Column([
-            ft.Row([self.view_seg], wrap=True),
-            self.build_read_bar(),
+            self.build_toolbar(),
+            self.read_panel,
             ft.Row([self.orig_panel, self.conv_panel], expand=True, vertical_alignment=ft.CrossAxisAlignment.START),
             ft.Row([self.text(t("Export:"), 14, weight=ft.FontWeight.BOLD)] + export_buttons, wrap=True),
         ], expand=True)
@@ -1159,16 +1163,24 @@ class ConverterApp:
         finally:
             self.busy(False)
         self.refresh_map()
+        if self.focus.active:
+            await self.focus.refresh()
+            return
         await self.show_pages()
 
     # ---------------------------------------------------------------- read aloud
     def build_read_bar(self) -> ft.Control:
+        """The read-aloud controls, in a panel that folds out under the "Read aloud" button."""
         t = self.t
-        self.read_btn = ft.FilledButton(t("Read aloud"), icon=ft.Icons.VOLUME_UP, on_click=self.on_read,
-                                        tooltip=t("Reads the converted document aloud with the voices on this "
-                                                  "computer, from the page you are looking at. Nothing leaves "
-                                                  "this device."))
-        self.stop_btn = ft.IconButton(ft.Icons.STOP, tooltip=t("Stop"), on_click=self.on_read_stop, disabled=True)
+        self.read_btn = ft.IconButton(ft.Icons.PLAY_ARROW_ROUNDED, icon_size=28, on_click=self.on_read,
+                                      tooltip=t("Read aloud"),
+                                      style=ft.ButtonStyle(bgcolor=ft.Colors.PRIMARY, color=ft.Colors.ON_PRIMARY))
+        self.stop_btn = ft.IconButton(ft.Icons.STOP_ROUNDED, tooltip=t("Stop"), on_click=self.on_read_stop,
+                                      disabled=True)
+        self.tap_btn = ft.IconButton(ft.Icons.TOUCH_APP_OUTLINED, selected_icon=ft.Icons.TOUCH_APP,
+                                     selected=bool(self.ui.get("tap_to_read", True)), on_click=self.on_tap_toggle,
+                                     style=ft.ButtonStyle(bgcolor={ft.ControlState.SELECTED: ft.Colors.PRIMARY_CONTAINER}))
+        self._tap_tooltip()
         speed = float(self.ui.get("read_speed", 1.0))
         self.speed_label = self.text(_speed_text(speed), 13)
         self.speed_slider = ft.Slider(min=0.5, max=2.0, divisions=6, value=speed, width=150,
@@ -1180,35 +1192,68 @@ class ConverterApp:
                                     value=self.ui.get("read_voice", "auto"), on_select=self.on_read_voice)
         self.follow_cb = ft.Checkbox(label=t("Turn pages along"), value=bool(self.ui.get("read_follow", True)),
                                      on_change=self.on_read_follow)
-        available = bool(voices)
-        if not available:
+        if not voices:
             self.read_btn.disabled = True
             self.read_btn.tooltip = t("No speech voices were found on this device.") + (
                 f" ({self.speaker.last_error})" if self.speaker.last_error else "")
-        return ft.Container(ft.Row([
-            self.read_btn, self.stop_btn,
+        self.read_row = ft.Row([
+            self.read_btn, self.stop_btn, self.tap_btn, ft.Container(width=6),
             self.text(t("Speed"), 13), self.speed_slider, self.speed_label, self.voice_dd, self.follow_cb,
-            self.text(t("Tip: click on the converted page to start reading there."), 12,
-                      color=ft.Colors.ON_SURFACE_VARIANT),
-        ], wrap=True, spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-            padding=ft.Padding.symmetric(horizontal=8, vertical=2), border_radius=10,
-            bgcolor=ft.Colors.SURFACE_CONTAINER_LOW, visible=self._speech_allowed())
+        ], wrap=True, spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+        self.read_panel = ft.Container(self.read_row, padding=ft.Padding.symmetric(horizontal=8, vertical=2),
+                                       border_radius=10, bgcolor=ft.Colors.SURFACE_CONTAINER_LOW,
+                                       visible=self._speech_allowed() and bool(self.ui.get("read_panel_open", False)))
+        return self.read_panel
+
+    def build_toolbar(self) -> ft.Control:
+        """View switch, the "Read aloud" button that opens the read-aloud panel, and focus mode."""
+        t = self.t
+        self.read_toggle = ft.FilledTonalButton(t("Read aloud"), icon=ft.Icons.VOLUME_UP, on_click=self.on_read_panel,
+                                                visible=self._speech_allowed(),
+                                                tooltip=t("Show or hide the read-aloud controls"))
+        self.focus_btn = ft.OutlinedButton(t("Focus mode"), icon=ft.Icons.FULLSCREEN, on_click=self.on_focus,
+                                           tooltip=t("Read the converted document in the whole window"))
+        return ft.Row([self.view_seg, self.read_toggle, ft.Container(expand=True), self.focus_btn],
+                      spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+
+    def _tap_tooltip(self) -> None:
+        on = bool(self.ui.get("tap_to_read", True))
+        self.tap_btn.tooltip = self.t("Tap to read: on - click on the page to start reading there") if on else \
+            self.t("Tap to read: off - clicking on the page does not start reading")
+
+    async def on_tap_toggle(self, e):
+        self.ui["tap_to_read"] = not bool(self.ui.get("tap_to_read", True))
+        self.store.save_ui(self.ui)
+        self.tap_btn.selected = self.ui["tap_to_read"]
+        self._tap_tooltip()
+        self.page.update()
+
+    async def on_read_panel(self, e):
+        open_ = not bool(self.ui.get("read_panel_open", False))
+        self.ui["read_panel_open"] = open_
+        self.store.save_ui(self.ui)
+        self.read_panel.visible = open_
+        self.page.update()
+
+    async def on_focus(self, e):
+        await self.focus.open()
 
     def _speech_allowed(self) -> bool:
         """Speech plays on the computer running the app: in the web version that is the server, not the reader."""
         return not self.page.web
 
     def _update_read_buttons(self) -> None:
-        """One button: Read aloud -> Pause while reading -> Continue when paused."""
+        """Play (triangle) when stopped or paused, pause (bars) while reading."""
         t = self.t
         if self._reading:
-            self.read_btn.content, self.read_btn.icon = t("Pause"), ft.Icons.PAUSE
+            self.read_btn.icon, self.read_btn.tooltip = ft.Icons.PAUSE_ROUNDED, t("Pause")
         elif self._read_pos is not None:
-            self.read_btn.content, self.read_btn.icon = t("Continue"), ft.Icons.PLAY_ARROW
+            self.read_btn.icon, self.read_btn.tooltip = ft.Icons.PLAY_ARROW_ROUNDED, t("Continue")
         else:
-            self.read_btn.content, self.read_btn.icon = t("Read aloud"), ft.Icons.VOLUME_UP
+            self.read_btn.icon, self.read_btn.tooltip = ft.Icons.PLAY_ARROW_ROUNDED, t("Read aloud")
         self.read_btn.disabled = not self.speaker.voices()
         self.stop_btn.disabled = not self._reading and self._read_pos is None
+        self.read_toggle.icon = ft.Icons.GRAPHIC_EQ if self._reading else ft.Icons.VOLUME_UP
 
     def _check_voice_language(self) -> None:
         """Say once per document when no voice for its language is installed, and how to add one."""
@@ -1246,7 +1291,8 @@ class ConverterApp:
 
     async def on_page_tap(self, e):
         """Clicking on the converted page starts reading from the sentence clicked."""
-        if not self.converted_pdf or not self._speech_allowed() or not self.speaker.voices():
+        if not self.converted_pdf or not self._speech_allowed() or not self.speaker.voices() \
+                or not self.ui.get("tap_to_read", True):
             return
         size = getattr(self, "_conv_box", None)
         if not size:
@@ -1277,8 +1323,9 @@ class ConverterApp:
             return
         if start is None:
             start = self._read_pos
-            if start is None or start >= len(units) or units[start].page != self.conv_page:
-                start = speech.first_sentence_on(units, self.conv_page)  # read from the page being looked at
+            viewed = self.focus.current if self.focus.active else self.conv_page
+            if start is None or start >= len(units) or units[start].page != viewed:
+                start = speech.first_sentence_on(units, viewed)  # read from the page being looked at
         self._check_voice_language()
         loop = asyncio.get_running_loop()
 
@@ -1313,6 +1360,10 @@ class ConverterApp:
                 sentence = self._read_units[si]
                 word = sentence.words[min(wi, len(sentence.words) - 1)]
                 page = word.page
+                if self.focus.active:
+                    rects = [r for w in sentence.words if w.page == page for r in w.rects]
+                    await self.focus.show_reading(page, rects, list(word.rects), bool(self.follow_cb.value))
+                    continue
                 if page != self.conv_page:
                     if not self.follow_cb.value:
                         continue
@@ -1341,7 +1392,11 @@ class ConverterApp:
             self.notify(self.t("Reading aloud stopped because of an error:") + " " + self.speaker.last_error,
                         error=True)
         self._update_read_buttons()
-        if finished and was_reading:
+        if self.focus.active:
+            if finished:
+                await self.focus.reading_done()
+            self.page.update()
+        elif finished and was_reading:
             await self.show_pages()  # remove the highlight
         else:
             self.page.update()
@@ -1366,6 +1421,10 @@ class ConverterApp:
         self.speaker.stop()
         self._read_pos = None
         self._update_read_buttons()
+        if self.focus.active:
+            await self.focus.reading_done()
+            self.page.update()
+            return
         await self.show_pages()
 
     async def _restart_reading(self) -> None:

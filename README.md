@@ -13,7 +13,7 @@ API key. When it's on, it only sees small snippets that the local rules couldn't
 
 ## Download for Windows (version 1.6)
 
-Get `DyslexiaConverter-1.6.2-setup.exe` (installer) or `DyslexiaConverter-1.6.2-windows.zip` (unzip and
+Get `DyslexiaConverter-1.7.0-setup.exe` (installer) or `DyslexiaConverter-1.7.0-windows.zip` (unzip and
 double-click `DyslexiaConverter.exe`) from the repository's **Releases** page. Text recognition (Tesseract)
 is included; nothing else needs to be installed. How the Windows build is made: [windows/README.md](windows/README.md).
 
@@ -58,7 +58,8 @@ python -m dyslexia_converter chapter.pdf --pages 3-18 --move-citations -f printa
 | Citations | Optional: author-year citations become `[n]` markers that point to the numbered reference list. Unmatched citations get their own list, and the original citation text is always kept. Numeric citations, ranges (`[3–7]`) and lists (`[2, 5, 8]`) are recognised. Uncertain cases are left unchanged, or passed to the AI if you allow it. |
 | Footnotes | Optional: footnotes move to a Notes section at the end, with `[Note n]` markers in the text. Page notes such as affiliations and licences are kept too. |
 | Document map | Clickable headings in the app, PDF bookmarks, and a Contents page. Headings in DOCX exports show up in Word's Navigation pane. |
-| Read aloud | *Read aloud* reads the converted document from the page you are looking at, with the voices already on your computer (it works offline; nothing leaves the device). The sentence being read is highlighted, the word being said is boxed, and the pages turn along. One button reads, pauses and continues; click anywhere on the converted page to start reading there (to skip parts you do not need). Speed and voice can be set; the voice follows the document's language. On Windows 10/11 every voice installed in Windows Settings > Time & language > Speech can be used, so documents in Dutch, German, French and other languages are read in their own language; the app says so when a document's language has no voice yet. Desktop app only. |
+| Read aloud | The *Read aloud* button next to Original / Both / Converted opens the read-aloud controls (tap it again to fold them away). *Read aloud* reads the converted document from the page you are looking at, with the voices already on your computer (it works offline; nothing leaves the device). The sentence being read is highlighted, the word being said is boxed, and the pages turn along. One button reads, pauses and continues (a play triangle or pause bars show which); with *tap to read* switched on, click anywhere on the converted page to start reading there (to skip parts you do not need). Speed and voice can be set; the voice follows the document's language. On Windows 10/11 every voice installed in Windows Settings > Time & language > Speech can be used, so documents in Dutch, German, French and other languages are read in their own language; the app says so when a document's language has no voice yet. Desktop app only. |
+| Focus mode | *Focus mode* shows the converted document in the whole window as one scrolling column of pages, like a PDF reader, so it can be read on a tablet or touch screen without another app. Zoom with + and −. The read-aloud controls and the reading settings (font, size, spacing, alignment, bold word starts) fold out from buttons in the top bar and fold away again once set. A highlighter marks words in yellow, green, blue or pink with a finger, pen or mouse (drag over the words, or tap one word); the eraser removes marks. Highlights are kept on this device per document and stay on the same words when the layout changes. |
 | Preview | Original, converted, or both side by side, with page navigation. In *Both*, turning a page on one side turns the other side along to the matching content. Changing a setting re-renders the preview without re-reading the PDF. |
 | Export | PDF, printable PDF (no tints or backgrounds, black text), DOCX, EPUB, plain text and Markdown. PDFs are A4, keep selectable Unicode text and embed font subsets, and are *tagged*: screen readers and read-aloud tools (such as Acrobat's Read Out Loud) follow the headings and paragraphs in order, read formulas and figures from their description, and skip page numbers. The EPUB is a reflowable book for e-readers, tablets and phones: the reading app can change font, size and colours, notes and citations are links, and it passes epubcheck. Headings stay with the text that follows them, and paragraphs avoid widow and orphan lines. |
 | Settings | Presets: Standard, Spacious, High Readability, Compact print and My Settings. Settings are saved between sessions and can be reset to the defaults. |
@@ -131,16 +132,18 @@ dyslexia_converter/
     pdf_writer.py       ReportLab PDF with letter/word spacing, font fallback, outline, TOC
     docx_writer.py      Word export
     text_writer.py      text / Markdown export
-    preview.py          page images for the preview (with the read-aloud highlight)
+    preview.py          page images for the preview (with the read-aloud highlight and highlighter marks)
     pdf_tags.py         tagged PDF structure for screen readers
     epub_writer.py      EPUB 3 export
     labels.py           words the converter adds (Contents, Notes...) in the document's language
   ai/                   optional: providers, prompts (few-shot), privacy masking, request log,
                         consent, cache, key storage, redaction
   speech.py             reading aloud: sentences with their place on the page, speech thread
+  highlights.py         highlighter marks in focus mode, kept per document
   pipeline.py           load() once, then compose/export as often as settings change
   cli.py                command line
   ui/app.py             Flet app (desktop / web / Android)
+  ui/focus.py           focus mode: whole-window page reader with highlighter
   ui/i18n.py            app languages; ui/translations.py holds every text in all six languages
   ui/theme.py           burgundy & champagne light and dark colours
 tests/                  pytest suite (generates its own sample PDFs, incl. a scanned one)

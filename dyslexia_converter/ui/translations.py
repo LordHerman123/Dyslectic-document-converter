@@ -5,6 +5,97 @@ Missing entries fall back to English. tests/test_i18n.py checks that every text 
 """
 
 T: dict[str, dict[str, str]] = {
+    # ---------------------------------------------------------------- focus mode
+    'Eraser': {
+        'nl': 'Gum',
+        'fr': 'Gomme',
+        'de': 'Radierer',
+        'es': 'Borrador',
+        'it': 'Gomma'},
+    'Focus mode': {
+        'nl': 'Focusmodus',
+        'fr': 'Mode concentration',
+        'de': 'Fokusmodus',
+        'es': 'Modo concentración',
+        'it': 'Modalità concentrazione'},
+    'Highlighter': {
+        'nl': 'Markeerstift',
+        'fr': 'Surligneur',
+        'de': 'Textmarker',
+        'es': 'Marcador',
+        'it': 'Evidenziatore'},
+    'Leave focus mode': {
+        'nl': 'Focusmodus verlaten',
+        'fr': 'Quitter le mode concentration',
+        'de': 'Fokusmodus beenden',
+        'es': 'Salir del modo concentración',
+        'it': 'Esci dalla modalità concentrazione'},
+    'Page {n} / {total}': {
+        'nl': 'Pagina {n} / {total}',
+        'fr': 'Page {n} / {total}',
+        'de': 'Seite {n} / {total}',
+        'es': 'Página {n} / {total}',
+        'it': 'Pagina {n} / {total}'},
+    'Read the converted document in the whole window': {
+        'nl': 'Lees het omgezette document in het hele venster',
+        'fr': 'Lire le document converti dans toute la fenêtre',
+        'de': 'Das umgewandelte Dokument im ganzen Fenster lesen',
+        'es': 'Leer el documento convertido en toda la ventana',
+        'it': 'Leggi il documento convertito a tutta finestra'},
+    'Reading settings': {
+        'nl': 'Leesinstellingen',
+        'fr': 'Réglages de lecture',
+        'de': 'Leseeinstellungen',
+        'es': 'Ajustes de lectura',
+        'it': 'Impostazioni di lettura'},
+    'Show or hide the read-aloud controls': {
+        'nl': 'Voorleesknoppen tonen of verbergen',
+        'fr': 'Afficher ou masquer les commandes de lecture',
+        'de': 'Vorlese-Bedienelemente ein- oder ausblenden',
+        'es': 'Mostrar u ocultar los controles de lectura',
+        'it': 'Mostra o nascondi i comandi di lettura'},
+    'Smaller': {
+        'nl': 'Kleiner',
+        'fr': 'Plus petit',
+        'de': 'Kleiner',
+        'es': 'Más pequeño',
+        'it': 'Più piccolo'},
+    'Tap to read: off - clicking on the page does not start reading': {
+        'nl': 'Tik om voor te lezen: uit - klikken op de pagina start het voorlezen niet',
+        'fr': 'Toucher pour lire : désactivé - cliquer sur la page ne lance pas la lecture',
+        'de': 'Tippen zum Vorlesen: aus - ein Klick auf die Seite startet das Vorlesen nicht',
+        'es': 'Tocar para leer: desactivado - hacer clic en la página no empieza la lectura',
+        'it': 'Tocca per leggere: disattivato - un clic sulla pagina non avvia la lettura'},
+    'Tap to read: on - click on the page to start reading there': {
+        'nl': 'Tik om voor te lezen: aan - klik op de pagina om daar te beginnen',
+        'fr': 'Toucher pour lire : activé - cliquez sur la page pour commencer la lecture à cet endroit',
+        'de': 'Tippen zum Vorlesen: an - klicken Sie auf die Seite, um dort zu beginnen',
+        'es': 'Tocar para leer: activado - haz clic en la página para empezar a leer allí',
+        'it': 'Tocca per leggere: attivo - fai clic sulla pagina per iniziare a leggere da lì'},
+    'Yellow': {
+        'nl': 'Geel',
+        'fr': 'Jaune',
+        'de': 'Gelb',
+        'es': 'Amarillo',
+        'it': 'Giallo'},
+    'Green': {
+        'nl': 'Groen',
+        'fr': 'Vert',
+        'de': 'Grün',
+        'es': 'Verde',
+        'it': 'Verde'},
+    'Blue': {
+        'nl': 'Blauw',
+        'fr': 'Bleu',
+        'de': 'Blau',
+        'es': 'Azul',
+        'it': 'Blu'},
+    'Pink': {
+        'nl': 'Roze',
+        'fr': 'Rose',
+        'de': 'Rosa',
+        'es': 'Rosa',
+        'it': 'Rosa'},
     'Tip: click on the converted page to start reading there.': {
         'nl': 'Tip: klik op de omgezette pagina om daar te beginnen met voorlezen.',
         'fr': 'Astuce : cliquez sur la page convertie pour commencer la lecture à cet endroit.',
