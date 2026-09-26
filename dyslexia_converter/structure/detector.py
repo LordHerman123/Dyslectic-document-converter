@@ -38,9 +38,23 @@ SPECIAL_HEADINGS = re.compile(
     r"acknowledg(e)?ments?|dankwoord|appendix|bijlage|contents|inhoud|inhoudsopgave)\b[\s:.]*$", re.I)
 
 Item = Union[RawLine, RawFigure, RawTable]
+# run-in headings of theorem-like blocks
+RUN_IN_RE = re.compile(r"^\s*(theorem|lemma|proposition|corollary|definition|remark|example|proof|claim|conjecture|"
+                       r"assumption|question|exercise|note|stelling|bewijs|definitie|opmerking|voorbeeld|satz|beweis|"
+                       r"théorème|lemme|preuve|démonstration|teorema|lema|prueba|dimostrazione)\b", re.I)
+
+
+def _caption_start(text: str) -> bool:
+    """A caption label ("Fig. 4.", "Table 2:") and not a sentence about a figure ("Fig. 4 shows ...")."""
+    m = CAPTION_RE.match(text)
+    if not m:
+        return False
+    return not re.match(r"\s*(?:[,;)]\s*|and\s|&\s|to\s|[-–]\s*\d)?\s*[a-z]", text[m.end():])
+
 
 
 @dataclass
+
 class _Para:
     lines: list[RawLine] = field(default_factory=list)
 
@@ -109,6 +123,8 @@ class StructureDetector:
         doc = Document(source_path=source_path, pages=[p.info for p in raw.pages],
                        title=raw.title, author=raw.author, toc=raw.toc, warnings=list(raw.warnings))
         all_lines = [l for p in raw.pages for l in p.lines]
+        for l in all_lines:
+            doc.inline_images.update(l.inline_images)
         text_lines = [l for l in all_lines if l.source == "text"]
         ocr_lines = [l for l in all_lines if l.source == "ocr"]
         body = {"text": body_font_size(text_lines), "ocr": body_font_size(ocr_lines)}
@@ -186,7 +202,7 @@ class StructureDetector:
             # no normal-size text further down in the same column
             return not any(n.y0 > l.y0 + 1 and min(n.x1, l.x1) - max(n.x0, l.x0) > 5 for n in normal)
 
-        zone = [l for l in lines if l.size < body_size * 0.88 and l.y0 > h * 0.55 and below_body(l)]
+        zone = [l for l in lines if l.size < body_size * 0.92 and l.y0 > h * 0.55 and below_body(l)]
         if not zone:
             return []
         ref_heads = [r for r in lines if REFERENCE_HEADINGS.match(r.text)]
@@ -204,9 +220,22 @@ class StructureDetector:
             else:
                 break
         zone = sorted(kept, key=lambda l: (l.y0, l.x0))
+        bottom = max(l.y1 for l in zone)
+        ids = {id(l) for l in zone}
+        if any(id(o) not in ids and o.y0 > bottom and min(o.x1, l.x1) - max(o.x0, l.x0) > 5
+               for o in lines for l in zone):
+            return []  # more text follows below it: not the notes at the foot of the page
+        # print only a little smaller than the text (9 pt in 10 pt) counts as notes only with a note
+        # marker; otherwise it is more likely a quotation set in smaller type
+        if min(l.size for l in zone) >= body_size * 0.88 and not any(
+                FOOTNOTE_START_RE.match(l.text) or l.text[:1] in "∗⋆†‡§¶*⋄" or
+                any(s.superscript and s.start == 0 for s in l.styles) for l in zone):
+            return []
         first = zone[0]
         if CAPTION_RE.match(first.text) or REF_BRACKET_RE.match(first.text):
             return []
+        if sum(1 for l in zone if REF_BRACKET_RE.match(l.text)) >= 2:
+            return []  # the end of a reference list ("[17] ...", "[18] ..."), not notes
         # Small print below the body text: real footnotes (with markers) or
         # page notes such as affiliations and licence statements.
         return zone
@@ -277,8 +306,19 @@ class StructureDetector:
             return False
         if p.bold != c.bold and (len(p.text) < 120 or len(c.text) < 120):
             return False
-        if LIST_RE.match(c.text) or CAPTION_RE.match(c.text) or REF_BRACKET_RE.match(c.text):
+        # "(b) a bar chart and" + "(c) a scatter plot": a sentence running on, not a new list item
+        running_on = bool(re.match(r"^\s*\((?:[a-z]|[ivx]{1,4}|\d{1,2})\)\s", c.text)) and \
+            not p.text.rstrip().endswith(TERMINAL) and abs(c.x0 - p.x0) < 2 and \
+            not LIST_RE.match(para.lines[0].text) and len(para.lines) >= 1
+        if (LIST_RE.match(c.text) and not running_on) or REF_BRACKET_RE.match(c.text):
             return False
+        if re.search(r" … \S+\s*$", p.text):
+            return False  # an entry of a printed table of contents
+        if p.text.rstrip().endswith(TERMINAL) and RUN_IN_RE.match(c.text) and any(
+                (st.bold or st.italic) and st.start == 0 for st in c.styles):
+            return False  # "Lemma 3.2. ..." or "Proof. ...": a new block right after a sentence ends
+        if _caption_start(c.text) and (p.text.rstrip().endswith(TERMINAL) or abs(p.size - c.size) > 0.3):
+            return False  # "... presented in" + "Fig. 2. When ..." is one sentence running on
         if p.font and c.font and _family(p.font) != _family(c.font) and len(para.lines) == 1 \
                 and (p.x1 - p.x0) < 0.5 * (c.x1 - c.x0) and not (p.italic or c.italic):
             return False  # e.g. a heading set in a different typeface
@@ -328,7 +368,7 @@ class StructureDetector:
                     text += " "
             base = len(text)
             text += l.text
-            styles += [StyleRange(s.start + base, s.end + base, s.bold, s.italic, s.superscript) for s in l.styles]
+            styles += [s.moved(base) for s in l.styles]
             conf += [OcrWordConfidence(c.start + base, c.end + base, c.confidence) for c in l.conf]
             if l.bold and not any(s.bold for s in l.styles):
                 styles.append(StyleRange(base, base + len(l.text), bold=True))
@@ -346,7 +386,7 @@ class StructureDetector:
     def _para_block(self, p: _Para, body_size: float) -> Block:
         text, styles, conf = self._join_lines(p.lines)
         kind = BlockKind.PARAGRAPH
-        if CAPTION_RE.match(text):
+        if _caption_start(text):
             kind = BlockKind.CAPTION
         elif LIST_RE.match(text) and not self._heading_like(p, text, body_size):
             kind = BlockKind.LIST_ITEM
@@ -376,6 +416,12 @@ class StructureDetector:
             if b.kind in (BlockKind.FURNITURE, BlockKind.FOOTNOTE):
                 out.append(b)
                 continue
+            if _is_equation(b):
+                # a display equation is part of the running text: what follows it comes after it
+                out.append(b)
+                last_para = None
+                floats_between = False
+                continue
             if b.kind in (BlockKind.IMAGE, BlockKind.TABLE, BlockKind.CAPTION) or (
                     last_para is not None and b.kind == BlockKind.PARAGRAPH
                     and b.font_size < last_para.font_size - 1 and len(b.text) < 200):
@@ -390,6 +436,7 @@ class StructureDetector:
                     and last_para.kind == BlockKind.PARAGRAPH
                     and abs(last_para.font_size - b.font_size) <= 1.0
                     and not last_para.text.rstrip().endswith(TERMINAL)
+                    and not re.search(r" … \S+\s*$", last_para.text)
                     and not b.text[:1].isupper() and not LIST_RE.match(b.text)):
                 sep = " "
                 left = re.search(r"([A-Za-z]+)-$", last_para.text)
@@ -402,8 +449,7 @@ class StructureDetector:
                     sep = ""
                 base = len(last_para.text) + len(sep)
                 last_para.text += sep + b.text
-                last_para.styles += [StyleRange(s.start + base, s.end + base, s.bold, s.italic, s.superscript)
-                                     for s in b.styles]
+                last_para.styles += [s.moved(base) for s in b.styles]
                 last_para.ocr_confidence += [OcrWordConfidence(c.start + base, c.end + base, c.confidence)
                                              for c in b.ocr_confidence]
                 last_para._nlines += getattr(b, "_nlines", 1)  # type: ignore[attr-defined]
@@ -620,11 +666,11 @@ class StructureDetector:
         # book-style captions ("1. Mixed forest ...") directly below a picture
         for i, b in enumerate(blocks[:-1]):
             nxt = blocks[i + 1]
-            if (b.kind == BlockKind.IMAGE and nxt.page == b.page
+            if (b.kind == BlockKind.IMAGE and nxt.page == b.page and not _is_equation(b)
                     and nxt.kind in (BlockKind.PARAGRAPH, BlockKind.LIST_ITEM) and len(nxt.text) < 300
                     and 0 <= nxt.bbox[1] - b.bbox[3] < 40):
                 nxt.kind = BlockKind.CAPTION
-        targets = [b for b in blocks if b.kind in (BlockKind.IMAGE, BlockKind.TABLE)]
+        targets = [b for b in blocks if b.kind in (BlockKind.IMAGE, BlockKind.TABLE) and not _is_equation(b)]
         for cap in [b for b in blocks if b.kind == BlockKind.CAPTION]:
             is_table = bool(re.match(r"^\s*(table|tab\.?|tabel)", cap.text, re.I))
             best, best_d = None, 1e9
@@ -632,18 +678,35 @@ class StructureDetector:
                 if t.page != cap.page or t.id in {c.caption_for for c in blocks if c.caption_for}:
                     continue
                 horiz = overlap_ratio((cap.bbox[0], 0, cap.bbox[2], 1), (t.bbox[0], 0, t.bbox[2], 1))
-                d = min(abs(cap.bbox[1] - t.bbox[3]), abs(t.bbox[1] - cap.bbox[3]))
+                below_target = cap.bbox[1] >= t.bbox[3] - 3
+                d = abs(cap.bbox[1] - t.bbox[3]) if below_target else abs(t.bbox[1] - cap.bbox[3])
                 if horiz < 0.2:
                     d += 200
                 if is_table == (t.kind == BlockKind.TABLE):
                     d -= 20
+                # figure captions usually sit below their figure, table captions above their table
+                if not is_table and not below_target:
+                    d += 40
+                if is_table and below_target:
+                    d += 15
                 if d < best_d:
                     best, best_d = t, d
             if best is not None and best_d < 150:
                 cap.caption_for = best.id
         # move each caption next to its target: figures -> caption after, tables -> caption before
-        out = [b for b in blocks if not (b.kind == BlockKind.CAPTION and b.caption_for)]
+        # a figure caption that already follows its figure (and its other panels) stays where it is
+        position = {b.id: i for i, b in enumerate(blocks)}
+        by_id = {b.id: b for b in blocks}
+        staying = set()
         for cap in [b for b in blocks if b.kind == BlockKind.CAPTION and b.caption_for]:
+            t = by_id.get(cap.caption_for)
+            if t is not None and t.kind == BlockKind.IMAGE and position[cap.id] > position[t.id] \
+                    and cap.bbox[1] >= t.bbox[3] - 3 and cap.page == t.page \
+                    and all(b.page == cap.page and b.kind != BlockKind.HEADING
+                            for b in blocks[position[t.id]:position[cap.id]]):
+                staying.add(cap.id)
+        out = [b for b in blocks if not (b.kind == BlockKind.CAPTION and b.caption_for) or b.id in staying]
+        for cap in [b for b in blocks if b.kind == BlockKind.CAPTION and b.caption_for and b.id not in staying]:
             idx = next(i for i, b in enumerate(out) if b.id == cap.caption_for)
             target = out[idx]
             if target.kind == BlockKind.TABLE:
@@ -654,6 +717,10 @@ class StructureDetector:
                     j += 1
                 out.insert(j, cap)
         return out
+
+
+def _is_equation(b: Block) -> bool:
+    return b.kind == BlockKind.IMAGE and b.image is not None and b.image.kind == "equation"
 
 
 def _looks_garbled(text: str) -> bool:
@@ -706,5 +773,5 @@ def _slice_styles(styles: list[StyleRange], start: int, end: int) -> list[StyleR
     for s in styles:
         a, b = max(s.start, start), min(s.end, end)
         if a < b:
-            out.append(StyleRange(a - start, b - start, s.bold, s.italic, s.superscript))
+            out.append(s.moved(-start, a, b))
     return out

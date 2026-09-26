@@ -11,9 +11,9 @@ Your original PDF is only ever read, never modified.
 Everything works **locally and without AI**. AI is an optional extra that you turn on with your own
 API key. When it's on, it only sees small snippets that the local rules couldn't decide.
 
-## Download for Windows (version 1.3)
+## Download for Windows (version 1.4)
 
-Get `DyslexiaConverter-1.3.1-setup.exe` (installer) or `DyslexiaConverter-1.3.1-windows.zip` (unzip and
+Get `DyslexiaConverter-1.4.0-setup.exe` (installer) or `DyslexiaConverter-1.4.0-windows.zip` (unzip and
 double-click `DyslexiaConverter.exe`) from the repository's **Releases** page. Text recognition (Tesseract)
 is included; nothing else needs to be installed. How the Windows build is made: [windows/README.md](windows/README.md).
 
@@ -49,8 +49,9 @@ python -m dyslexia_converter chapter.pdf --pages 3-18 --move-citations -f printa
 | OCR correction | Uses local dictionaries (pyspellchecker: English, Dutch, German, French, Spanish, Italian, Portuguese) plus the typical OCR mix-ups (`rn`→`m`, `l`→`i`, `0`→`o`, …). Only high-confidence fixes are applied automatically. Modes: Automatic, Review (Accept/Reject in the app) and Off. The review shows the whole sentence around each word, with the word highlighted. If neither the scan nor the suggestion is right (for example a word split in two, like “diffe ent”), the pencil (Edit) lets you retype the sentence; only the words you change are stored, as your own correction, and Undo brings back the scanned text. Names, abbreviations, identifiers, British/American spellings, words that are correct in another of these languages (such as a quoted French term) and your own dictionary words are left alone. |
 | Structure | Title, authors, numbered and unnumbered headings with levels, paragraphs (rejoined across columns and pages), bullet and numbered lists, captions linked to their figure or table, footnotes, references and running headers/footers. All of this uses simple rules based on font size, weight, typeface, position, white space and numbering. The PDF's own bookmarks are used when present. |
 | Reading order | Multi-column aware (recursive XY-cut): column 1 is read before column 2, and full-width titles and figures stay in place. |
-| Tables | Ruled tables and caption-anchored tables without rules are rebuilt as real tables that repeat the header row and can split across pages. If a table can't be rebuilt reliably, it's kept as a picture of the original. |
-| Images | Raster images and vector figures (charts drawn as paths, including their labels) are kept. Captions stay with their figure. Logos and badges are hidden by default (there's a setting to show them). |
+| Mathematics | Displayed equations (integrals, sums, fractions, matrices, cases, multi-line derivations, with their numbers) are kept exactly as typeset, as sharp pictures at the reading size, with their text as alt text. Long equations broken over lines are shown line by line; an equation number set far to the right is brought next to its formula. Inline formulas stay in the text in a Times-style serif (Times New Roman if installed, otherwise the bundled Liberation Serif), with real sub- and superscripts, ℝ/ℕ/ℂ and script letters, Greek, accents and primes; small stacked parts (an inline fraction, a sum with limits) are drawn as small pictures inside the line. Works with TeX fonts (Computer Modern, AMS, Times/mathptmx, MathTime, STIX, Cambria Math). On scanned pages, which OCR cannot read as maths, displayed formulas are kept as pictures of the page. |
+| Tables | Ruled tables, booktabs tables (top, middle and bottom rules only), tables of up to 20 columns, long tables and caption-anchored tables without rules are rebuilt as real tables that repeat the header row and can split across pages. Bold cells (best scores) stay bold and wrapped header rows are joined. Tables full of formulas, and tables that can't be rebuilt reliably, are kept as a picture of the original. Sideways (landscape) tables are kept as a picture turned upright. |
+| Images | Raster images and vector figures (charts drawn as paths, including their tick labels and axis titles) are kept. Figure panels side by side are read left to right, each as its own picture, and captions stay with their figure. Logos and badges are hidden by default (there's a setting to show them). |
 | Typography | Font (Atkinson Hyperlegible, OpenDyslexic, Verdana, Arial, Tahoma, DejaVu Sans, Liberation Sans), font size, line spacing, paragraph spacing, letter spacing, word spacing, alignment (left by default), four page margins, and a separate reading-width limit. |
 | Bold word starts | Optional bolding of the first part of each word: first letter, 25%, 40% or automatic. Punctuation, URLs, numbers, identifiers and acronyms are skipped, and so are citations and references unless you switch that on. |
 | Citations | Optional: author-year citations become `[n]` markers that point to the numbered reference list. Unmatched citations get their own list, and the original citation text is always kept. Numeric citations, ranges (`[3–7]`) and lists (`[2, 5, 8]`) are recognised. Uncertain cases are left unchanged, or passed to the AI if you allow it. |
@@ -132,6 +133,9 @@ pip install pytest
 python -m pytest            # OCR tests are skipped automatically if Tesseract is missing
 ```
 
+`tests/stress` holds small LaTeX stress documents (mathematics in every shape, a two-column paper,
+wrapped/rotated/long/wide tables and charts, Times-font maths with margin notes) that the tests convert.
+
 The tests check, among other things, that every paragraph of the original appears word for word in the
 output for every preset, that the original PDF's bytes are unchanged after all exports, and that the AI
 layer refuses to send anything without consent and never sends the same content twice.
@@ -143,7 +147,8 @@ See [docs/ANDROID.md](docs/ANDROID.md).
 ## Licences
 
 * Bundled fonts: Atkinson Hyperlegible (SIL OFL 1.1), OpenDyslexic (Bitstream Vera licence), DejaVu Sans
-  (Bitstream Vera / public domain) and Liberation Sans (SIL OFL). The licence files are in
+  (Bitstream Vera / public domain), Liberation Sans and Liberation Serif (SIL OFL; Liberation Serif is
+  used for formulas when Times New Roman isn't installed). The licence files are in
   `dyslexia_converter/assets/fonts/`. Arial, Verdana and Tahoma are used only if they're installed on
   the device. Otherwise a similar free font is substituted and the app tells you.
 * **PyMuPDF is AGPL-3.0** (a commercial licence is available from Artifex). That's fine for personal use

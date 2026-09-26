@@ -1,0 +1,101 @@
+\documentclass[10pt,twocolumn]{article}
+\usepackage[a4paper,margin=1.8cm]{geometry}
+\usepackage{amsmath,amssymb,graphicx,booktabs,multirow,subcaption,algorithm2e,xcolor}
+\title{Stress Test Two: A Two-Column Paper}
+\author{C. Columns}
+\date{}
+\begin{document}
+\maketitle
+\begin{abstract}
+Two-column layouts are the norm in engineering venues. This paper mixes running text, equations that
+fill a narrow column, a figure spanning both columns, a wide table and an algorithm.
+\end{abstract}
+
+\section{Introduction}
+Neural networks compute $y = \sigma(Wx + b)$ where $\sigma$ is a nonlinearity such as the rectified
+linear unit $\mathrm{ReLU}(z) = \max(0, z)$. Training minimises the empirical risk
+\begin{equation}
+  \mathcal{L}(\theta) = \frac{1}{N}\sum_{i=1}^{N} \ell\big(f_\theta(x_i), y_i\big) + \lambda \|\theta\|_2^2 ,
+  \label{eq:risk}
+\end{equation}
+with gradient descent $\theta_{t+1} = \theta_t - \eta \nabla_\theta \mathcal{L}(\theta_t)$.
+The learning rate $\eta$ matters a great deal.\footnote{See the appendix for the schedule we used.}
+Results are summarised in Table~\ref{tab:main} and Figure~\ref{fig:wide}.
+
+The softmax of a vector $z \in \mathbb{R}^K$ is
+\begin{equation}
+  \operatorname{softmax}(z)_k = \frac{e^{z_k}}{\sum_{j=1}^{K} e^{z_j}} .
+\end{equation}
+Attention combines queries, keys and values:
+\begin{equation}
+  \mathrm{Attn}(Q,K,V) = \operatorname{softmax}\!\left(\frac{QK^\top}{\sqrt{d_k}}\right) V .
+\end{equation}
+
+\section{Method}
+We use the procedure in Algorithm~\ref{alg:train}. Each step samples a batch $B \subset \{1,\dots,N\}$ of size $|B| = 64$.
+
+\begin{algorithm}[t]
+\caption{Training loop}\label{alg:train}
+\KwIn{data $\{(x_i,y_i)\}_{i=1}^N$, rate $\eta$}
+\For{$t = 1$ \KwTo $T$}{
+  sample batch $B$\;
+  $g \leftarrow \frac{1}{|B|}\sum_{i\in B}\nabla \ell_i$\;
+  $\theta \leftarrow \theta - \eta g$\;
+}
+\KwOut{$\theta$}
+\end{algorithm}
+
+The model has three parts. First, an encoder maps the input to a hidden state. Second, a decoder reads the
+hidden state. Third, a small head predicts the label. Each part is trained jointly, and we report the
+average over five random seeds. This paragraph is deliberately long so that it flows from one column into
+the next one, which is where many converters lose the reading order or mix the two columns together line
+by line. A careful reader should see this sentence exactly once and in the right place.
+
+\begin{figure*}[t]
+  \centering
+  \begin{subfigure}{0.32\textwidth}\includegraphics[width=\linewidth]{lines.pdf}\caption{Lines}\end{subfigure}\hfill
+  \begin{subfigure}{0.32\textwidth}\includegraphics[width=\linewidth]{bars.pdf}\caption{Bars}\end{subfigure}\hfill
+  \begin{subfigure}{0.32\textwidth}\includegraphics[width=\linewidth]{scatter.pdf}\caption{Scatter}\end{subfigure}
+  \caption{Three panels side by side spanning both columns. Panel (a) shows periodic signals, (b) a bar
+  chart and (c) a scatter plot.}
+  \label{fig:wide}
+\end{figure*}
+
+\begin{table*}[t]
+  \centering
+  \caption{Main results on six benchmarks. Best numbers are in bold.}
+  \label{tab:main}
+  \begin{tabular}{lcccccccc}
+    \toprule
+    \multirow{2}{*}{Method} & \multicolumn{2}{c}{Vision} & \multicolumn{2}{c}{Language} & \multicolumn{2}{c}{Audio} & \multirow{2}{*}{Avg.} & \multirow{2}{*}{Params} \\
+    \cmidrule(lr){2-3}\cmidrule(lr){4-5}\cmidrule(lr){6-7}
+     & Top-1 & Top-5 & BLEU & PPL & WER & CER & & \\
+    \midrule
+    Baseline & 71.2 & 90.1 & 27.3 & 18.4 & 9.1 & 3.2 & 36.6 & 25M \\
+    Wide & 73.5 & 91.0 & 28.1 & 17.2 & 8.7 & 3.0 & 37.6 & 60M \\
+    Deep & 74.0 & 91.8 & \textbf{29.4} & 16.9 & 8.5 & 2.9 & 38.3 & 80M \\
+    Ours & \textbf{76.8} & \textbf{93.2} & 29.1 & \textbf{15.8} & \textbf{7.9} & \textbf{2.6} & \textbf{39.2} & 45M \\
+    \bottomrule
+  \end{tabular}
+\end{table*}
+
+\section{Results}
+Our model improves accuracy by $2.8$ points while using fewer parameters than \emph{Deep}. The perplexity
+drops from $16.9$ to $15.8$, a relative gain of $\approx 6.5\%$. Error rates fall as well.
+
+\begin{table}[h]
+  \centering
+  \caption{Ablation with grid lines.}
+  \begin{tabular}{|l|r|r|}
+    \hline
+    Variant & Acc. & $\Delta$ \\ \hline
+    Full model & 76.8 & -- \\ \hline
+    no attention & 74.1 & $-2.7$ \\ \hline
+    no dropout & 75.9 & $-0.9$ \\ \hline
+  \end{tabular}
+\end{table}
+
+\section{Conclusion}
+We presented a stress test. The inequality $\mathbb{E}[\|g\|^2] \le G^2$ bounds the gradient norm, and the
+bound $\mathcal{O}(1/\sqrt{T})$ follows. Future work includes $k$-fold validation with $k \in \{5, 10\}$.
+\end{document}

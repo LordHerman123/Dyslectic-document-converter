@@ -8,6 +8,8 @@ are referenced by name, not embedded.
 from __future__ import annotations
 
 import io
+import re
+from typing import Optional
 
 from docx import Document as DocxDocument
 from docx.enum.table import WD_TABLE_ALIGNMENT
@@ -16,6 +18,7 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt, RGBColor
 
+from ..fonts import MATH_FAMILY
 from ..settings import FormatSettings
 from .compose import ComposeResult, RItem
 
@@ -41,18 +44,34 @@ def _shade(paragraph, hex_fill: str) -> None:
     ppr.append(shd)
 
 
-def _add_runs(p, item: RItem, s: FormatSettings, size: float, bold_all: bool = False) -> None:
+def _add_runs(p, item: RItem, s: FormatSettings, size: float, bold_all: bool = False,
+              images: Optional[dict] = None) -> None:
     color = RGBColor.from_string(s.text_color.lstrip("#").upper()) if not s.ink_saving else RGBColor(0, 0, 0)
+    images = images or {}
     for r in item.runs:
-        run = p.add_run(r.text)
-        run.font.name = s.font
-        run._r.get_or_add_rPr().get_or_add_rFonts().set(qn("w:eastAsia"), s.font)
-        run.font.size = Pt(size)
-        run.font.bold = r.bold or bold_all
-        run.font.italic = r.italic
-        run.font.superscript = r.superscript and not r.marker
-        run.font.color.rgb = color
-        _set_char_spacing(run, s.letter_spacing)
+        # small formula pictures inside the text (a fraction, a sum with limits) are placed inline
+        parts = re.split("([" + "".join(images) + "])", r.text) if images and any(c in images for c in r.text) \
+            else [r.text]
+        for part in parts:
+            if not part:
+                continue
+            img = images.get(part) if len(part) == 1 else None
+            if img is not None:
+                scale = size / img.text_size if img.text_size else 1.0
+                width = (img.width_pt or img.width * 72 / 300) * scale * 1.15
+                p.add_run().add_picture(io.BytesIO(img.data), width=Pt(width))
+                continue
+            run = p.add_run(part)
+            font = MATH_FAMILY if r.math else s.font
+            run.font.name = font
+            run._r.get_or_add_rPr().get_or_add_rFonts().set(qn("w:eastAsia"), font)
+            run.font.size = Pt(size * (1.06 if r.math else 1.0))
+            run.font.bold = r.bold or bold_all
+            run.font.italic = r.italic
+            run.font.superscript = r.superscript and not r.marker
+            run.font.subscript = r.subscript and not r.superscript
+            run.font.color.rgb = color
+            _set_char_spacing(run, s.letter_spacing)
 
 
 def build_docx(result: ComposeResult, s: FormatSettings, title: str = "", author: str = "") -> bytes:
@@ -103,6 +122,12 @@ def build_docx(result: ComposeResult, s: FormatSettings, title: str = "", author
             lvl = max(1, min(4, it.level or 1))
             p = d.add_heading(level=lvl)
             _add_runs(p, it, s, s.font_size * {1: 1.15, 2: 1.05}.get(lvl, 1.0) * s.heading_scale, bold_all=True)
+        elif k == "equation" and it.image is not None:
+            # a display equation exactly as typeset, scaled like the text
+            scale = s.font_size / it.image.text_size if it.image.text_size else 1.3
+            w = min(Cm(col).emu, int((it.natural_width or 200) * scale * 12700))
+            d.add_picture(io.BytesIO(it.image.data), width=w)
+            d.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
         elif k == "image" and it.image is not None:
             w = min(Cm(col).emu, int((it.natural_width or 300) * 1.35 * 12700))
             d.add_picture(io.BytesIO(it.image.data), width=w)
@@ -121,7 +146,7 @@ def build_docx(result: ComposeResult, s: FormatSettings, title: str = "", author
                         run = cp.add_run(row[ci] if ci < len(row) else "")
                         run.font.size = Pt(max(9.0, s.font_size * 0.8))
                         run.font.name = s.font
-                        run.bold = ri == 0
+                        run.bold = ri < max(1, tab.header_rows) or (ri, ci) in (tab.bold_cells or set())
                         cp.paragraph_format.line_spacing = 1.2
                         cp.paragraph_format.space_after = Pt(2)
                 d.add_paragraph()
@@ -144,7 +169,7 @@ def build_docx(result: ComposeResult, s: FormatSettings, title: str = "", author
                 mr = p.add_run(it.marker + "\t")
                 mr.font.size = Pt(size)
                 mr.font.name = s.font
-            _add_runs(p, it, s, size)
+            _add_runs(p, it, s, size, images=result.inline_images)
             if k in ("box_paragraph", "quote") and s.boxed_sections and not s.ink_saving:
                 _shade(p, "F3F0E2")
             if k == "caption" and it.keep_with_next:

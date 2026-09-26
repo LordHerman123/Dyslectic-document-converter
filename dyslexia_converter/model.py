@@ -7,7 +7,7 @@ applied at render time, so every transformation can be reversed.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Optional
 
@@ -39,6 +39,13 @@ class StyleRange:
     bold: bool = False
     italic: bool = False
     superscript: bool = False
+    subscript: bool = False
+    math: bool = False  # part of a formula: set in a serif maths font, never bolded or treated as a marker
+
+    def moved(self, delta: int, start: Optional[int] = None, end: Optional[int] = None) -> "StyleRange":
+        """A copy shifted by ``delta`` (optionally with new start/end), keeping every style flag."""
+        return replace(self, start=(self.start if start is None else start) + delta,
+                       end=(self.end if end is None else end) + delta)
 
 
 @dataclass
@@ -47,7 +54,11 @@ class ImageData:
     ext: str  # "png" or "jpeg"
     width: int  # pixels
     height: int
-    kind: str = "figure"  # figure / page-region / decorative
+    kind: str = "figure"  # figure / page-region / decorative / equation / unreadable-text
+    alt: str = ""  # text of the picture where known (equations), for text exports and screen readers
+    text_size: float = 0.0  # font size of the text around it in the original (equations are scaled with it)
+    descent: float = 0.0  # inline formulas: how far the picture reaches below the text baseline (points)
+    width_pt: float = 0.0  # size in the original (points)
 
 
 @dataclass
@@ -57,6 +68,8 @@ class TableData:
     # reconstructed reliably, so contents are never corrupted.
     fallback_image: Optional[ImageData] = None
     reliable: bool = True
+    header_rows: int = 1
+    bold_cells: set = field(default_factory=set)  # {(row, column)} set in bold in the original (best scores)
 
 
 @dataclass
@@ -136,6 +149,8 @@ class Document:
     pages: list[PageInfo] = field(default_factory=list)
     blocks: list[Block] = field(default_factory=list)
     corrections: list[Correction] = field(default_factory=list)
+    # pictures of small formulas inside the text, by the placeholder character that stands for them
+    inline_images: dict[str, "ImageData"] = field(default_factory=dict)
     title: str = ""
     author: str = ""
     language: str = "en"
@@ -193,4 +208,4 @@ def map_styles(styles: list[StyleRange], text: str, corrections: list[Correction
                 return c.start + delta + min(pos - c.start, len(c.replacement))
         return pos + delta
 
-    return [StyleRange(shift(s.start), shift(s.end), s.bold, s.italic, s.superscript) for s in styles]
+    return [replace(s, start=shift(s.start), end=shift(s.end)) for s in styles]

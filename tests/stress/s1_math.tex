@@ -1,0 +1,93 @@
+\documentclass[11pt]{article}
+\usepackage[a4paper,margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb,amsthm,mathtools,mathrsfs}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}[theorem]{Lemma}
+\title{Stress Test One: Mathematics in Every Shape}
+\author{A. Tester \and B. Checker}
+\date{}
+\begin{document}
+\maketitle
+\begin{abstract}
+We collect many kinds of mathematical notation in one place, such as $\int_0^\infty e^{-x^2}\,dx=\frac{\sqrt{\pi}}{2}$,
+to see whether a reading tool keeps every symbol. The abstract itself contains a sum $\sum_{k=1}^{n} k = \frac{n(n+1)}{2}$.
+\end{abstract}
+
+\section{Inline mathematics}
+Let $f\colon \mathbb{R}^n \to \mathbb{R}$ be a smooth function and let $x_0 \in \mathbb{R}^n$. The gradient
+$\nabla f(x_0)$ points in the direction of steepest ascent, and the Hessian $H_{ij} = \partial^2 f / \partial x_i \partial x_j$
+describes the curvature. For a vector $\mathbf{v}$ with $\|\mathbf{v}\|_2 = 1$ we have
+$D_{\mathbf{v}} f(x_0) = \langle \nabla f(x_0), \mathbf{v} \rangle$. Greek letters such as $\alpha, \beta, \gamma, \Delta, \Omega$
+and $\varepsilon$ appear often, and so do sets like $\mathcal{F}$, $\mathscr{L}$, $\mathfrak{g}$ and $\mathbb{C}$.
+Accents such as $\hat{x}$, $\tilde{y}$, $\bar{z}$, $\vec{u}$ and $\dot{q}$ must survive, as must primes $f'(x)$ and $g''(t)$.
+A small inline fraction $\tfrac{1}{2}$, a normal one $\frac{a+b}{c-d}$ and a limit $\lim_{n\to\infty} (1+\frac{1}{n})^n = e$
+sit inside the text. Probability: $\Pr[X \geq t] \leq \frac{\mathbb{E}[X]}{t}$ for $t>0$, and $X \sim \mathcal{N}(\mu,\sigma^2)$.
+Indices can be deep: $a_{i_1 i_2}^{(k)}$, $x^{2^n}$, $e^{-\frac{x^2}{2\sigma^2}}$ and $\sqrt[3]{x^3+y^3}$.
+
+\section{Display equations}
+The Gaussian integral is
+\begin{equation}
+  \int_{-\infty}^{\infty} e^{-x^2}\,dx = \sqrt{\pi}.
+  \label{eq:gauss}
+\end{equation}
+Equation~\eqref{eq:gauss} is classical. A double and a contour integral:
+\begin{equation}
+  \iint_{D} \left( \frac{\partial Q}{\partial x} - \frac{\partial P}{\partial y} \right) dA = \oint_{\partial D} P\,dx + Q\,dy .
+\end{equation}
+Without a number:
+\[
+  \sum_{n=1}^{\infty} \frac{1}{n^2} = \frac{\pi^2}{6}, \qquad \prod_{p \text{ prime}} \frac{1}{1-p^{-s}} = \zeta(s).
+\]
+An aligned derivation with several numbers:
+\begin{align}
+  (a+b)^2 &= a^2 + 2ab + b^2, \\
+  (a-b)^2 &= a^2 - 2ab + b^2, \\
+  a^2 - b^2 &= (a+b)(a-b).
+\end{align}
+A piecewise definition:
+\begin{equation}
+  |x| = \begin{cases} x & \text{if } x \geq 0, \\ -x & \text{otherwise.} \end{cases}
+\end{equation}
+Matrices and determinants:
+\begin{equation}
+  A = \begin{pmatrix} 1 & 2 & 3 \\ 4 & 5 & 6 \\ 7 & 8 & 9 \end{pmatrix}, \quad
+  \det\begin{bmatrix} a & b \\ c & d \end{bmatrix} = ad - bc .
+\end{equation}
+A continued fraction and a binomial sum:
+\begin{equation}
+  x = a_0 + \cfrac{1}{a_1 + \cfrac{1}{a_2 + \cfrac{1}{a_3}}}, \qquad \sum_{k=0}^{n}\binom{n}{k} = 2^n .
+\end{equation}
+Braces over and under terms:
+\begin{equation*}
+  \underbrace{1 + 1 + \cdots + 1}_{n \text{ times}} = n, \qquad \overbrace{x \cdot x \cdots x}^{m} = x^m .
+\end{equation*}
+A long equation broken over lines:
+\begin{multline}
+  p(x) = 3x^6 + 14x^5y + 590x^4y^2 + 19x^3y^3 \\
+  - 12x^2y^4 - 12xy^5 + 2y^6 - a^3b^3 - a^2b^4 + ab^5 .
+\end{multline}
+
+\section{Theorems}
+\begin{theorem}[Cauchy--Schwarz]
+For all vectors $u, v$ in an inner product space, $|\langle u, v\rangle|^2 \leq \langle u,u\rangle \cdot \langle v,v\rangle$.
+\end{theorem}
+\begin{proof}
+If $v = 0$ both sides vanish. Otherwise put $\lambda = \langle u,v\rangle / \langle v,v\rangle$ and expand
+$0 \leq \|u - \lambda v\|^2$.
+\end{proof}
+\begin{lemma}
+The function $F(t) = \int_0^t \frac{\sin s}{s}\,ds$ tends to $\frac{\pi}{2}$ as $t \to \infty$.\footnote{This is the
+Dirichlet integral; note that $\int_0^\infty \left|\frac{\sin s}{s}\right| ds = \infty$.}
+\end{lemma}
+
+\section{Lists with formulas}
+\begin{enumerate}
+  \item The derivative of $x^n$ is $n x^{n-1}$ for every $n \in \mathbb{N}$.
+  \item Euler's identity $e^{i\pi} + 1 = 0$ links five constants.
+  \item The Fourier transform $\hat{f}(\xi) = \int_{\mathbb{R}} f(x)\, e^{-2\pi i x \xi}\, dx$.
+\end{enumerate}
+The final sentence ends with a formula: the solution of $ax^2+bx+c=0$ is
+\begin{equation}
+  x_{1,2} = \frac{-b \pm \sqrt{b^2-4ac}}{2a}.
+\end{equation}
+\end{document}
