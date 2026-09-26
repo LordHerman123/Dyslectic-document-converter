@@ -288,6 +288,11 @@ def _font_family(font: str) -> str:
     return re.sub(r"\d+$", "", name).lower()
 
 
+SPACING_ACCENTS = {"¨": "\u0308", "´": "\u0301", "`": "\u0300", "ˆ": "\u0302", "˜": "\u0303", "ˇ": "\u030c",
+                   "˘": "\u0306", "˚": "\u030a", "¸": "\u0327"}
+# only where a letter can carry that accent ("don´t" keeps its apostrophe-like mark)
+SPACING_ACCENT_RE = re.compile("([¨´ˆ])([AEIOUYaeiouy])|(˜)([AONaon])|(ˇ)([CSZRENcszren])|(˘)([AGUagu])|(˚)([AUau])|"
+                               "(¸)([CSTcst])")
 LEADER_RE = re.compile(r"\s*(?:\.\s?){5,}\s*(?=\S*\s*$)")
 
 
@@ -877,6 +882,11 @@ def _text_lines(page: pymupdf.Page, pno: int) -> list[RawLine]:
             stripped = text.strip()
             if not stripped:
                 continue
+            # TeX's older fonts write "ö" as a spacing ¨ before the o: join them into one letter
+            for m in reversed(list(SPACING_ACCENT_RE.finditer(text))):
+                accent, base = [g for g in m.groups() if g]
+                letter = unicodedata.normalize("NFC", base + SPACING_ACCENTS[accent])
+                text, styles = _replace_run(text, styles, m.start(), m.end(), letter)
             leader = LEADER_RE.search(text)
             if leader:  # "2.1. Results . . . . . . . 12" (a printed table of contents): one short leader
                 text, styles = _replace_run(text, styles, leader.start(), leader.end(), " … ")
@@ -1175,6 +1185,8 @@ def _equations(page: pymupdf.Page, lines: list[RawLine]) -> tuple[list[RawFigure
     for l in lines:
         if CAPTION_RE.match(l.text) or (l.bold and l.size > body * 1.05) or l.text[:1] in "•◦▪●‣":
             continue  # captions, headings and bullet points are text
+        if l.size < body * 0.88:
+            continue  # small print (footnotes, notes) keeps its formulas inline
         left, right = column(l)
         width = max(1.0, right - left)
         if EQ_NUMBER_RE.match(l.text.strip()) and l.x0 > left + 0.55 * width:
@@ -1289,6 +1301,8 @@ def _equations(page: pymupdf.Page, lines: list[RawLine]) -> tuple[list[RawFigure
             for l in numbers + lines:
                 if id(l) in used or column(l) != column(reg[0]) or CAPTION_RE.match(l.text):
                     continue
+                if l.x0 > column(reg[0])[1] + 3 or l.x1 < column(reg[0])[0] - 3:
+                    continue  # a note in the margin
                 overlap = min(l.y1, y1) - max(l.y0, y0)
                 math, _f, _t, words = _math_profile(l)
                 rx1 = max(m.x1 for m in reg)
@@ -1791,7 +1805,63 @@ def _ocr_image(png: bytes, dpi: int, width_pt: float, height_pt: float, pno: int
     figures = _figures_from_regions(regions, lines, width_pt * height_pt, crop)
     fig_rects = [f.bbox for f in figures]
     lines = [l for l in lines if not any(overlap_ratio(l.bbox, f) > 0.6 for f in fig_rects)]
-    return lines, figures
+    formulas, lines = _scan_formulas(lines, width_pt, crop)
+    return lines, figures + formulas
+
+
+def _scan_formulas(lines: list[RawLine], width: float, crop: Callable[[Rect], ImageData]
+                   ) -> tuple[list[RawFigure], list[RawLine]]:
+    """OCR cannot read formulas: on a scanned page, lines that look like displayed mathematics (set apart,
+    few real words, symbols that OCR is unsure of) are kept as pictures of the page instead of garbled text."""
+    long = [l for l in lines if len(l.text) >= 40]
+    if len(long) < 3:
+        return [], lines
+    left = sorted(l.x0 for l in long)[len(long) // 5]
+    right = sorted(l.x1 for l in long)[len(long) * 4 // 5]
+    text_w = max(1.0, right - left)
+
+    def formula_like(l: RawLine) -> bool:
+        body = re.sub(r"\s", "", l.text)
+        if len(body) < 3 or (len(body) <= 5 and re.fullmatch(r"[\divxlcIVXLC.\-–—]+", body)):
+            return False  # page numbers
+        wordy = sum(len(w) for w in re.findall(r"[A-Za-z]{3,}", l.text))
+        letters = wordy / len(body)
+        conf = sum(c.confidence for c in l.conf) / len(l.conf) if l.conf else 100.0
+        set_apart = l.x0 - left > 0.12 * text_w and right - l.x1 > 0.12 * text_w
+        numbered = bool(re.search(r"\(\d{1,3}[a-z]?\)\s*$", l.text)) and l.x1 > right - 0.05 * text_w
+        return (set_apart and letters < 0.5 and conf < 85) or (numbered and letters < 0.5) or \
+            (set_apart and conf < 55 and letters < 0.7) or (letters < 0.3 and conf < 70 and len(body) <= 40) or \
+            (letters < 0.2 and len(body) <= 30 and bool(re.search(r"[=+<>|/()\[\]{}^_]", body)))
+    flagged = [l for l in lines if formula_like(l)]
+    if not flagged:
+        return [], lines
+    regions: list[list] = []
+    for l in sorted(flagged, key=lambda l: l.y0):
+        for reg in regions:
+            r = reg[0]
+            if l.y0 - r[3] < 1.5 * l.size and min(r[2], l.x1) - max(r[0], l.x0) > -0.1 * text_w:
+                reg[0] = _union(r, l.bbox)
+                reg[1].append(l)
+                break
+        else:
+            regions.append([l.bbox, [l]])
+    figures: list[RawFigure] = []
+    used: set[int] = set()
+    for rect, members in regions:
+        pad = 0.35 * max(l.size for l in members)
+        # small pieces OCR dropped (a denominator, an index) sit just above or below: take some room, but
+        # not into the text lines around it
+        others = [l for l in lines if l not in members and min(l.x1, rect[2]) - max(l.x0, rect[0]) > 0]
+        top = max([l.y1 + 0.5 for l in others if l.y1 <= rect[1] + 1] + [rect[1] - pad])
+        bottom = min([l.y0 - 0.5 for l in others if l.y0 >= rect[3] - 1] + [rect[3] + pad])
+        box = (max(0.0, rect[0] - pad), max(0.0, top), min(width, rect[2] + pad), bottom)
+        img = crop(box)
+        img.kind = "equation"
+        img.alt = "formula (see the picture)"
+        img.text_size = float(statistics.median(l.size for l in long))
+        figures.append(RawFigure(box, img))
+        used.update(id(l) for l in members)
+    return figures, [l for l in lines if id(l) not in used]
 
 
 def _plausible_scan_figure(r: Rect, lines: list[RawLine], width: float, height: float,
