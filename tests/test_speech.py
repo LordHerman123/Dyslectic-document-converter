@@ -216,3 +216,60 @@ def test_windows_voice_through_the_speaker_and_stopping(tmp_path):
     time.sleep(0.5)
     sp.stop()
     assert done.wait(5) and result["finished"] is False and not sp.speaking
+
+
+@windows_only
+def test_windows_voice_experiments(tmp_path):
+    """Reports (as a warning) how word tracking behaves on this machine with different set-ups."""
+    import warnings
+
+    import pythoncom
+    import win32com.client
+
+    text = "Reading aloud works on Windows today."
+    results = {}
+
+    def run(name, with_events, to_file, pump_only):
+        seen, events = [], []
+
+        class Ev:
+            def OnWord(self, a, b, pos, length):  # noqa: N802
+                events.append(int(pos))
+
+        try:
+            v = win32com.client.DispatchWithEvents("SAPI.SpVoice", Ev) if with_events \
+                else win32com.client.Dispatch("SAPI.SpVoice")
+            v.EventInterests = 33790
+            fs = None
+            if to_file:
+                fs = win32com.client.Dispatch("SAPI.SpFileStream")
+                fs.Open(str(tmp_path / f"{name}.wav"), 3)
+                v.AudioOutputStream = fs
+            v.Speak(text, 1)
+            t0 = time.time()
+            while time.time() - t0 < 15:
+                pythoncom.PumpWaitingMessages()
+                if pump_only:
+                    time.sleep(0.01)
+                    done = v.Status.RunningState == 1
+                else:
+                    done = v.WaitUntilDone(50)
+                st = v.Status
+                if st.InputWordLength and (not seen or seen[-1] != st.InputWordPosition):
+                    seen.append(int(st.InputWordPosition))
+                if done:
+                    break
+            for _ in range(20):
+                pythoncom.PumpWaitingMessages()
+                time.sleep(0.01)
+            if fs is not None:
+                fs.Close()
+            results[name] = {"events": events, "polled": seen, "secs": round(time.time() - t0, 2)}
+        except Exception as e:
+            results[name] = {"error": repr(e)[:200]}
+
+    run("file_events_waituntil", True, True, False)
+    run("file_events_pumponly", True, True, True)
+    run("speakers_events_pumponly", True, False, True)
+    run("speakers_polling", False, False, False)
+    warnings.warn(f"SAPI experiments: {results}")
