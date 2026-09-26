@@ -206,8 +206,9 @@ def test_windows_voice_through_the_speaker_and_stopping(tmp_path):
     assert (0, 0) in words and (1, 3) in words
     # stopping in the middle of a long sentence
     done.clear()
-    sp.start(units_of(" ".join(["word"] * 200)), 0, on_done=lambda finished: (result.update(finished=finished),
-                                                                           done.set()))
-    time.sleep(1.0)
+    # (into a file, speech is made far faster than it is spoken: a long text keeps it busy long enough)
+    sp.start(units_of(" ".join(["reading"] * 3000)), 0, on_done=lambda finished: (result.update(finished=finished),
+                                                                               done.set()))
+    time.sleep(0.5)
     sp.stop()
     assert done.wait(5) and result["finished"] is False and not sp.speaking

@@ -150,11 +150,11 @@ _LANG_IDS = {0x09: "en", 0x13: "nl", 0x07: "de", 0x0C: "fr", 0x0A: "es", 0x10: "
 class SapiEngine:
     """The Windows speech engine (SAPI), used directly.
 
-    Speaking is started asynchronously and the word being said is read from the engine's status a few
-    times per second, so no COM callbacks are needed (those often never arrive on a background thread,
-    which left reading aloud silent). Offers the small part of the pyttsx3 engine interface the Speaker
-    uses. ``output_wav``: speak into a WAV file instead of the speakers (for tests on machines without
-    sound).
+    Speaking is started asynchronously on the reading thread, which also runs the Windows message loop,
+    so the engine's word events arrive there (with pyttsx3 they did not, which left reading aloud
+    silent). The engine's status is polled as well, in case events are not available. Offers the small
+    part of the pyttsx3 engine interface the Speaker uses. ``output_wav``: speak into a WAV file instead
+    of the speakers (for tests on machines without sound).
     """
 
     POLL_MS = 60
@@ -163,7 +163,20 @@ class SapiEngine:
     def __init__(self, output_wav: Optional[str] = None):
         import win32com.client
 
-        self._voice = win32com.client.Dispatch("SAPI.SpVoice")
+        self._events = 0
+        self._last = -1
+        sink = self._word
+
+        class _Events:
+            def OnWord(self, stream_number, stream_position, character_position, length):  # noqa: N802
+                sink(int(character_position), int(length), event=True)
+
+        try:
+            self._voice = win32com.client.DispatchWithEvents("SAPI.SpVoice", _Events)
+            self._voice.EventInterests = 33790  # SVEAllEvents: includes word boundaries
+        except Exception:  # no type library wrappers: poll the status only
+            log.info("SAPI events unavailable; polling the speech status", exc_info=True)
+            self._voice = win32com.client.Dispatch("SAPI.SpVoice")
         self._stream = None
         if output_wav:
             self._stream = win32com.client.Dispatch("SAPI.SpFileStream")
@@ -211,22 +224,32 @@ class SapiEngine:
     def say(self, text: str) -> None:
         self._text = text
 
+    def _word(self, pos: int, length: int, event: bool = False) -> None:
+        """A word starts (from an event, or seen in the status): report each word once, in order."""
+        if event:
+            self._events += 1
+        if pos > self._last and length > 0 and self._cb is not None:
+            self._last = pos
+            self._cb(None, pos, length)
+
     def runAndWait(self) -> None:
+        import pythoncom
+
         if self._stopped:
             return
+        self._last = -1
         self._voice.Speak(self._text, 1 | 2)  # SVSFlagsAsync | SVSFPurgeBeforeSpeak
-        last = -1
         while True:
+            pythoncom.PumpWaitingMessages()  # delivers the word events on this thread
             done = self._voice.WaitUntilDone(self.POLL_MS)
             if self._stopped:
                 self._voice.Speak("", 1 | 2)  # stop at once
                 return
-            st = self._voice.Status
-            pos = st.InputWordPosition
-            if pos != last and st.InputWordLength > 0 and self._cb is not None:
-                last = pos
-                self._cb(None, pos, st.InputWordLength)
+            if not self._events:  # no events (yet): read the word from the status
+                st = self._voice.Status
+                self._word(int(st.InputWordPosition), int(st.InputWordLength))
             if done:
+                pythoncom.PumpWaitingMessages()  # the last events
                 return
 
     def stop(self) -> None:
