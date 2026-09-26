@@ -429,8 +429,33 @@ def _stack_indices(word: list[_Piece]) -> None:
 
 # --------------------------------------------------------------------------- document
 
+class _SourceMark(Flowable):
+    """Takes no room: tells the document which page of the original the content that follows comes from."""
+
+    def __init__(self, page: Optional[int]):
+        super().__init__()
+        self.page = page
+
+    def wrap(self, avail_w, avail_h):
+        return 0, 0
+
+    def draw(self):
+        pass
+
+
 class _Doc(BaseDocTemplate):
+    def handle_documentBegin(self):
+        # every build pass starts afresh: page of the converted PDF -> pages of the original shown on it
+        self.page_map: dict[int, set[int]] = {}
+        self._source: Optional[int] = None
+        super().handle_documentBegin()
+
     def afterFlowable(self, flowable):
+        if isinstance(flowable, _SourceMark):
+            self._source = flowable.page
+            return
+        if self._source is not None and not isinstance(flowable, (Spacer, PageBreak, CondPageBreak)):
+            self.page_map.setdefault(self.page - 1, set()).add(self._source)
         if isinstance(flowable, RichParagraph) and flowable.outline is not None and flowable._first:
             level, title = flowable.outline
             if level <= 2:
@@ -627,9 +652,15 @@ def build_pdf(result: ComposeResult, s: FormatSettings, title: str = "", author:
     prev_level = -1
     items = result.items
     i = 0
+    last_source: Optional[int] = None
     while i < len(items):
         it = items[i]
         kind = it.kind
+        # moved notes and the converter's own note do not follow the original's page order
+        source = None if kind in ("endnote", "about") else result.block_pages.get(it.block_id, last_source)
+        if source != last_source:
+            story.append(_SourceMark(source))
+            last_source = source
         if kind == "image":
             fl = _image_flowable(it, col_w, frame_h * 0.7)
             if fl is not None:
@@ -707,4 +738,10 @@ def build_pdf(result: ComposeResult, s: FormatSettings, title: str = "", author:
     if not story:
         story.append(RichParagraph([Run(doc_label(result.language, "no_text"))], styles["paragraph"]))
     doc.multiBuild(story)
+    _render_state.page_map = {page: sorted(src) for page, src in doc.page_map.items()}
     return buf.getvalue()
+
+
+def last_page_map() -> dict[int, list[int]]:
+    """For the PDF just built on this thread: each converted page -> the original pages its content is from."""
+    return dict(getattr(_render_state, "page_map", {}) or {})

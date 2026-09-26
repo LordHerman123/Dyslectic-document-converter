@@ -5,6 +5,7 @@ The user supplies their own API key. Their provider may charge for usage.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from typing import Optional
 
 from .keystore import redact
@@ -12,6 +13,26 @@ from .keystore import redact
 
 class AIError(Exception):
     """A provider error with any API key removed from the message."""
+
+
+@dataclass
+class Reply:
+    """A provider's answer and what the request cost in tokens."""
+    data: dict
+    text: str = ""
+    input_tokens: int = 0  # all input, including the part served from the provider's prompt cache
+    output_tokens: int = 0
+    cached_tokens: int = 0
+
+
+def _parse(text: str) -> dict:
+    try:
+        data = json.loads(text)
+    except ValueError as e:
+        raise AIError("The AI returned an unreadable answer; the local result was kept.") from e
+    if not isinstance(data, dict):
+        raise AIError("The AI returned an unreadable answer; the local result was kept.")
+    return data
 
 
 class AIProvider:
@@ -25,7 +46,10 @@ class AIProvider:
         self._key = api_key
         self.model = model or self.default_model
 
-    def complete_json(self, system: str, prompt: str, schema: dict) -> dict:
+    def complete_json(self, system: str, prompt: str, schema: dict, max_tokens: int = 1024,
+                      answer_hint: str = "") -> Reply:
+        """Ask one question. ``system`` is the fixed part (instructions and examples, the same for every
+        request of a task, so it can be cached); ``prompt`` holds this request's items."""
         raise NotImplementedError
 
 
@@ -36,7 +60,8 @@ class AnthropicProvider(AIProvider):
     default_model = "claude-opus-5"
     note = "Paid API (billed by Anthropic per token). Smaller models cost less."
 
-    def complete_json(self, system: str, prompt: str, schema: dict) -> dict:
+    def complete_json(self, system: str, prompt: str, schema: dict, max_tokens: int = 1024,
+                      answer_hint: str = "") -> Reply:
         try:
             import anthropic
         except ImportError as e:
@@ -44,8 +69,11 @@ class AnthropicProvider(AIProvider):
         client = anthropic.Anthropic(api_key=self._key, max_retries=2, timeout=60.0)
         output_config: dict = {"format": {"type": "json_schema", "schema": schema}}
         if not self.model.startswith("claude-haiku"):
-            output_config["effort"] = "low"  # tiny classification tasks
-        kwargs = dict(model=self.model, max_tokens=2048, system=system,
+            output_config["effort"] = "low"  # small classification tasks: little thinking needed
+        # the instructions and examples are the same for every request: cached, later requests pay ~10% for them
+        system_blocks = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+        # room for thinking plus the short JSON answer; only the tokens actually used are billed
+        kwargs = dict(model=self.model, max_tokens=max(1024, max_tokens), system=system_blocks,
                       messages=[{"role": "user", "content": prompt}], output_config=output_config)
         try:
             if self.model in ("claude-opus-5", "claude-fable-5-1"):
@@ -65,10 +93,10 @@ class AnthropicProvider(AIProvider):
         if resp.stop_reason == "refusal":
             raise AIError("The AI declined this request; the local result was kept.")
         text = next((b.text for b in resp.content if getattr(b, "type", "") == "text"), "")
-        try:
-            return json.loads(text)
-        except ValueError as e:
-            raise AIError("The AI returned an unreadable answer; the local result was kept.") from e
+        u = resp.usage
+        cached = (getattr(u, "cache_read_input_tokens", 0) or 0)
+        written = (getattr(u, "cache_creation_input_tokens", 0) or 0)
+        return Reply(_parse(text), text, (u.input_tokens or 0) + cached + written, u.output_tokens or 0, cached)
 
 
 class GeminiProvider(AIProvider):
@@ -80,14 +108,18 @@ class GeminiProvider(AIProvider):
 
     URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
-    def complete_json(self, system: str, prompt: str, schema: dict) -> dict:
+    def complete_json(self, system: str, prompt: str, schema: dict, max_tokens: int = 1024,
+                      answer_hint: str = "") -> Reply:
         import httpx
 
         body = {
+            # the fixed instructions first: Gemini reuses a repeated prompt start at a lower price
             "systemInstruction": {"parts": [{"text": system}]},
-            "contents": [{"role": "user", "parts": [{"text": prompt + "\n\nAnswer with JSON matching this schema: "
-                                                     + json.dumps(schema)}]}],
-            "generationConfig": {"responseMimeType": "application/json", "temperature": 0},
+            "contents": [{"role": "user", "parts": [{"text": prompt + "\n\n" + answer_hint}]}],
+            "generationConfig": {"responseMimeType": "application/json", "temperature": 0,
+                                 "maxOutputTokens": max_tokens,
+                                 # no thinking for these small questions: thinking tokens are billed as output
+                                 "thinkingConfig": {"thinkingBudget": 0}},
         }
         try:
             r = httpx.post(self.URL.format(model=self.model), json=body, timeout=60.0,
@@ -103,9 +135,12 @@ class GeminiProvider(AIProvider):
         try:
             data = r.json()
             text = data["candidates"][0]["content"]["parts"][0]["text"]
-            return json.loads(text)
         except (KeyError, IndexError, ValueError) as e:
             raise AIError("The AI returned an unreadable answer; the local result was kept.") from e
+        usage = data.get("usageMetadata", {}) or {}
+        out = (usage.get("candidatesTokenCount", 0) or 0) + (usage.get("thoughtsTokenCount", 0) or 0)
+        return Reply(_parse(text), text, usage.get("promptTokenCount", 0) or 0, out,
+                     usage.get("cachedContentTokenCount", 0) or 0)
 
 
 class MistralProvider(AIProvider):
@@ -120,17 +155,18 @@ class MistralProvider(AIProvider):
 
     URL = "https://api.mistral.ai/v1/chat/completions"
 
-    def complete_json(self, system: str, prompt: str, schema: dict) -> dict:
+    def complete_json(self, system: str, prompt: str, schema: dict, max_tokens: int = 1024,
+                      answer_hint: str = "") -> Reply:
         import httpx
 
         body = {
             "model": self.model,
             "temperature": 0,
+            "max_tokens": max_tokens,
             "response_format": {"type": "json_object"},
             "messages": [
                 {"role": "system", "content": system},
-                {"role": "user", "content": prompt + "\n\nAnswer only with JSON matching this schema: "
-                 + json.dumps(schema)},
+                {"role": "user", "content": prompt + "\n\n" + answer_hint},
             ],
         }
         try:
@@ -146,10 +182,12 @@ class MistralProvider(AIProvider):
         if r.status_code >= 400:
             raise AIError(redact(f"Mistral API error ({r.status_code}).", self._key))
         try:
-            text = r.json()["choices"][0]["message"]["content"]
-            return json.loads(text)
+            data = r.json()
+            text = data["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError, ValueError) as e:
             raise AIError("The AI returned an unreadable answer; the local result was kept.") from e
+        usage = data.get("usage", {}) or {}
+        return Reply(_parse(text), text, usage.get("prompt_tokens", 0) or 0, usage.get("completion_tokens", 0) or 0)
 
 
 PROVIDERS: dict[str, type[AIProvider]] = {p.name: p for p in (MistralProvider, AnthropicProvider, GeminiProvider)}

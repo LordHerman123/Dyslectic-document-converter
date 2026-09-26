@@ -63,6 +63,7 @@ class ComposeResult:
     uncertain_citations: list[tuple[str, Citation]] = field(default_factory=list)
     language: str = "en"  # language of the words the converter adds (Contents, Notes, ...)
     inline_images: dict[str, ImageData] = field(default_factory=dict)  # small formulas inside the text
+    block_pages: dict[str, int] = field(default_factory=dict)  # block id -> page of the original it came from
 
 
 # -------------------------------------------------------------------- helpers
@@ -331,7 +332,15 @@ def compose(doc: Document, settings: FormatSettings, ai_citation_decisions: Opti
     if settings.about_note:
         items.append(RItem("about", [Run(_about_text(doc, settings, bool(citation_numbers)))]))
 
-    return ComposeResult(items, headings, len(citation_numbers), uncertain, lang, dict(doc.inline_images))
+    return ComposeResult(items, headings, len(citation_numbers), uncertain, lang, dict(doc.inline_images),
+                         {b.id: _physical_page(doc, b.page) for b in doc.blocks})
+
+
+def _physical_page(doc: Document, page: int) -> int:
+    """Page of the original PDF (both halves of a scanned two-page spread come from one PDF page)."""
+    if 0 <= page < len(doc.pages) and doc.pages[page].source_page >= 0:
+        return doc.pages[page].source_page
+    return page
 
 
 def _drop_prefix(runs: list[Run], n: int) -> list[Run]:
