@@ -242,3 +242,71 @@ def test_engine_words_win_over_pacing():
     sp.start(units, 0, on_word=lambda s, w: words.append((s, w)), on_done=lambda f: done.set())
     assert done.wait(10)
     assert words == [(0, 0), (0, 1), (0, 2), (0, 3), (1, 0), (1, 1), (1, 2)]  # no paced duplicates
+
+
+def test_click_on_the_page_finds_the_sentence():
+    from dyslexia_converter.render.preview import tap_to_page
+
+    # a page 595 x 842 shown in a box wider than it: bars left and right
+    assert tap_to_page(10, 400, 1000, 842, 595, 842) is None  # in the bar beside the page
+    x, y = tap_to_page(500, 421, 1000, 842, 595, 842)
+    assert abs(x - (500 - 202.5)) < 0.01 and abs(y - 421) < 0.01
+    # the same page shown half size in a tall box: bars above and below
+    x, y = tap_to_page(148.75, 300, 297.5, 800, 595, 842)
+    assert abs(x - 297.5) < 0.01 and abs(y - (300 - (800 - 421) / 2) * 2) < 0.01
+    assert tap_to_page(5, 5, 0, 0, 595, 842) is None  # nothing shown yet
+
+    pdf = make_pdf([["The first sentence is here.", "", "", "A second sentence further down the page."],
+                    ["Page two text."]])
+    units = speech.reading_units(pdf)
+    second = next(i for i, s in enumerate(units) if s.text.startswith("A second"))
+    w = units[second].words[2]
+    x0, y0, x1, y1 = w.rects[0]
+    assert speech.sentence_at(units, 0, (x0 + x1) / 2, (y0 + y1) / 2) == second  # on a word
+    assert speech.sentence_at(units, 0, 560, y0 + 2) == second  # right of the line, same height
+    assert speech.sentence_at(units, 0, 100, 60) == 0  # above the first line
+    assert units[speech.sentence_at(units, 1, 100, 80)].page == 1
+    assert speech.sentence_at(units, 5, 100, 80) is None  # a page without text
+
+
+def _winrt_or_skip():
+    try:
+        engine = speech.WinRtEngine(play=False)
+    except Exception as e:  # noqa: BLE001
+        pytest.skip(f"modern Windows speech not available: {e}")
+    if not engine.getProperty("voices"):
+        pytest.skip("no modern voices installed")
+    return engine
+
+
+@windows_only
+def test_modern_windows_voices_have_languages_and_exact_word_times():
+    engine = _winrt_or_skip()
+    voices = engine.getProperty("voices")
+    print("modern voices:", [(v.name, v.languages) for v in voices])
+    assert all(v.id and v.name and v.languages for v in voices)
+    positions = []
+    engine.connect("started-word", lambda name, loc, length: positions.append((loc, length)))
+    engine.setProperty("rate", 170)
+    text = "Reading aloud works on Windows."
+    engine.say(text)
+    engine.runAndWait()
+    assert len(engine.last_wav) > 2000 and speech._wav_seconds(engine.last_wav) > 0.5  # real audio
+    starts = [p for p, _ in positions]
+    assert starts == sorted(starts) and len(starts) >= 4 and starts[0] == 0, positions
+    times = [t for t, _, _ in engine.last_words]
+    assert times == sorted(times) and times[-1] > 0  # words spread over the sound
+    assert [text[p:p + n] for p, n in positions][:2] == ["Reading", "aloud"]
+
+
+@windows_only
+def test_modern_windows_voice_through_the_speaker():
+    _winrt_or_skip()
+    sp = speech.Speaker(engine_factory=lambda: speech.WinRtEngine(play=False))
+    assert sp.available() and sp.voice_for("en")
+    units = units_of("One two three.", "Four five six seven.")
+    words, done, result = [], threading.Event(), {}
+    sp.start(units, 0, voice=sp.voice_for("en"), on_word=lambda s, w: words.append((s, w)),
+             on_done=lambda finished: (result.update(finished=finished), done.set()))
+    assert done.wait(60) and result["finished"] is True, sp.last_error
+    assert (0, 0) in words and (1, 3) in words, words

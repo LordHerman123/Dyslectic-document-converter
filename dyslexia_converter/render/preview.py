@@ -9,6 +9,28 @@ def page_count(pdf: bytes | str) -> int:
         return doc.page_count
 
 
+def page_size(pdf: bytes | str, index: int) -> tuple[float, float]:
+    """Width and height of a page in points."""
+    with _open(pdf) as doc:
+        r = doc[max(0, min(index, doc.page_count - 1))].rect
+        return r.width, r.height
+
+
+def tap_to_page(x: float, y: float, box_w: float, box_h: float, page_w: float, page_h: float):
+    """Where a click on the preview lands on the page, in points (None beside the page).
+
+    The page picture is fitted inside its box keeping its shape and centred (BoxFit.CONTAIN)."""
+    if box_w <= 0 or box_h <= 0 or page_w <= 0 or page_h <= 0:
+        return None
+    scale = min(box_w / page_w, box_h / page_h)
+    left = (box_w - page_w * scale) / 2
+    top = (box_h - page_h * scale) / 2
+    px, py = (x - left) / scale, (y - top) / scale
+    if not (0 <= px <= page_w and 0 <= py <= page_h):
+        return None
+    return px, py
+
+
 def render_page(pdf: bytes | str, index: int, width_px: int = 700) -> bytes:
     """PNG of one page scaled to ``width_px`` pixels wide."""
     with _open(pdf) as doc:
