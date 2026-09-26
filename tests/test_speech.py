@@ -62,10 +62,11 @@ def test_very_long_sentences_are_read_in_parts():
 class FakeEngine:
     instances = []
 
-    def __init__(self, delay=0.0, fail=False):
+    def __init__(self, delay=0.0, fail=False, silent=False):
         if fail:
             raise RuntimeError("no speech engine")
         self.delay, self.cb, self.said, self.props, self.stopped = delay, None, [], {}, False
+        self.silent = silent  # speaks, but never says which word (like Windows into a file)
         FakeEngine.instances.append(self)
 
     def getProperty(self, key):
@@ -91,7 +92,8 @@ class FakeEngine:
         for w in self.said[-1].split(" "):
             if self.stopped:
                 return
-            self.cb(None, pos, len(w))
+            if not self.silent:
+                self.cb(None, pos, len(w))
             pos += len(w) + 1
             time.sleep(self.delay)
 
@@ -153,3 +155,90 @@ def test_converted_document_can_be_read(paper):
     assert len(units) > 5 and all(s.words for s in units)
     text = " ".join(s.text for s in units)
     assert "  " not in text and len(text) > 500
+
+
+# ------------------------------------------------------------------ the real Windows voice (CI runs on Windows)
+import sys  # noqa: E402
+
+import pytest  # noqa: E402
+
+windows_only = pytest.mark.skipif(sys.platform != "win32", reason="the Windows speech engine")
+
+
+def _sapi_or_skip(wav):
+    engine = speech.SapiEngine(output_wav=str(wav))
+    if not engine.getProperty("voices"):
+        engine.close()
+        pytest.skip("no voices installed on this machine")
+    return engine
+
+
+@windows_only
+def test_windows_voice_speaks_and_reports_each_word(tmp_path):
+    wav = tmp_path / "speech.wav"
+    engine = _sapi_or_skip(wav)
+    voices = engine.getProperty("voices")
+    assert all(v.id and v.name for v in voices)
+    positions = []
+    engine.connect("started-word", lambda name, loc, length: positions.append((loc, length)))
+    engine.setProperty("rate", 400)
+    engine.say("Reading aloud works on Windows.")
+    engine.runAndWait()
+    info = engine.diagnostics()
+    engine.close()
+    info["wav_bytes"] = wav.stat().st_size if wav.exists() else -1
+    print("SAPI diagnostics:", info)
+    assert info["wav_bytes"] > 2000, info  # the voice really spoke
+    # into a file Windows reports no word positions (tested: neither events nor status); with speakers the
+    # app uses them when they come, and otherwise paces the highlight itself (see the pacing test)
+    assert positions == sorted(positions), (positions, info)
+
+
+@windows_only
+def test_windows_voice_through_the_speaker_and_stopping(tmp_path):
+    _sapi_or_skip(tmp_path / "probe.wav").close()
+    n = {"i": 0}
+
+    def factory():
+        n["i"] += 1
+        return speech.SapiEngine(output_wav=str(tmp_path / f"out{n['i']}.wav"))
+
+    sp = speech.Speaker(engine_factory=factory)
+    assert sp.available() and sp.voices()
+    units = units_of("One two three.", "Four five six seven.")
+    words, done, result = [], threading.Event(), {}
+    sp.start(units, 0, speed=2.0, on_word=lambda s, w: words.append((s, w)),
+             on_done=lambda finished: (result.update(finished=finished), done.set()))
+    assert done.wait(30) and result["finished"] is True, sp.last_error
+    assert all((tmp_path / f"out{i}.wav").stat().st_size > 2000 for i in range(2, n["i"] + 1))  # it spoke
+    # stopping in the middle of a long sentence
+    done.clear()
+    # (into a file, speech is made far faster than it is spoken: a long text keeps it busy long enough)
+    sp.start(units_of(" ".join(["reading"] * 3000)), 0, on_done=lambda finished: (result.update(finished=finished),
+                                                                               done.set()))
+    time.sleep(0.5)
+    sp.stop()
+    assert done.wait(5) and result["finished"] is False and not sp.speaking
+
+
+
+def test_highlight_is_paced_when_the_engine_does_not_report_words():
+    sp = speech.Speaker(engine_factory=lambda: FakeEngine(delay=0.12, silent=True))
+    sp.WAIT_FOR_WORDS = 0.05
+    units = units_of("Short one here.", "A somewhat longer second sentence follows now.")
+    words, done = [], threading.Event()
+    sp.start(units, 0, speed=2.0, on_word=lambda s, w: words.append((s, w)), on_done=lambda f: done.set())
+    assert done.wait(10)
+    for si in (0, 1):  # every sentence moves forward word by word, never backwards
+        mine = [w for s, w in words if s == si]
+        assert mine == sorted(mine) and len(set(mine)) == len(mine)
+    assert len([w for s, w in words if s == 1]) >= 3  # most of the long sentence was followed
+
+
+def test_engine_words_win_over_pacing():
+    sp = speech.Speaker(engine_factory=lambda: FakeEngine(delay=0.02))
+    units = units_of("One two three four.", "Five six seven.")
+    words, done = [], threading.Event()
+    sp.start(units, 0, on_word=lambda s, w: words.append((s, w)), on_done=lambda f: done.set())
+    assert done.wait(10)
+    assert words == [(0, 0), (0, 1), (0, 2), (0, 3), (1, 0), (1, 1), (1, 2)]  # no paced duplicates

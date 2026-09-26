@@ -59,6 +59,9 @@ jobs:
           if (Select-String -Path selftest\report.txt -Pattern "MISSING MODULE" -Quiet) {
             throw "a module needed for reading aloud is missing from the build"
           }
+          if (Select-String -Path selftest\report.txt -Pattern "Speech test FAILED" -Quiet) {
+            throw "the packaged app could not read aloud"
+          }
 
       - name: Build installer
         shell: pwsh

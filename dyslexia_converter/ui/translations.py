@@ -5,6 +5,47 @@ Missing entries fall back to English. tests/test_i18n.py checks that every text 
 """
 
 T: dict[str, dict[str, str]] = {
+    "Reading aloud stopped because of an error:": {
+        "nl": "Het voorlezen is gestopt door een fout:", "fr": "La lecture à voix haute s'est arrêtée à cause d'une erreur :",
+        "de": "Das Vorlesen wurde wegen eines Fehlers beendet:", "es": "La lectura en voz alta se detuvo por un error:",
+        "it": "La lettura ad alta voce si è interrotta a causa di un errore:"},
+    # ---------------------------------------------------------------- help: updates
+    'Updates and source code': {
+        'nl': 'Updates en broncode',
+        'fr': 'Mises à jour et code source',
+        'de': 'Updates und Quellcode',
+        'es': 'Actualizaciones y código fuente',
+        'it': 'Aggiornamenti e codice sorgente'},
+    'You are using version {version}. The newest version, what changed in it, and the source code are on GitHub.': {
+        'nl': 'Je gebruikt versie {version}. De nieuwste versie, wat er veranderd is en de broncode staan op GitHub.',
+        'fr': 'Vous utilisez la version {version}. La version la plus récente, ce qui a changé et le code source sont sur GitHub.',
+        'de': 'Sie verwenden Version {version}. Die neueste Version, die Änderungen und der Quellcode sind auf GitHub.',
+        'es': 'Estás usando la versión {version}. La versión más reciente, lo que ha cambiado y el código fuente están en GitHub.',
+        'it': 'Stai usando la versione {version}. La versione più recente, cosa è cambiato e il codice sorgente sono su GitHub.'},
+    'Get the newest version': {
+        'nl': 'Nieuwste versie downloaden',
+        'fr': 'Obtenir la dernière version',
+        'de': 'Neueste Version holen',
+        'es': 'Obtener la última versión',
+        'it': "Scarica l'ultima versione"},
+    'Project on GitHub': {
+        'nl': 'Project op GitHub',
+        'fr': 'Projet sur GitHub',
+        'de': 'Projekt auf GitHub',
+        'es': 'Proyecto en GitHub',
+        'it': 'Progetto su GitHub'},
+    'Opens the download page in your web browser': {
+        'nl': 'Opent de downloadpagina in je webbrowser',
+        'fr': 'Ouvre la page de téléchargement dans votre navigateur',
+        'de': 'Öffnet die Download-Seite in Ihrem Webbrowser',
+        'es': 'Abre la página de descarga en tu navegador',
+        'it': 'Apre la pagina di download nel browser'},
+    'Opens GitHub in your web browser': {
+        'nl': 'Opent GitHub in je webbrowser',
+        'fr': 'Ouvre GitHub dans votre navigateur',
+        'de': 'Öffnet GitHub in Ihrem Webbrowser',
+        'es': 'Abre GitHub en tu navegador',
+        'it': 'Apre GitHub nel browser'},
     "EPUB (e-reader)": {"nl": "EPUB (e-reader)", "fr": "EPUB (liseuse)", "de": "EPUB (E-Reader)",
                         "es": "EPUB (lector electrónico)", "it": "EPUB (e-reader)"},
     # ---------------------------------------------------------------- read aloud
@@ -994,27 +1035,27 @@ T: dict[str, dict[str, str]] = {
                      "es": "Cómo funciona", "it": "Come funziona"},
     "1. Open a PDF. Text is extracted locally; scanned pages are read with OCR.\n2. Headings, lists, tables, "
     "figures, footnotes and references are detected with simple rules - no AI needed.\n3. Adjust the settings; "
-    "the preview updates.\n4. Export to PDF, printable PDF, Word, text or Markdown.": {
+    "the preview updates.\n4. Export to PDF, printable PDF, Word, EPUB, text or Markdown.": {
         "nl": "1. Open een pdf. De tekst wordt lokaal uitgelezen; gescande pagina's worden met OCR gelezen.\n"
               "2. Koppen, lijsten, tabellen, figuren, voetnoten en bronnen worden met eenvoudige regels herkend - "
               "zonder AI.\n3. Pas de instellingen aan; het voorbeeld past zich aan.\n4. Exporteer naar pdf, pdf "
-              "om af te drukken, Word, tekst of Markdown.",
+              "om af te drukken, Word, EPUB, tekst of Markdown.",
         "fr": "1. Ouvrez un PDF. Le texte est extrait localement ; les pages numérisées sont lues par OCR.\n"
               "2. Titres, listes, tableaux, figures, notes et références sont détectés par des règles simples - "
               "sans IA.\n3. Ajustez les réglages ; l'aperçu se met à jour.\n4. Exportez en PDF, PDF à imprimer, "
-              "Word, texte ou Markdown.",
+              "Word, EPUB, texte ou Markdown.",
         "de": "1. Öffnen Sie ein PDF. Der Text wird lokal ausgelesen; gescannte Seiten werden per OCR gelesen.\n"
               "2. Überschriften, Listen, Tabellen, Abbildungen, Fußnoten und Quellen werden mit einfachen Regeln "
               "erkannt - ohne KI.\n3. Passen Sie die Einstellungen an; die Vorschau aktualisiert sich.\n"
-              "4. Exportieren Sie als PDF, Druck-PDF, Word, Text oder Markdown.",
+              "4. Exportieren Sie als PDF, Druck-PDF, Word, EPUB, Text oder Markdown.",
         "es": "1. Abre un PDF. El texto se extrae en local; las páginas escaneadas se leen con OCR.\n2. Títulos, "
               "listas, tablas, figuras, notas y referencias se detectan con reglas sencillas, sin IA.\n3. Ajusta "
-              "las opciones; la vista previa se actualiza.\n4. Exporta a PDF, PDF para imprimir, Word, texto o "
+              "las opciones; la vista previa se actualiza.\n4. Exporta a PDF, PDF para imprimir, Word, EPUB, texto o "
               "Markdown.",
         "it": "1. Apri un PDF. Il testo viene estratto in locale; le pagine scansionate sono lette con l'OCR.\n"
               "2. Titoli, elenchi, tabelle, figure, note e bibliografia vengono rilevati con regole semplici - "
               "senza IA.\n3. Regola le impostazioni; l'anteprima si aggiorna.\n4. Esporta in PDF, PDF da stampare, "
-              "Word, testo o Markdown."},
+              "Word, EPUB, testo o Markdown."},
     "What never changes": {"nl": "Wat nooit verandert", "fr": "Ce qui ne change jamais", "de": "Was sich nie ändert",
                            "es": "Lo que nunca cambia", "it": "Cosa non cambia mai"},
     "The author's words. The converter does not summarise, paraphrase, simplify or remove text. Your original PDF "

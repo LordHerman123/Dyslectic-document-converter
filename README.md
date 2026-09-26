@@ -13,7 +13,7 @@ API key. When it's on, it only sees small snippets that the local rules couldn't
 
 ## Download for Windows (version 1.6)
 
-Get `DyslexiaConverter-1.6.0-setup.exe` (installer) or `DyslexiaConverter-1.6.0-windows.zip` (unzip and
+Get `DyslexiaConverter-1.6.1-setup.exe` (installer) or `DyslexiaConverter-1.6.1-windows.zip` (unzip and
 double-click `DyslexiaConverter.exe`) from the repository's **Releases** page. Text recognition (Tesseract)
 is included; nothing else needs to be installed. How the Windows build is made: [windows/README.md](windows/README.md).
 

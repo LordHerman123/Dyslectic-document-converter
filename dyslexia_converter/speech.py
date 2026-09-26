@@ -8,15 +8,18 @@ unavailable.
 """
 from __future__ import annotations
 
+import logging
 import re
 import sys
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 import pymupdf
 
 Rect = tuple[float, float, float, float]
+log = logging.getLogger(__name__)
 
 # words that end with a full stop but do not end a sentence
 _ABBREVIATIONS = {"e.g.", "i.e.", "etc.", "et", "al.", "cf.", "vs.", "dr.", "mr.", "mrs.", "ms.", "prof.", "fig.",
@@ -133,12 +136,150 @@ def _com_init():
     if sys.platform != "win32":
         return None
     try:
-        import comtypes
+        import pythoncom
 
-        comtypes.CoInitialize()
-        return comtypes
+        pythoncom.CoInitialize()
+        return pythoncom
     except Exception:
         return None
+
+
+# Windows language ids (the low bits of an LCID, as SAPI voices report them) -> language codes
+_LANG_IDS = {0x09: "en", 0x13: "nl", 0x07: "de", 0x0C: "fr", 0x0A: "es", 0x10: "it", 0x16: "pt"}
+
+
+class SapiEngine:
+    """The Windows speech engine (SAPI), used directly.
+
+    Speaking is started asynchronously on the reading thread, which also runs the Windows message loop,
+    so the engine's word events arrive there (with pyttsx3 they did not, which left reading aloud
+    silent). The engine's status is polled as well, in case events are not available. Offers the small
+    part of the pyttsx3 engine interface the Speaker uses. ``output_wav``: speak into a WAV file instead
+    of the speakers (for tests on machines without sound).
+    """
+
+    POLL_MS = 60
+    DEFAULT_WPM = 180  # SAPI rate 0
+
+    def __init__(self, output_wav: Optional[str] = None):
+        import win32com.client
+
+        self._events = 0
+        self._last = -1
+        sink = self._word
+
+        class _Events:
+            def OnWord(self, stream_number, stream_position, character_position, length):  # noqa: N802
+                sink(int(character_position), int(length), event=True)
+
+        self.mode = "events"
+        try:
+            self._voice = win32com.client.DispatchWithEvents("SAPI.SpVoice", _Events)
+            self._voice.EventInterests = 33790  # SVEAllEvents: includes word boundaries
+        except Exception as e:  # no type library wrappers: poll the status only
+            log.info("SAPI events unavailable; polling the speech status", exc_info=True)
+            self.mode = f"polling ({type(e).__name__}: {e})"
+            self._voice = win32com.client.Dispatch("SAPI.SpVoice")
+        self._stream = None
+        if output_wav:
+            self._stream = win32com.client.Dispatch("SAPI.SpFileStream")
+            self._stream.Open(output_wav, 3)  # SSFMCreateForWrite
+            self._voice.AudioOutputStream = self._stream
+        self._cb = None
+        self._text = ""
+        self._stopped = False
+
+    def getProperty(self, key: str):
+        if key != "voices":
+            return None
+        out = []
+        tokens = self._voice.GetVoices()
+        for i in range(tokens.Count):
+            tok = tokens.Item(i)
+            langs = []
+            try:
+                for part in str(tok.GetAttribute("Language")).split(";"):
+                    code = _LANG_IDS.get(int(part, 16) & 0x3FF)
+                    if code:
+                        langs.append(code)
+            except Exception:
+                pass
+            out.append(_VoiceInfo(tok.Id, tok.GetDescription(), langs))
+        return out
+
+    def setProperty(self, key: str, value) -> None:
+        if key == "rate":  # words per minute -> SAPI's -10..10 (10 = three times as fast)
+            import math
+
+            rate = 10 * math.log(max(0.1, float(value) / self.DEFAULT_WPM)) / math.log(3)
+            self._voice.Rate = max(-10, min(10, int(round(rate))))
+        elif key == "voice":
+            tokens = self._voice.GetVoices()
+            for i in range(tokens.Count):
+                if tokens.Item(i).Id == value:
+                    self._voice.Voice = tokens.Item(i)
+                    break
+
+    def connect(self, name: str, cb) -> None:
+        if name == "started-word":
+            self._cb = cb
+
+    def say(self, text: str) -> None:
+        self._text = text
+
+    def _word(self, pos: int, length: int, event: bool = False) -> None:
+        """A word starts (from an event, or seen in the status): report each word once, in order."""
+        if event:
+            self._events += 1
+        if pos > self._last and length > 0 and self._cb is not None:
+            self._last = pos
+            self._cb(None, pos, length)
+
+    def runAndWait(self) -> None:
+        import pythoncom
+
+        if self._stopped:
+            return
+        self._last = -1
+        self._voice.Speak(self._text, 1 | 2)  # SVSFlagsAsync | SVSFPurgeBeforeSpeak
+        while True:
+            pythoncom.PumpWaitingMessages()  # delivers the word events on this thread
+            done = self._voice.WaitUntilDone(self.POLL_MS)
+            if self._stopped:
+                self._voice.Speak("", 1 | 2)  # stop at once
+                return
+            if not self._events:  # no events (yet): read the word from the status
+                st = self._voice.Status
+                self._word(int(st.InputWordPosition), int(st.InputWordLength))
+            if done:
+                pythoncom.PumpWaitingMessages()  # the last events
+                return
+
+    def stop(self) -> None:
+        self._stopped = True  # the speaking thread sees this within POLL_MS and stops the voice
+
+    def diagnostics(self) -> dict:
+        """What happened, for finding problems on a particular computer."""
+        info = {"mode": self.mode, "events": self._events, "last_word_at": self._last}
+        try:
+            st = self._voice.Status
+            info.update(running=st.RunningState, word_pos=st.InputWordPosition, word_len=st.InputWordLength,
+                        last_result=st.LastHResult, voice=self._voice.Voice.GetDescription())
+        except Exception as e:
+            info["status_error"] = repr(e)
+        return info
+
+    def close(self) -> None:
+        if self._stream is not None:
+            self._stream.Close()
+            self._stream = None
+
+
+@dataclass
+class _VoiceInfo:
+    id: str
+    name: str
+    languages: list
 
 
 class Speaker:
@@ -149,6 +290,7 @@ class Speaker:
     """
 
     BASE_RATE = 165  # words per minute at speed 1.0: a calm reading pace
+    WAIT_FOR_WORDS = 0.35  # seconds to wait for the engine to report words before pacing the highlight
 
     def __init__(self, engine_factory: Optional[Callable[[], object]] = None):
         self._factory = engine_factory
@@ -157,10 +299,16 @@ class Speaker:
         self._engine = None
         self._available: Optional[bool] = None
         self._voices: Optional[list[tuple[str, str, str]]] = None
+        self.last_error = ""  # why speaking failed, for the user
 
     def _make(self):
         if self._factory is not None:
             return self._factory()
+        if sys.platform == "win32":
+            try:
+                return SapiEngine()
+            except Exception:
+                log.warning("Windows speech (SAPI) unavailable, trying pyttsx3", exc_info=True)
         from pyttsx3.engine import Engine
 
         # a new engine every time: pyttsx3.init() would hand back one made on another thread, and the
@@ -170,6 +318,7 @@ class Speaker:
     # ---------------------------------------------------------------- facts
     def available(self) -> bool:
         if self._available is None:
+            _com_init()
             try:
                 eng = self._make()
                 self._voices = [(v.id, v.name, " ".join(str(x) for x in (getattr(v, "languages", None) or [])))
@@ -179,7 +328,9 @@ class Speaker:
                     eng.stop()
                 except Exception:
                     pass
-            except Exception:
+            except Exception as e:
+                log.warning("No speech engine: %s", e, exc_info=True)
+                self.last_error = f"{type(e).__name__}: {e}"
                 self._available = False
                 self._voices = []
         return self._available
@@ -231,6 +382,7 @@ class Speaker:
         self.stop()
         self._stop = threading.Event()
         stop = self._stop
+        self.last_error = ""
 
         def run():
             finished = False
@@ -245,11 +397,28 @@ class Speaker:
                     except Exception:
                         pass
                 current = {"s": index}
+                real = {"seen": False}  # the engine reports the word it is saying
+                # characters per second, to pace the highlight when the engine does not say which word it is
+                # on; calibrated with the time each sentence really took
+                pace = {"cps": self.BASE_RATE * max(0.4, min(2.5, speed)) * 6.0 / 60.0}
 
                 def word_cb(name, location, length):
                     if not stop.is_set():
+                        real["seen"] = True
                         s = current["s"]
                         on_word(s, sentences[s].word_at(location))
+
+                def estimate(si: int, t0: float, sentence_done: threading.Event) -> None:
+                    """Move the highlight along the sentence by the length of its words."""
+                    if sentence_done.wait(self.WAIT_FOR_WORDS) or real["seen"]:
+                        return
+                    for wi, w in enumerate(sentences[si].words):
+                        if wi == 0:
+                            continue  # the first word is shown when the sentence starts
+                        wait = w.start / pace["cps"] - (time.monotonic() - t0)
+                        if (wait > 0 and sentence_done.wait(wait)) or stop.is_set() or real["seen"]:
+                            return
+                        on_word(si, wi)
 
                 eng.connect("started-word", word_cb)
                 for si in range(index, len(sentences)):
@@ -257,14 +426,34 @@ class Speaker:
                         break
                     current["s"] = si
                     on_sentence(si)
+                    sentence_done = threading.Event()
+                    t0 = time.monotonic()
+                    pacer = None
+                    if not real["seen"]:
+                        pacer = threading.Thread(target=estimate, args=(si, t0, sentence_done), daemon=True)
+                        pacer.start()
                     eng.say(sentences[si].text)
                     eng.runAndWait()
+                    took = time.monotonic() - t0
+                    sentence_done.set()
+                    if pacer is not None:
+                        pacer.join(1.0)
+                    if took > 0.5 and not stop.is_set():  # learn how fast this voice really speaks
+                        pace["cps"] = 0.6 * pace["cps"] + 0.4 * (len(sentences[si].text) + 1) / took
                 else:
                     finished = not stop.is_set()
-            except Exception:
+            except Exception as e:  # tell the user instead of staying silent
+                log.exception("reading aloud failed")
+                self.last_error = f"{type(e).__name__}: {e}"
                 finished = False
             finally:
+                eng_done = self._engine
                 self._engine = None
+                if eng_done is not None and hasattr(eng_done, "close"):
+                    try:
+                        eng_done.close()
+                    except Exception:
+                        pass
                 if com is not None:
                     com.CoUninitialize()
                 on_done(finished)

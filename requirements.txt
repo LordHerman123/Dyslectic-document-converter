@@ -11,6 +11,7 @@ httpx>=0.27
 # App UI
 flet>=1.0,<2
 pyttsx3>=2.90   # reading aloud with the computer's own voices
+pywin32>=306; sys_platform == "win32"   # Windows speech (SAPI) used directly
 # Optional
 anthropic>=1.0   # only needed when using the Anthropic provider
 # keyring>=24    # store API keys in the OS keychain

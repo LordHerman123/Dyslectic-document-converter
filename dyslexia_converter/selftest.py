@@ -27,7 +27,35 @@ def _speech_report() -> str:
     except ImportError as e:
         return f"Speech: MISSING MODULE {e.name}"
     n = len(sp.voices()) if sp.available() else 0
-    return f"Speech: {'available' if n else 'no voices on this computer'} ({n} voices)"
+    report = f"Speech: {'available' if n else 'no voices on this computer'} ({n} voices)"
+    if n and sys.platform == "win32":
+        report += "\n" + _speak_test()
+    elif sp.last_error:
+        report += f" - {sp.last_error}"
+    return report
+
+
+def _speak_test() -> str:
+    """Speak one sentence into a WAV file with the real Windows voice, as the app would."""
+    import tempfile
+    import threading
+
+    from .speech import SapiEngine, Sentence, Speaker, Word
+
+    with tempfile.TemporaryDirectory() as d:
+        wav = Path(d) / "speech.wav"
+        words = [Word(w, 0, [(0, 0, 1, 1)]) for w in "The converted text is read aloud.".split()]
+        pos = 0
+        for w in words:
+            w.start, pos = pos, pos + len(w.text) + 1
+        heard, done = [], threading.Event()
+        sp = Speaker(engine_factory=lambda: SapiEngine(output_wav=str(wav)))
+        sp.start([Sentence(words)], 0, on_word=lambda s, w: heard.append(w), on_done=lambda f: done.set())
+        done.wait(30)
+        size = wav.stat().st_size if wav.exists() else 0
+        if sp.last_error or size < 2000:
+            return f"Speech test FAILED: WAV {size} bytes, {sp.last_error}"
+        return f"Speech test: OK, WAV {size} bytes ({len(set(heard))} words reported while writing a file)"
 
 
 def run(argv: list[str]) -> int:
