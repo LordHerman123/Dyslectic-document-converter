@@ -17,7 +17,7 @@ from .. import pipeline, speech
 from ..ai.assistant import PRIVACY_NOTICE, AIAssistant, ConsentRequired
 from ..ai.keystore import KeyStore, install_log_redaction, redact
 from ..ai.providers import PROVIDERS, AIError
-from .. import DONATE_URL, __version__
+from .. import DONATE_URL, PROJECT_URL, RELEASES_URL, __version__
 from ..extract.ocr import default_engine, find_tesseract
 from ..fonts import FONT_CHOICES, get_family
 from ..render import preview
@@ -965,7 +965,7 @@ class ConverterApp:
                         "2. Headings, lists, tables, figures, footnotes and references are detected with "
                         "simple rules - no AI needed.\n"
                         "3. Adjust the settings; the preview updates.\n"
-                        "4. Export to PDF, printable PDF, Word, text or Markdown."), 14),
+                        "4. Export to PDF, printable PDF, Word, EPUB, text or Markdown."), 14),
             self.text(t("What never changes"), 16, weight=ft.FontWeight.BOLD),
             self.text(t("The author's words. The converter does not summarise, paraphrase, simplify or remove "
                         "text. Your original PDF is never modified or overwritten."), 14),
@@ -975,6 +975,16 @@ class ConverterApp:
             self.text(t("About the presets and fonts"), 16, weight=ft.FontWeight.BOLD),
             self.text(t(PRESET_DISCLAIMER) + " " + t("No single font is best for every reader with dyslexia."), 14),
             self.text(t("App language, dark mode and text size are in the Settings tab."), 14),
+            self.text(t("Updates and source code"), 16, weight=ft.FontWeight.BOLD),
+            self.text(t("You are using version {version}. The newest version, what changed in it, and the "
+                        "source code are on GitHub.", version=__version__), 14),
+            ft.Row([
+                ft.FilledButton(t("Get the newest version"), icon=ft.Icons.SYSTEM_UPDATE_ALT, url=RELEASES_URL,
+                                tooltip=t("Opens the download page in your web browser")),
+                ft.OutlinedButton(t("Project on GitHub"), icon=ft.Icons.OPEN_IN_NEW, url=PROJECT_URL,
+                                  tooltip=t("Opens GitHub in your web browser")),
+            ], wrap=True),
+            self.text(PROJECT_URL, 12, selectable=True, color=self.pal["muted"]),
         ], scroll=ft.ScrollMode.AUTO, spacing=10, expand=True), padding=16, expand=True)
 
     # ================================================================ dialogs
