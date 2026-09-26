@@ -306,7 +306,11 @@ class StructureDetector:
             return False
         if p.bold != c.bold and (len(p.text) < 120 or len(c.text) < 120):
             return False
-        if LIST_RE.match(c.text) or REF_BRACKET_RE.match(c.text):
+        # "(b) a bar chart and" + "(c) a scatter plot": a sentence running on, not a new list item
+        running_on = bool(re.match(r"^\s*\((?:[a-z]|[ivx]{1,4}|\d{1,2})\)\s", c.text)) and \
+            not p.text.rstrip().endswith(TERMINAL) and abs(c.x0 - p.x0) < 2 and \
+            not LIST_RE.match(para.lines[0].text) and len(para.lines) >= 1
+        if (LIST_RE.match(c.text) and not running_on) or REF_BRACKET_RE.match(c.text):
             return False
         if re.search(r" … \S+\s*$", p.text):
             return False  # an entry of a printed table of contents
