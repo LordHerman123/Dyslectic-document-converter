@@ -202,7 +202,7 @@ class StructureDetector:
             # no normal-size text further down in the same column
             return not any(n.y0 > l.y0 + 1 and min(n.x1, l.x1) - max(n.x0, l.x0) > 5 for n in normal)
 
-        zone = [l for l in lines if l.size < body_size * 0.88 and l.y0 > h * 0.55 and below_body(l)]
+        zone = [l for l in lines if l.size < body_size * 0.92 and l.y0 > h * 0.55 and below_body(l)]
         if not zone:
             return []
         ref_heads = [r for r in lines if REFERENCE_HEADINGS.match(r.text)]
@@ -225,6 +225,12 @@ class StructureDetector:
         if any(id(o) not in ids and o.y0 > bottom and min(o.x1, l.x1) - max(o.x0, l.x0) > 5
                for o in lines for l in zone):
             return []  # more text follows below it: not the notes at the foot of the page
+        # print only a little smaller than the text (9 pt in 10 pt) counts as notes only with a note
+        # marker; otherwise it is more likely a quotation set in smaller type
+        if min(l.size for l in zone) >= body_size * 0.88 and not any(
+                FOOTNOTE_START_RE.match(l.text) or l.text[:1] in "∗⋆†‡§¶*⋄" or
+                any(s.superscript and s.start == 0 for s in l.styles) for l in zone):
+            return []
         first = zone[0]
         if CAPTION_RE.match(first.text) or REF_BRACKET_RE.match(first.text):
             return []

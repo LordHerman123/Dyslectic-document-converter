@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dyslexia-converter"
-version = "1.3.1"
+version = "1.4.0"
 description = "Convert PDFs (papers, textbooks, reports) into cleaner, dyslexia-friendly, printable layouts without changing the text."
 readme = "README.md"
 requires-python = ">=3.10"
