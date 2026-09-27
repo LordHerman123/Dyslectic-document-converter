@@ -25,6 +25,7 @@ COLOURS = {  # name -> RGBA of the marker (see-through, so the text stays readab
     "blue": (80, 160, 255, 100),
     "pink": (255, 120, 180, 105),
 }
+NOTE_SIGN = 12.0  # size of the note sign in the margin (points)
 SEARCH_WINDOW = 400  # words around the stored position searched when the text has shifted
 
 
@@ -185,8 +186,11 @@ def recolour(highlights: list[Highlight], k: int, colour: str) -> list[Highlight
 
 def note_marks(highlights: list[Highlight], words: list[tuple[int, str, list[Rect]]],
                page: int) -> list[tuple[float, float]]:
-    """Where to show the note sign of each highlight with a note: the top right of its first band."""
+    """Where to show the note sign of each highlight with a note: in the left margin, level with its first
+    line. The point is the sign's top left corner (the sign is NOTE_SIGN points square)."""
     out = []
+    lefts = [r[0] for p, _, rs in words if p == page for r in rs]
+    margin = min(lefts) if lefts else 0.0
     for h in highlights:
         where = resolve(h, words) if h.note else None
         if where is None:
@@ -195,8 +199,88 @@ def note_marks(highlights: list[Highlight], words: list[tuple[int, str, list[Rec
         rects = [r for p, _, rs in words[where[0]:where[1] + 1] if p == first for r in rs]
         if first == page and rects:
             band = bands(rects)[0]
-            out.append((band[2], band[1]))
+            out.append((max(0.0, margin - NOTE_SIGN - 6), band[1] + (band[3] - band[1] - NOTE_SIGN) / 2))
     return out
+
+
+def sentence_spans(words: list[tuple[int, str, list[Rect]]]) -> list[tuple[int, int]]:
+    """The first and last word number of every sentence (for "select the sentence"). Reading aloud splits
+    long sentences into parts; here a sentence runs to its full stop."""
+    from .speech import _ends_sentence
+
+    out, start = [], 0
+    for i, (_, text, _) in enumerate(words):
+        nxt = words[i + 1][1] if i + 1 < len(words) else None
+        if _ends_sentence(text, nxt):
+            out.append((start, i))
+            start = i + 1
+    if start < len(words):
+        out.append((start, len(words) - 1))
+    return out
+
+
+def paragraph_spans(words: list[tuple[int, str, list[Rect]]]) -> list[tuple[int, int]]:
+    """The first and last word number of every paragraph (for "select the paragraph").
+
+    A paragraph ends where the gap to the next line is clearly larger than a line gap, or at the end of a
+    page when the last word ends a sentence (a sentence running on to the next page stays one paragraph).
+    """
+    out: list[tuple[int, int]] = []
+    start = 0
+    for i in range(1, len(words)):
+        (p0, t0, r0), (p1, _, r1) = words[i - 1], words[i]
+        if not r0 or not r1:
+            continue
+        a, b = r0[-1], r1[0]
+        height = max(1.0, a[3] - a[1])
+        new_page = p1 != p0 and t0.rstrip("\"'”’)").endswith((".", "!", "?", ":"))
+        if new_page or (p1 == p0 and b[1] - a[3] > 0.8 * height):
+            out.append((start, i - 1))
+            start = i
+    if words:
+        out.append((start, len(words) - 1))
+    return out
+
+
+def span_at(spans: list[tuple[int, int]], n: int) -> tuple[int, int]:
+    """The span (sentence or paragraph) that word ``n`` is in; just the word when none is."""
+    for a, b in spans:
+        if a <= n <= b:
+            return a, b
+    return n, n
+
+
+def text_of(words: list[tuple[int, str, list[Rect]]], a: int, b: int) -> str:
+    """The words a..b as text to show (ligatures such as "ﬁ" written out as letters)."""
+    import unicodedata
+
+    return unicodedata.normalize("NFKC", _text(words, min(a, b), max(a, b)))
+
+
+def notes_docx(title: str, entries: list[tuple[int, str, str, str]]) -> bytes:
+    """The reader's highlights and notes as a Word document: per entry the page, colour, the words quoted
+    and the note (``entries``: (page number, colour name, quote, note))."""
+    import io
+
+    from docx import Document as DocxDocument
+    from docx.shared import Pt, RGBColor
+
+    d = DocxDocument()
+    d.add_heading(title, level=1)
+    for page, colour, quote, note in entries:
+        r, g, b, _ = COLOURS.get(colour, COLOURS["yellow"])
+        head = d.add_paragraph()
+        mark = head.add_run("■ ")
+        mark.font.color.rgb = RGBColor(r, g, b)
+        head.add_run(f"p. {page}").bold = True
+        q = d.add_paragraph()
+        q.paragraph_format.left_indent = Pt(12)
+        q.add_run(f"“{quote}”").italic = True
+        if note:
+            d.add_paragraph(note)
+    buf = io.BytesIO()
+    d.save(buf)
+    return buf.getvalue()
 
 
 def lines_on_page(words: list[tuple[int, str, list[Rect]]], page: int) -> list[tuple[float, float]]:
