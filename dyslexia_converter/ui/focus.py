@@ -688,7 +688,7 @@ class FocusMode:
             if line is not None:
                 await self._set_ruler(i, line)
         app = self.app
-        if not app.ui.get("tap_to_read", True) or not app._speech_allowed() or not app.speaker.voices():
+        if not app.ui.get("tap_to_read", False) or not app._speech_allowed() or not app.speaker.voices():
             return
         si = sentence_at(await app._units(), i, *pt)
         if si is None:

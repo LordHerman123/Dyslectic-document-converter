@@ -71,6 +71,8 @@ class ConverterApp:
         if self.ui.get("app_language") not in LANGUAGES:
             self.ui["app_language"] = system_language()
         self.t = Translator(self.ui["app_language"])
+        # every start begins in selection mode: clicking the text selects it; tap to read is switched on when wanted
+        self.ui["tap_to_read"] = False
         self.keystore = KeyStore()
         if keys.migrate(self.ai_settings, self.keystore):  # a key saved by an older version gets a name
             self.store.save_ai(self.ai_settings)
@@ -1460,7 +1462,7 @@ class ConverterApp:
         self.stop_btn = ft.IconButton(ft.Icons.STOP_ROUNDED, tooltip=t("Stop"), on_click=self.on_read_stop,
                                       disabled=True)
         self.tap_btn = ft.IconButton(ft.Icons.TOUCH_APP_OUTLINED, selected_icon=ft.Icons.TOUCH_APP,
-                                     selected=bool(self.ui.get("tap_to_read", True)), on_click=self.on_tap_toggle,
+                                     selected=bool(self.ui.get("tap_to_read", False)), on_click=self.on_tap_toggle,
                                      style=ft.ButtonStyle(bgcolor={ft.ControlState.SELECTED: ft.Colors.PRIMARY_CONTAINER}))
         self._tap_tooltip()
         speed = float(self.ui.get("read_speed", 1.0))
@@ -1544,13 +1546,13 @@ class ConverterApp:
 
     def _tap_tooltip(self) -> None:
         """Explain on the tap-to-read button whether clicking the page starts reading."""
-        on = bool(self.ui.get("tap_to_read", True))
+        on = bool(self.ui.get("tap_to_read", False))
         self.tap_btn.tooltip = self.t("Tap to read: on - click on the page to start reading there") if on else \
             self.t("Tap to read: off - clicking on the page does not start reading")
 
     async def on_tap_toggle(self, e):
         """The tap-to-read button: switch it on or off."""
-        self.ui["tap_to_read"] = not bool(self.ui.get("tap_to_read", True))
+        self.ui["tap_to_read"] = not bool(self.ui.get("tap_to_read", False))
         self.store.save_ui(self.ui)
         self.tap_btn.selected = self.ui["tap_to_read"]
         self._tap_tooltip()
@@ -1628,7 +1630,7 @@ class ConverterApp:
     async def on_page_tap(self, e):
         """Clicking on the converted page starts reading from the sentence clicked."""
         if not self.converted_pdf or not self._speech_allowed() or not self.speaker.voices() \
-                or not self.ui.get("tap_to_read", True):
+                or not self.ui.get("tap_to_read", False):
             return
         size = getattr(self, "_conv_box", None)
         if not size:
