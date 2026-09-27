@@ -1343,8 +1343,10 @@ class ConverterApp:
             (ft.Icons.FULLSCREEN, t("Focus mode"), t("A calm reading view of the converted pages"), t("Focus mode shows only the converted pages, in the whole window, without the settings around them. It is made for reading, and you can set it up the way that is most comfortable for you."), [
                 (t("Text size and zoom:"), t("make the pages larger or smaller, fit them to the window, or pinch "
                                              "on a touch screen.")),
-                (t("View:"), t("a page colour (white, cream, blue, green, grey or dark), scrolling or one page at "
-                               "a time, and a quarter turn.")),
+                (t("Reading settings:"), t("font, text size, spacing, and the page colour (white, cream, blue, "
+                                           "green, grey or dark).")),
+                (t("Page buttons:"), t("always at the top right: scrolling or one page at a time, fit to the "
+                                       "window, and a quarter turn.")),
                 (t("Reading ruler:"), t("a band that marks the line you are reading; move it with the arrow "
                                         "keys.")),
                 (t("Hide the bars:"), t("shows only the page. Press Esc to bring the bars back.")),
