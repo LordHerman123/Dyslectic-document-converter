@@ -10,6 +10,8 @@ it) opens a card with its syllables, its meaning and a way to hear it; a reading
 from __future__ import annotations
 
 import asyncio
+import sys
+from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 import flet as ft
@@ -22,6 +24,26 @@ from ..speech import sentence_at
 
 if TYPE_CHECKING:  # pragma: no cover
     from .app import ConverterApp
+
+def _patch_long_press_move() -> None:
+    """Flet 1.0.1 cannot read its own long-press move events: two offsets the event class requires are not sent
+    by the app. Only the pointer positions are used here, so the offsets get a default of None."""
+    cls = getattr(ft, "LongPressMoveUpdateEvent", None)
+    init = getattr(cls, "__init__", None)
+    if cls is None or getattr(init, "_patched", False):
+        return
+
+    def patched(self, *args, **kw):
+        """The original constructor, with the missing offsets filled in."""
+        kw.setdefault("offset_from_origin", None)
+        kw.setdefault("local_offset_from_origin", None)
+        init(self, *args, **kw)
+
+    patched._patched = True
+    cls.__init__ = patched
+
+
+_patch_long_press_move()
 
 SWATCHES = {"yellow": "#FFD600", "green": "#50C878", "blue": "#50A0FF", "pink": "#FF78B4"}
 # page colour -> (page, background around the pages)
@@ -63,6 +85,17 @@ class FocusMode:
         self._lines: dict[int, list] = {}
         self.ruler: Optional[tuple[int, int]] = None  # page, line
         self.card_word: Optional[tuple[int, int]] = None  # page, word number shown on the word card
+        self.card_mode: Optional[str] = None  # "drag", "word", "selection", "note" or "bubble"
+        self.sel: Optional[tuple[int, int]] = None  # first and last word number of the selected text
+        self.sel_unit: Optional[str] = None  # "word", "sentence" or "paragraph" when selected as a whole
+        self._anchor = 0  # the word first held
+        self._drag_page = 0
+        self._drag_to: Optional[int] = None
+        self._drawing = False
+        self._sentences: list[tuple[int, int]] = []
+        self._paragraphs: list[tuple[int, int]] = []
+        self._notes_only = False
+        self._colour_filter: set[str] = set()
         self.bars_hidden = False
         self._typing = False
         self._scroll_px = 0.0
@@ -118,6 +151,7 @@ class FocusMode:
         self.current = app.conv_page
         self.highlights = app.doc_highlights()
         self.ruler, self.card_word, self._reading, self.bars_hidden = None, None, None, False
+        self.sel, self.card_mode = None, None
         self.page_zoom = 1.0
         del app.hl_items[1:]  # forget the menu of an earlier focus mode
 
@@ -138,6 +172,8 @@ class FocusMode:
         self.swatches = ft.Row([self._swatch(name) for name in SWATCHES] + [
             ft.IconButton(ft.Icons.AUTO_FIX_NORMAL, tooltip=t("Eraser"), data="erase", on_click=self.on_eraser,
                           style=self._toggle_style())], spacing=4, visible=False)
+        self.notes_toggle = ft.IconButton(ft.Icons.STICKY_NOTE_2_OUTLINED, tooltip=t("Notes and highlights"),
+                                          on_click=self.on_notes_panel, style=self._toggle_style())
         self.ruler_toggle = ft.IconButton(ft.Icons.STRAIGHTEN, tooltip=t("Reading ruler (move it with the arrow "
                                                                          "keys or by tapping a line)"),
                                           on_click=self.on_ruler, style=self._toggle_style())
@@ -145,7 +181,7 @@ class FocusMode:
             ft.IconButton(ft.Icons.CLOSE, tooltip=t("Leave focus mode"), on_click=self.on_close),
             ft.Container(width=4),
             self.read_toggle, self.settings_toggle, self.view_toggle, self.mark_toggle, self.swatches,
-            self.ruler_toggle,
+            self.ruler_toggle, self.notes_toggle,
             ft.Container(expand=True),
             self.page_label,
             app.build_export_menu(compact=True),
@@ -180,6 +216,10 @@ class FocusMode:
         # a key keeps the scroll position when a panel above folds out or away
         self.body = ft.Container(self.list if self.layout == "scroll" else self.pager, expand=True,
                                  on_size_change=self.on_body_size, key="focus-body")
+        # the notes list: beside the pages, no width while closed (a control taken out of the row would make
+        # the page list forget how far it was scrolled)
+        self.side = ft.Container(width=0, bgcolor=ft.Colors.SURFACE, border=ft.Border.only(
+            left=ft.BorderSide(1, ft.Colors.OUTLINE_VARIANT)))
         self.card_layer = ft.Container(left=0, right=0, bottom=12, visible=False,
                                        alignment=ft.Alignment.BOTTOM_CENTER)
         self.show_bars = ft.Container(ft.IconButton(ft.Icons.FULLSCREEN_EXIT, tooltip=t("Show the bars"),
@@ -188,7 +228,8 @@ class FocusMode:
         self.counter = ft.Container(ft.Text("", color="#FFFFFF", size=13), bgcolor="#88000000", border_radius=14,
                                     padding=ft.Padding.symmetric(horizontal=12, vertical=4), visible=False)
         self.column = ft.Column([self.top, self.read_panel, self.settings_panel, self.view_panel, self.divider,
-                                 self.body],
+                                 ft.Row([self.body, self.side], expand=True, spacing=0,
+                                        vertical_alignment=ft.CrossAxisAlignment.STRETCH)],
                                 expand=True, spacing=0, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)
         self.root = ft.RotatedBox(content=ft.Stack([self.column, ft.Row([self.counter], left=0, right=0, bottom=10,
                                                                  alignment=ft.MainAxisAlignment.CENTER),
@@ -291,13 +332,17 @@ class FocusMode:
         self.sizes = [await app.in_thread(preview.page_size, pdf, i) for i in range(n)]
         units = await app._units()
         self.words = hl.document_words(units)
+        self._sentences = hl.sentence_spans(self.words)
+        self._paragraphs = hl.paragraph_spans(self.words)
         self._lines = {}
         page_bg = TINT_COLOURS.get(self.tint, TINT_COLOURS["white"])[0]
         self.images, self.frames, self.detectors = [], [], []
         for i, (pw, ph) in enumerate(self.sizes):
             img = ft.Image(src=_blank(), fit=ft.BoxFit.FILL, gapless_playback=True, expand=True)
-            det = ft.GestureDetector(content=img, data=i, on_tap_down=self.on_tap,
-                                     on_long_press_start=self.on_word_card, on_secondary_tap_down=self.on_word_card,
+            det = ft.GestureDetector(content=img, data=i, on_tap_up=self.on_tap,  # up: holding is not a tap
+                                     on_long_press_start=self.on_select_start,
+                                     on_long_press_move_update=self.on_select_move,
+                                     on_long_press_end=self.on_select_end, on_secondary_tap_down=self.on_word_card,
                                      on_size_change=self.on_size, mouse_cursor=ft.MouseCursor.CLICK, expand=True)
             w = self._page_w(i)
             frame = ft.Container(det, width=w, height=w * ph / pw, bgcolor=page_bg,
@@ -408,11 +453,16 @@ class FocusMode:
             if lines:
                 ruler = lines[min(self.ruler[1], len(lines) - 1)]
         picked = ()
-        if self.card_word and self.card_word[0] == i and 0 <= self.card_word[1] < len(self.words):
+        if self.card_mode == "word" and self.card_word and self.card_word[0] == i \
+                and 0 <= self.card_word[1] < len(self.words):
             picked = self.words[self.card_word[1]][2]
+        selection = []
+        if self.sel and self.card_mode in ("drag", "selection", "note"):
+            selection = hl.bands([r for p, _, rs in self.words[self.sel[0]:self.sel[1] + 1] if p == i for r in rs])
         return preview.render_highlight(self.app.converted_pdf, i, width, list(sentence), list(word),
                                         marks=marks, tint=self.tint, ruler=ruler,
-                                        notes=hl.note_marks(self.highlights, self.words, i), picked=list(picked))
+                                        notes=hl.note_marks(self.highlights, self.words, i), picked=list(picked),
+                                        selection=selection)
 
     def _start_rendering(self) -> None:
         """(Re)start rendering all pages in the background (after a zoom, colour or layout change)."""
@@ -447,9 +497,10 @@ class FocusMode:
         if not self.active:
             return
         old = max(1, len(self.sizes))
-        self.card_word = None
+        self.card_word, self.sel, self.card_mode = None, None, None
         self.card_layer.visible = False
         await self._build_pages()
+        self._refresh_notes()
         self.current = min(len(self.sizes) - 1, round(self.current * len(self.sizes) / old))
         await self._show_layout()
         self._start_rendering()
@@ -565,9 +616,9 @@ class FocusMode:
     async def on_tap(self, e) -> None:
         """A tap on a page.
 
-        With the highlighter on it marks (or erases) one word; on a note sign it opens the note; with the
-        ruler on it moves the ruler to that line; and with *tap to read* on, reading aloud starts at the
-        sentence tapped.
+        With the highlighter on it marks (or erases) one word; on a note sign it opens the note; with a card
+        open it closes the card; with the ruler on it moves the ruler to that line; and with *tap to read* on,
+        reading aloud starts at the sentence tapped.
         """
         i = e.control.data
         pt = self._point(i, e.local_position.x, e.local_position.y)
@@ -579,12 +630,15 @@ class FocusMode:
                 await self._apply(i, n, n)
             return
         for x, y in hl.note_marks(self.highlights, self.words, i):  # the note sign opens the note
-            if abs(pt[0] - (x + 3)) < 12 and abs(pt[1] - (y - 5)) < 12:
+            half = hl.NOTE_SIGN / 2
+            if abs(pt[0] - (x + half)) < half + 6 and abs(pt[1] - (y + half)) < half + 6:
                 k = next(k for k, h in enumerate(self.highlights)
                          if h.note and hl.note_marks([h], self.words, i) == [(x, y)])
-                where = hl.resolve(self.highlights[k], self.words)
-                await self.open_card(i, where[0], edit_note=True)
+                await self.open_bubble(k)
                 return
+        if self.card_layer.visible:  # a tap beside the card closes it
+            await self.close_card()
+            return
         if self.ruler:
             line = self._line_at(i, pt[1])
             if line is not None:
@@ -651,50 +705,196 @@ class FocusMode:
         else:
             await self.scroll_to(page, within=top)
 
-    # ------------------------------------------------------------------ word card: meaning, sound, notes
-    async def on_word_card(self, e) -> None:
-        """Press-and-hold or right-click on a page: open the word card for the word there."""
+    # ------------------------------------------------------------------ selecting text
+    def _word_near(self, i: int, x: float, y: float, clamp: bool = False) -> Optional[int]:
+        """The word nearest to a point on page picture ``i`` (``clamp``: a point beside the page counts as its
+        edge, so dragging past the text still selects up to the last word)."""
+        box = self.boxes.get(i)
+        if clamp and box:
+            x, y = max(0.0, min(box[0], x)), max(0.0, min(box[1], y))
+        pt = self._point(i, x, y)
+        return hl.word_at(hl.words_on_page(self.words, i), *pt) if pt else None
+
+    def _pages_of(self, span: Optional[tuple[int, int]]) -> set[int]:
+        """The pages a range of words is on."""
+        if not span:
+            return set()
+        return {self.words[k][0] for k in range(span[0], span[1] + 1) if 0 <= k < len(self.words)}
+
+    async def _show_selection(self, span: Optional[tuple[int, int]]) -> None:
+        """Select words a..b (or nothing) and redraw the pages involved."""
+        old = self._pages_of(self.sel)
+        self.sel = (min(span), max(span)) if span else None
+        for page in sorted(old | self._pages_of(self.sel)):
+            await self.redraw(page)
+
+    async def on_select_start(self, e) -> None:
+        """Press and hold: select the word; keep holding and drag to select more."""
         if self.tool:
             return
         i = e.control.data
-        pos = e.local_position
-        pt = self._point(i, pos.x, pos.y) if pos else None
-        n = hl.word_at(hl.words_on_page(self.words, i), *pt) if pt else None
+        n = self._word_near(i, e.local_position.x, e.local_position.y) if e.local_position else None
+        if n is None:
+            return
+        self.card_mode = "drag"
+        self.card_layer.visible = False
+        self.card_layer.content = None
+        self._anchor, self._drag_page, self.sel_unit = n, i, None
+        self.app.page.update()
+        await self._show_selection((n, n))
+
+    async def on_select_move(self, e) -> None:
+        """While holding and dragging: the selection runs from the first word to the word under the finger."""
+        if self.card_mode != "drag" or self._drag_page != e.control.data:
+            return
+        n = self._word_near(self._drag_page, e.local_position.x, e.local_position.y, clamp=True)
+        if n is None:
+            return
+        self._drag_to = n
+        if self._drawing:  # a redraw is running: it picks up the newest word when it is done
+            return
+        self._drawing = True
+        try:
+            while self._drag_to is not None and (self.sel is None or
+                                                 (min(self._anchor, self._drag_to), max(self._anchor, self._drag_to))
+                                                 != self.sel):
+                await self._show_selection((self._anchor, self._drag_to))
+        finally:
+            self._drawing = False
+
+    async def on_select_end(self, e) -> None:
+        """Letting go: open the card for the word (with its meaning) or for the words selected."""
+        if self.card_mode != "drag" or not self.sel:
+            return
+        self._drag_to = None
+        a, b = self.sel
+        if a == b:
+            await self.open_card(self._drag_page, a)
+        else:
+            await self.open_selection(a, b)
+
+    async def on_word_card(self, e) -> None:
+        """Right-click on a page: open the word card for the word there."""
+        if self.tool:
+            return
+        i = e.control.data
+        n = self._word_near(i, e.local_position.x, e.local_position.y) if e.local_position else None
         if n is not None:
             await self.open_card(i, n)
 
-    async def open_card(self, page: int, n: int, edit_note: bool = False) -> None:
-        """Show the word card for word ``n`` on ``page`` (looked up in the dictionary; ``edit_note`` opens the
-        note).
-        """
-        app = self.app
-        old = self.card_word
-        self.card_word = (page, n)
-        if old and old[0] != page:
-            await self.redraw(old[0])
-        text = self.words[n][1]
-        language = app.session.document.language if app.session else "en"
-        entry = await app.in_thread(dictionary.lookup, text, language)
+    def _exact(self, a: int, b: int) -> Optional[int]:
+        """The highlight covering exactly words a..b, if there is one."""
+        for k, h in enumerate(self.highlights):
+            if hl.resolve(h, self.words) == (a, b):
+                return k
+        return None
+
+    def _target(self, n: int) -> tuple[int, int, Optional[int]]:
+        """What the colour and note buttons act on for a single word: the highlight it is in, or the word."""
         k = hl.at(self.highlights, n, self.words)
-        self.card_layer.content = self._card(page, n, entry, language, k, edit_note)
+        if k is not None:
+            a, b = hl.resolve(self.highlights[k], self.words)
+            return a, b, k
+        return n, n, None
+
+    # ------------------------------------------------------------------ cards: word, selection, note
+    def _show_card(self, content: ft.Control, mode: str) -> None:
+        """Show a card (word, selection, note editor or note) at the bottom of the view."""
+        self.card_mode = mode
+        self.card_layer.content = content
         self.card_layer.visible = True
-        await self.redraw(page)
-        app.page.update()
+        self.app.page.update()
+
+    async def open_card(self, page: int, n: int, edit_note: bool = False) -> None:
+        """Show the word card for word ``n`` on ``page`` (looked up in the dictionary; ``edit_note`` goes
+        straight to the note of the highlight the word is in)."""
+        app = self.app
+        self._anchor = n
+        self.sel_unit = "word"
+        if edit_note:
+            a, b, k = self._target(n)
+            await self.open_note(a, b)
+            return
+        old = self._pages_of(self.sel) | ({self.card_word[0]} if self.card_word else set())
+        self.sel, self.card_word = None, (page, n)
+        language = app.session.document.language if app.session else "en"
+        entry = await app.in_thread(dictionary.lookup, self.words[n][1], language)
+        self._show_card(self._word_card(n, entry, language), "word")
+        for p in sorted(old | {page}):
+            await self.redraw(p)
+
+    async def open_selection(self, a: int, b: int) -> None:
+        """Show the card for the words a..b (selected by dragging, by sentence or paragraph, or from the notes
+        list)."""
+        old = self._pages_of(self.sel) | ({self.card_word[0]} if self.card_word else set())
+        self.card_word, self.card_mode, self.sel = None, "selection", (a, b)
+        for p in sorted(old | self._pages_of(self.sel)):
+            await self.redraw(p)
+        self._show_card(self._selection_card(a, b), "selection")
 
     async def close_card(self, e=None) -> None:
-        """Close the word card and take the outline off its word."""
+        """Close the card and take the outline or selection off the page."""
         self._typing = False
         self.card_layer.visible = False
         self.card_layer.content = None
-        old, self.card_word = self.card_word, None
+        self.card_mode = None
+        pages = self._pages_of(self.sel) | ({self.card_word[0]} if self.card_word else set())
+        self.sel, self.card_word = None, None
         self.app.page.update()
-        if old:
-            await self.redraw(old[0])
+        for p in sorted(pages):
+            await self.redraw(p)
 
-    def _card(self, page: int, n: int, entry, language: str, k: Optional[int], edit_note: bool) -> ft.Control:
-        """The word card: the word and its base form, syllables, say button, meanings, online look-up, highlight
-        colours and the note (``k`` is the highlight the word is in, if any).
-        """
+    def _card_box(self, rows: list[ft.Control], bgcolor=None) -> ft.Control:
+        """A card of these rows, as wide as fits (at most 480 pixels)."""
+        width = min(480.0, self._avail()[0] - 24)
+        return ft.Card(content=ft.Container(ft.Column(rows, spacing=6, tight=True), padding=16, width=width,
+                                            bgcolor=bgcolor, border_radius=12), elevation=8)
+
+    def _unit_row(self) -> ft.Control:
+        """Select: Word / Sentence / Paragraph - grow the selection from the word held to a whole unit."""
+        t = self.app.t
+        return ft.Row([self.app.text(t("Select"), 13), ft.SegmentedButton(
+            segments=[ft.Segment("word", label=ft.Text(t("Word"))),
+                      ft.Segment("sentence", label=ft.Text(t("Sentence"))),
+                      ft.Segment("paragraph", label=ft.Text(t("Paragraph")))],
+            selected=[self.sel_unit] if self.sel_unit else [], allow_empty_selection=True,
+            on_change=self.on_unit)], spacing=10)
+
+    async def on_unit(self, e) -> None:
+        """Word / Sentence / Paragraph: select that unit around the word first held."""
+        unit = (list(e.control.selected) or ["word"])[0]
+        n = self._anchor
+        if unit == "word":
+            self.sel_unit = "word"
+            await self.open_card(self.words[n][0], n)
+            return
+        spans = self._sentences if unit == "sentence" else self._paragraphs
+        a, b = hl.span_at(spans, n)
+        self.sel_unit = unit
+        await self.open_selection(a, b)
+
+    def _mark_rows(self, a: int, b: int, k: Optional[int]) -> list[ft.Control]:
+        """Highlight colours, Add/Edit note and Remove for words a..b (``k``: their highlight, if any)."""
+        app, t = self.app, self.app.t
+        h = self.highlights[k] if k is not None else None
+        dots = [ft.Container(width=28, height=28, border_radius=14, bgcolor=SWATCHES[name], data=name,
+                             tooltip=t(name.capitalize()),
+                             border=ft.Border.all(3, ft.Colors.PRIMARY) if h and h.colour == name else None,
+                             on_click=lambda e: app.page.run_task(self.mark, a, b, e.control.data))
+                for name in SWATCHES]
+        note_btn = ft.FilledButton(t("Edit note") if h and h.note else t("Add note"),
+                                   icon=ft.Icons.STICKY_NOTE_2_OUTLINED,
+                                   on_click=lambda e: app.page.run_task(self.open_note, a, b))
+        rows = [ft.Divider(height=8),
+                ft.Row([app.text(t("Highlight"), 13), *dots, ft.Container(expand=True), note_btn], spacing=8)]
+        if h is not None:
+            rows.append(ft.Row([ft.TextButton(t("Remove highlight"), icon=ft.Icons.DELETE_OUTLINE,
+                                              on_click=lambda e: app.page.run_task(self.unmark, a, b))]))
+        return rows
+
+    def _word_card(self, n: int, entry, language: str) -> ft.Control:
+        """The word card: the word and its base form, syllables, say button, meanings, online look-up, Select
+        (word, sentence, paragraph), and highlight and note."""
         app, t = self.app, self.app.t
         title = entry.word if not entry.base or entry.base.lower() == entry.word.lower() else \
             f"{entry.word}  →  {entry.base}"
@@ -728,77 +928,264 @@ class FocusMode:
             rows.append(ft.Row([ft.TextButton(t("Look up online"), icon=ft.Icons.OPEN_IN_NEW,
                                               url=dictionary.online_url(entry.word, language),
                                               tooltip=t("Opens Wiktionary in your browser"))]))
-        # highlight and note
+        rows.append(self._unit_row())
+        a, b, k = self._target(n)
+        return self._card_box(rows + self._mark_rows(a, b, k))
+
+    def _selection_card(self, a: int, b: int) -> ft.Control:
+        """The card for selected words: how many, read aloud, the text, Select (word, sentence, paragraph),
+        moving the start and end by a word, and highlight and note."""
+        app, t = self.app, self.app.t
+        text = hl.text_of(self.words, a, b)
+        nudge = lambda icon, tip, end, step: ft.IconButton(  # noqa: E731
+            icon, tooltip=tip, on_click=lambda e: app.page.run_task(self.nudge, end, step))
+        rows: list[ft.Control] = [
+            ft.Row([ft.Text(t("Selected: {n} words", n=b - a + 1), size=app.fs(16), weight=ft.FontWeight.BOLD,
+                            expand=True),
+                    ft.IconButton(ft.Icons.VOLUME_UP, tooltip=t("Read the selection"), visible=app._speech_allowed(),
+                                  on_click=lambda e: app.say_word(text)),
+                    ft.IconButton(ft.Icons.CLOSE, tooltip=t("Close"), on_click=self.close_card)]),
+            ft.Text(f"“{text}”", size=app.fs(13), italic=True, max_lines=5,
+                    overflow=ft.TextOverflow.ELLIPSIS, color=ft.Colors.ON_SURFACE_VARIANT),
+            self._unit_row(),
+            ft.Row([app.text(t("Start"), 13),
+                    nudge(ft.Icons.CHEVRON_LEFT, t("One word earlier"), 0, -1),
+                    nudge(ft.Icons.CHEVRON_RIGHT, t("One word later"), 0, 1), ft.Container(width=16),
+                    app.text(t("End"), 13),
+                    nudge(ft.Icons.CHEVRON_LEFT, t("One word earlier"), 1, -1),
+                    nudge(ft.Icons.CHEVRON_RIGHT, t("One word later"), 1, 1)], spacing=0),
+        ]
+        return self._card_box(rows + self._mark_rows(a, b, self._exact(a, b)))
+
+    async def nudge(self, end: int, step: int) -> None:
+        """Move the start (``end`` 0) or the end (1) of the selection by one word."""
+        if not self.sel:
+            return
+        a, b = self.sel
+        if end == 0:
+            a = max(0, min(b, a + step))
+        else:
+            b = min(len(self.words) - 1, max(a, b + step))
+        self.sel_unit = None
+        await self.open_selection(a, b)
+
+    async def open_note(self, a: int, b: int) -> None:
+        """The note editor for words a..b: the words quoted, colour, the note (typed or dictated), Save."""
+        app, t = self.app, self.app.t
+        k = self._exact(a, b)
         h = self.highlights[k] if k is not None else None
-        dots = [ft.Container(width=28, height=28, border_radius=14, bgcolor=SWATCHES[name], data=name,
-                             tooltip=t(name.capitalize()),
-                             border=ft.Border.all(3, ft.Colors.PRIMARY) if h and h.colour == name else None,
-                             on_click=lambda e: app.page.run_task(self.card_colour, page, n, e.control.data))
-                for name in SWATCHES]
-        width = min(480.0, self._avail()[0] - 24)
-        note_field = ft.TextField(value=h.note if h else "", multiline=True, min_lines=2, max_lines=5, width=width - 32,
-                                  label=t("Note"), text_size=app.fs(14), autofocus=edit_note,
-                                  visible=edit_note or bool(h and h.note),
-                                  on_focus=lambda e: setattr(self, "_typing", True),
-                                  on_blur=lambda e: setattr(self, "_typing", False))
-        save = ft.FilledButton(t("Save note"), visible=note_field.visible,
-                               on_click=lambda e: app.page.run_task(self.card_note, page, n, note_field.value))
+        chosen = {"colour": h.colour if h else self.colour}
+        if self.sel != (a, b):
+            await self._show_selection((a, b))
+        bar = ft.Container(ft.Text(f"“{hl.text_of(self.words, a, b)}”", size=app.fs(13), italic=True,
+                                   max_lines=6, overflow=ft.TextOverflow.ELLIPSIS),
+                           border=ft.Border.only(left=ft.BorderSide(4, SWATCHES[chosen["colour"]])),
+                           padding=ft.Padding.only(left=10, top=2, bottom=2))
+        dots: list[ft.Container] = []
 
-        async def show_note(e):
-            """"Add note": show the note field and put the cursor in it."""
-            note_field.visible = save.visible = True
-            add_note.visible = False
+        def pick(e):
+            """A colour dot: use it for the highlight (shown on the quote's bar and the dots)."""
+            chosen["colour"] = e.control.data
+            bar.border = ft.Border.only(left=ft.BorderSide(4, SWATCHES[chosen["colour"]]))
+            for d in dots:
+                d.border = ft.Border.all(3, ft.Colors.PRIMARY) if d.data == chosen["colour"] else None
             app.page.update()
-            try:
-                await note_field.focus()
-            except Exception:
-                pass
 
-        add_note = ft.TextButton(t("Add note"), icon=ft.Icons.STICKY_NOTE_2_OUTLINED, visible=not note_field.visible,
-                                 on_click=show_note)
-        remove = ft.TextButton(t("Remove highlight"), icon=ft.Icons.DELETE_OUTLINE, visible=h is not None,
-                               on_click=lambda e: app.page.run_task(self.card_remove, page, n))
-        rows += [ft.Divider(height=8),
-                 ft.Row([app.text(t("Highlight"), 13), *dots, ft.Container(expand=True), add_note], spacing=8),
-                 note_field,
-                 ft.Row([remove, ft.Container(expand=True), save])]
-        return ft.Card(content=ft.Container(ft.Column(rows, spacing=6, tight=True), padding=16, width=width),
-                       elevation=8)
+        dots += [ft.Container(width=24, height=24, border_radius=12, bgcolor=SWATCHES[name], data=name,
+                              tooltip=t(name.capitalize()), on_click=pick,
+                              border=ft.Border.all(3, ft.Colors.PRIMARY) if name == chosen["colour"] else None)
+                 for name in SWATCHES]
+        width = min(480.0, self._avail()[0] - 24)
+        field = ft.TextField(value=h.note if h else "", multiline=True, min_lines=3, max_lines=8, width=width - 32,
+                             label=t("Your note"), text_size=app.fs(14), autofocus=True,
+                             on_focus=lambda e: setattr(self, "_typing", True),
+                             on_blur=lambda e: setattr(self, "_typing", False))
+        dictate = sys.platform == "win32" and not app.page.web
+        rows = [
+            ft.Row([ft.Icon(ft.Icons.STICKY_NOTE_2_OUTLINED, color=ft.Colors.PRIMARY),
+                    ft.Text(t("Note"), size=app.fs(16), weight=ft.FontWeight.BOLD), ft.Container(expand=True),
+                    *dots, ft.IconButton(ft.Icons.CLOSE, tooltip=t("Close"), on_click=self.close_card)]),
+            bar, field,
+            ft.Row([ft.IconButton(ft.Icons.MIC_NONE, tooltip=t("Speak your note (Windows voice typing)"),
+                                  visible=dictate, on_click=lambda e: app.page.run_task(self._dictate, field)),
+                    app.text(t("Tip: press the microphone to speak your note"), 11, visible=dictate,
+                             color=ft.Colors.ON_SURFACE_VARIANT),
+                    ft.Container(expand=True),
+                    ft.FilledButton(t("Save note"), on_click=lambda e: app.page.run_task(
+                        self.save_note, a, b, field.value or "", chosen["colour"]))]),
+        ]
+        self._show_card(self._card_box(rows), "note")
 
-    async def _changed(self, page: int, n: int) -> None:
-        """Highlights changed from the word card: save them and show the card again with the new state."""
+    async def _dictate(self, field: ft.TextField) -> None:
+        """Start Windows voice typing (Win + H) in the note field: what is said is typed into it."""
+        try:
+            await field.focus()
+            await asyncio.sleep(0.2)
+            import ctypes
+
+            press = ctypes.windll.user32.keybd_event  # type: ignore[attr-defined]
+            press(0x5B, 0, 0, 0)  # Windows key down
+            press(0x48, 0, 0, 0)  # H
+            press(0x48, 0, 2, 0)
+            press(0x5B, 0, 2, 0)  # Windows key up
+        except Exception:
+            self.app.notify(self.app.t("Voice typing could not be started. Press Windows + H to start it."))
+
+    async def open_bubble(self, k: int) -> None:
+        """The note of highlight ``k``, shown on a yellow note card with Edit and Read aloud."""
+        app, t = self.app, self.app.t
+        h = self.highlights[k]
+        a, b = hl.resolve(h, self.words)
+        rows = [
+            ft.Row([ft.Icon(ft.Icons.STICKY_NOTE_2, color="#B8860B"), ft.Container(expand=True),
+                    ft.IconButton(ft.Icons.CLOSE, tooltip=t("Close"), on_click=self.close_card,
+                                  icon_color="#5A4A1A")]),
+            ft.Text(h.note, size=app.fs(15), selectable=True, color="#2A2410"),
+            ft.Row([ft.TextButton(t("Edit"), icon=ft.Icons.EDIT_OUTLINED,
+                                  on_click=lambda e: app.page.run_task(self.open_note, a, b)),
+                    ft.TextButton(t("Read aloud"), icon=ft.Icons.VOLUME_UP, visible=app._speech_allowed(),
+                                  on_click=lambda e: app.say_word(h.note))], spacing=0),
+        ]
+        await self._show_selection((a, b))
+        self._show_card(self._card_box(rows, bgcolor="#FFF6D5"), "bubble")
+
+    async def _changed(self) -> None:
+        """Highlights changed: save them, refresh the Export menu option and the notes list."""
         if self.app.doc_key:
             self.app.hl_store.save(self.app.doc_key, self.highlights)
         self.app.update_highlight_option()
-        await self.open_card(page, n)
+        self._refresh_notes()
 
-    async def card_colour(self, page: int, n: int, colour: str) -> None:
-        """A colour on the word card: highlight the word, or change the colour of the highlight it is in."""
-        k = hl.at(self.highlights, n, self.words)
+    async def mark(self, a: int, b: int, colour: str) -> None:
+        """A colour on a card: highlight words a..b, or recolour their highlight."""
+        k = self._exact(a, b)
         if k is None:
-            self.highlights = hl.add(self.highlights, n, n, colour, self.words)
+            self.highlights = hl.add(self.highlights, a, b, colour, self.words)
         else:
             self.highlights = hl.recolour(self.highlights, k, colour)
-        await self._changed(page, n)
-
-    async def card_note(self, page: int, n: int, note: str) -> None:
-        """Save the note (a word without a highlight is highlighted in the current colour first)."""
-        k = hl.at(self.highlights, n, self.words)
-        if k is None:  # a note on a word that is not highlighted yet: highlight it in the current colour
-            self.highlights = hl.add(self.highlights, n, n, self.colour, self.words, note.strip())
+        self.colour = colour
+        await self._changed()
+        if self.card_mode == "word":
+            await self.open_card(self.card_word[0], self._anchor)
         else:
-            self.highlights = hl.set_note(self.highlights, k, note)
-        self._typing = False
-        await self._changed(page, n)
+            await self.open_selection(a, b)
 
-    async def card_remove(self, page: int, n: int) -> None:
-        """Remove the whole highlight the word is in (with its note)."""
-        k = hl.at(self.highlights, n, self.words)
-        if k is not None:
-            where = hl.resolve(self.highlights[k], self.words)
-            self.highlights = hl.erase(self.highlights, where[0], where[1], self.words)
-            # erase keeps untouched parts; the whole highlight goes
-        await self._changed(page, n)
+    async def save_note(self, a: int, b: int, note: str, colour: str) -> None:
+        """Save the note on words a..b (they are highlighted in ``colour`` when they were not yet)."""
+        k = self._exact(a, b)
+        if k is None:
+            self.highlights = hl.add(self.highlights, a, b, colour, self.words, note.strip())
+        else:
+            self.highlights = hl.recolour(hl.set_note(self.highlights, k, note), k, colour)
+        self._typing = False
+        await self._changed()
+        await self.close_card()
+
+    async def unmark(self, a: int, b: int) -> None:
+        """Remove the highlight on words a..b (with its note)."""
+        self.highlights = hl.erase(self.highlights, a, b, self.words)
+        await self._changed()
+        await self.close_card()
+
+    # ------------------------------------------------------------------ notes and highlights panel
+    def on_notes_panel(self, e) -> None:
+        """The notes button: show or hide the list of highlights and notes beside the pages."""
+        open_ = self.side.content is None
+        self.notes_toggle.selected = open_
+        self.side.width = min(360.0, max(260.0, self._avail()[0] * 0.35)) if open_ else 0
+        self.side.content = self._notes_panel() if open_ else None
+        self.side.padding = 12 if open_ else 0
+        self.app.page.update()
+        if open_:
+            self._refresh_notes()
+
+    def _notes_panel(self) -> ft.Control:
+        """The panel: filters (all / with notes / colour), the list, and export."""
+        app, t = self.app, self.app.t
+        self.notes_list = ft.ListView(spacing=8, expand=True)
+        self.filter_notes = ft.Chip(label=ft.Text(t("With notes")), selected=self._notes_only,
+                                    on_select=self.on_notes_filter)
+        colour_dots = [ft.Container(width=18, height=18, border_radius=9, bgcolor=SWATCHES[name], data=name,
+                                    tooltip=t(name.capitalize()), on_click=self.on_colour_filter,
+                                    border=ft.Border.all(3, ft.Colors.PRIMARY) if name in self._colour_filter
+                                    else None)
+                       for name in SWATCHES]
+        return ft.Column([
+            ft.Row([ft.Text(t("Notes and highlights"), size=app.fs(16), weight=ft.FontWeight.BOLD, expand=True),
+                    ft.IconButton(ft.Icons.CLOSE, tooltip=t("Close"), on_click=self.on_notes_panel)]),
+            ft.Row([self.filter_notes, *colour_dots], spacing=6, wrap=True),
+            self.notes_list,
+            ft.OutlinedButton(t("Export notes as a list"), icon=ft.Icons.DOWNLOAD, on_click=self.on_export_notes,
+                              tooltip=t("Save your highlights and notes as a Word document")),
+        ], spacing=10, expand=True)
+
+    def _note_entries(self) -> list[tuple[int, int, int, hl.Highlight]]:
+        """(first word, last word, page, highlight) of every highlight that can be placed, in reading order."""
+        out = []
+        for h in self.highlights:
+            where = hl.resolve(h, self.words)
+            if where:
+                out.append((where[0], where[1], self.words[where[0]][0], h))
+        return sorted(out, key=lambda x: x[0])
+
+    def _refresh_notes(self) -> None:
+        """Fill the notes list with the highlights that pass the filters."""
+        if self.side.content is None:
+            return
+        app, t = self.app, self.app.t
+        items = []
+        for a, b, page, h in self._note_entries():
+            if (self._notes_only and not h.note) or (self._colour_filter and h.colour not in self._colour_filter):
+                continue
+            quote = hl.text_of(self.words, a, b)
+            body = [ft.Row([ft.Container(width=10, height=10, border_radius=5, bgcolor=SWATCHES.get(h.colour)),
+                            app.text(t("Page {n}", n=page + 1), 11, color=ft.Colors.ON_SURFACE_VARIANT)],
+                           spacing=6),
+                    ft.Text(f"“{quote}”", size=app.fs(12), italic=True, max_lines=2,
+                            overflow=ft.TextOverflow.ELLIPSIS)]
+            if h.note:
+                body.append(ft.Text(h.note, size=app.fs(13)))
+            items.append(ft.Container(ft.Column(body, spacing=3, tight=True), padding=10, border_radius=8,
+                                      bgcolor=ft.Colors.SURFACE_CONTAINER_LOW, data=(a, b, page),
+                                      on_click=self.on_note_entry, ink=True))
+        if not items:
+            items = [app.text(t("Nothing highlighted yet. Hold a word and drag to select text."), 13,
+                              color=ft.Colors.ON_SURFACE_VARIANT)]
+        self.notes_list.controls = items
+        self.app.page.update()
+
+    def on_notes_filter(self, e) -> None:
+        """"With notes": show only highlights that have a note."""
+        self._notes_only = bool(e.control.selected)
+        self._refresh_notes()
+
+    def on_colour_filter(self, e) -> None:
+        """A colour dot: show only highlights in the chosen colour(s) (tap again to show all)."""
+        name = e.control.data
+        self._colour_filter ^= {name}
+        e.control.border = ft.Border.all(3, ft.Colors.PRIMARY) if name in self._colour_filter else None
+        self._refresh_notes()
+
+    async def on_note_entry(self, e) -> None:
+        """An entry in the list: go to its page and open its card."""
+        a, b, page = e.control.data
+        rects = self.words[a][2]
+        await self.scroll_to(page, within=rects[0][1] if rects else 0.0)
+        await self.open_selection(a, b)
+
+    async def on_export_notes(self, e) -> None:
+        """Save the highlights and notes (with the filters applied) as a Word document."""
+        app, t = self.app, self.app.t
+        entries = [(page + 1, h.colour, hl.text_of(self.words, a, b), h.note)
+                   for a, b, page, h in self._note_entries()
+                   if not (self._notes_only and not h.note)
+                   and not (self._colour_filter and h.colour not in self._colour_filter)]
+        if not entries:
+            app.notify(t("Nothing highlighted yet. Hold a word and drag to select text."))
+            return
+        stem = Path(app.source_path).stem if app.source_path else "document"
+        data = await app.in_thread(hl.notes_docx, t("Notes on {name}", name=stem), entries)
+        await app.save_bytes(data, f"{stem}_notes.docx", "docx")
 
     # ------------------------------------------------------------------ highlighter
     def _toggle_style(self) -> ft.ButtonStyle:
@@ -903,6 +1290,7 @@ class FocusMode:
         if self.app.doc_key:
             self.app.hl_store.save(self.app.doc_key, self.highlights)
         self.app.update_highlight_option()
+        self._refresh_notes()
         await self.redraw(page)
 
     # ------------------------------------------------------------------ fold-out panels

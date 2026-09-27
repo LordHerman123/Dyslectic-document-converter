@@ -1709,12 +1709,16 @@ class ConverterApp:
             self.notify(t("Export failed:") + " " + redact(str(ex)), error=True)
             return
         self.busy(False, t("Choose where to save the file."))
-        path = await self.file_picker.save_file(dialog_title=t("Save converted file"),
-                                                file_name=f"{stem}{suffix}.{ext}",
+        await self.save_bytes(data, f"{stem}{suffix}.{ext}", ext)
+
+    async def save_bytes(self, data: bytes, file_name: str, ext: str) -> None:
+        """Let the user choose where to save a file (never over the original PDF) and save it there."""
+        t = self.t
+        path = await self.file_picker.save_file(dialog_title=t("Save converted file"), file_name=file_name,
                                                 allowed_extensions=[ext], file_type=ft.FilePickerFileType.CUSTOM,
                                                 src_bytes=data)
         if path and not self.page.web and not self.page.platform.is_mobile():
-            if Path(path).resolve() == Path(self.source_path).resolve():
+            if self.source_path and Path(path).resolve() == Path(self.source_path).resolve():
                 self.notify(t("That is the original PDF - choose a different name so it is not overwritten."),
                             error=True)
                 return

@@ -130,7 +130,7 @@ def test_notes_stay_with_their_words():
     assert bigger[0].note == "important"
     hs = hl.set_note(hs, 0, "  ")
     assert hs[0].note == ""
-    assert hl.note_marks(hl.add([], 2, 5, "yellow", words, "n"), words, 0) == [(185.0, 10.0)]  # top right of the band
+    assert hl.note_marks(hl.add([], 2, 5, "yellow", words, "n"), words, 0) == [(0.0, 10.0)]  # in the margin, level with the line
 
 
 def test_lines_on_page():
@@ -190,3 +190,34 @@ def test_page_tints_ruler_and_note_signs():
     darkest = lambda png: Image.open(io.BytesIO(png)).convert("L").crop((30, 40, 150, 56)).getextrema()[0]  # noqa
     assert darkest(ink) > darkest(plain) + 60  # is faded
     assert preview.render_highlight(pdf, 0, 300, [], [], notes=[(100.0, 90.0)], picked=[(72, 90, 120, 102)])
+
+
+def test_sentence_and_paragraph_spans():
+    from dyslexia_converter import highlights as hl
+
+    def w(page, text, x, y):
+        return (page, text, [(x, y, x + 20, y + 10)])
+
+    words = [w(0, "One", 0, 0), w(0, "two.", 25, 0), w(0, "Three", 50, 0),  # line 1
+             w(0, "e.g.", 0, 14), w(0, "four.", 25, 14),  # line 2 (an abbreviation does not end a sentence)
+             w(0, "New", 0, 40), w(0, "para", 25, 40),  # a wider gap: a new paragraph
+             w(1, "continues.", 0, 0)]  # a sentence running on to the next page stays in the paragraph
+    assert hl.sentence_spans(words) == [(0, 1), (2, 4), (5, 7)]
+    assert hl.paragraph_spans(words) == [(0, 4), (5, 7)]
+    assert hl.span_at(hl.sentence_spans(words), 3) == (2, 4)
+    assert hl.span_at([], 3) == (3, 3)
+    assert hl.text_of([(0, "scientiﬁc", [])], 0, 0) == "scientific"
+
+
+def test_notes_as_a_word_document():
+    import io
+
+    from docx import Document
+
+    from dyslexia_converter import highlights as hl
+
+    data = hl.notes_docx("Notes on paper", [(10, "green", "the quoted words", "my note"), (12, "pink", "more", "")])
+    text = [p.text for p in Document(io.BytesIO(data)).paragraphs]
+    assert text[0] == "Notes on paper"
+    assert "■ p. 10" in text and "“the quoted words”" in text and "my note" in text
+    assert "■ p. 12" in text and "“more”" in text

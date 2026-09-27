@@ -76,14 +76,14 @@ def _tinted(base, tint: str):
 
 def render_highlight(pdf: bytes | str, index: int, width_px: int, sentence: list, word: list,
                      dark: bool = False, marks: list = (), tint: str = "white", ruler: tuple = (),
-                     notes: list = (), picked: list = ()) -> bytes:
+                     notes: list = (), picked: list = (), selection: list = ()) -> bytes:
     """PNG of a page with the sentence being read aloud marked, and the word being said boxed.
 
     ``sentence`` and ``word`` are rectangles in PDF points; ``marks`` are the reader's own coloured
     highlights as (rectangle, RGBA). ``tint`` colours the page; ``ruler`` (top, bottom) keeps one line clear
     and dims the rest; ``notes`` are points where a highlight has a note; ``picked`` is the word chosen for
-    the word card. The plain page is rendered once and kept, so moving the highlight from word to word is
-    quick.
+    the word card; ``selection`` are the bands of text being selected (blue, with a handle at each end). The
+    plain page is rendered once and kept, so moving the highlight from word to word is quick.
     """
     import io
 
@@ -116,12 +116,22 @@ def render_highlight(pdf: bytes | str, index: int, width_px: int, sentence: list
                             outline=edge, width=2)
     for x0, y0, x1, y1 in picked:  # the word on the word card: an outline
         d.rounded_rectangle([x0 * z - 4, y0 * z - 3, x1 * z + 4, y1 * z + 3], radius=5, outline=edge, width=3)
-    for x, y in notes:  # a small note sign at the top right of a highlight with a note
-        s = 9 * z
-        box = [x * z - s * 0.2, y * z - s * 1.1, x * z + s * 0.8, y * z - s * 0.1]
-        d.rounded_rectangle(box, radius=2 * z, fill=(184, 134, 11, 255))
-        for k in (0.3, 0.55):
-            d.line([box[0] + s * 0.2, box[1] + s * k, box[2] - s * 0.2, box[1] + s * k], fill=(255, 255, 255, 255),
+    if selection:  # selected text: light blue, with a handle at the start and at the end (like on a phone)
+        blue = (21, 101, 192, 255)
+        for x0, y0, x1, y1 in selection:
+            d.rectangle([x0 * z - 2, y0 * z - 1, x1 * z + 2, y1 * z + 2], fill=(80, 150, 255, 90))
+        (sx, sy0, _, sy1), (_, ey0, ex, ey1) = selection[0], selection[-1]
+        r = 5 * z
+        d.rectangle([sx * z - 3 - z, sy0 * z - 2, sx * z - 3 + z, sy1 * z + 2], fill=blue)
+        d.ellipse([sx * z - 3 - r, sy0 * z - 2 - 2 * r, sx * z - 3 + r, sy0 * z - 2], fill=blue)
+        d.rectangle([ex * z + 3 - z, ey0 * z - 2, ex * z + 3 + z, ey1 * z + 2], fill=blue)
+        d.ellipse([ex * z + 3 - r, ey1 * z + 2, ex * z + 3 + r, ey1 * z + 2 + 2 * r], fill=blue)
+    for x, y in notes:  # a note sign in the margin next to a highlight with a note (x, y: its top left)
+        s = 12 * z
+        box = [x * z, y * z, x * z + s, y * z + s]
+        d.rounded_rectangle(box, radius=2.5 * z, fill=(184, 134, 11, 255))
+        for k in (0.32, 0.52, 0.72):
+            d.line([box[0] + s * 0.22, box[1] + s * k, box[2] - s * 0.22, box[1] + s * k], fill=(255, 255, 255, 255),
                    width=max(1, int(z)))
     if ruler:  # the reading ruler: the line being read stays clear, the rest is dimmed
         top, bottom = ruler[0] * z - 5 * z, ruler[1] * z + 5 * z
