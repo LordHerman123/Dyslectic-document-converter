@@ -687,10 +687,6 @@ def new_placeholder() -> str:
     return chr(0xF0000 + next(_placeholders) % 0xFFFD)
 
 
-def is_placeholder(ch: str) -> bool:
-    """Whether a character is a private-use placeholder (used internally for formula parts)."""
-    return 0xF0000 <= ord(ch) <= 0xFFFFD
-
 
 def _stacks(row: list[_Span], rules: list[Rect], baseline: float, size: float) -> list[tuple[Rect, list[_Span], str]]:
     """Parts of a text line that are stacked vertically: fractions and big operators with limits.
@@ -800,162 +796,161 @@ def _text_lines(page: pymupdf.Page, pno: int) -> list[RawLine]:
     tex_body = bool(TEX_TEXT_FONT_RE.match(body_family))
 
     lines: list[RawLine] = []
-    if True:
-        for row in _rows(spans, rules):
-            bno = Counter(sp.block_no for sp in row).most_common(1)[0][0]
-            full = [sp for sp in row if sp.size >= max(o.size for o in row) * 0.85]
-            weights = Counter()
-            for sp in full:
-                weights[round(sp.baseline, 1)] += len(sp.text.strip()) or 1
-            baseline = weights.most_common(1)[0][0] if weights else row[0].baseline
-            text = ""
-            styles: list[StyleRange] = []
-            weighted = Counter()
-            bold_chars = italic_chars = 0
-            fonts = Counter()
-            # the text size of the row; a bullet or symbol drawn in a much larger font does not count
-            common = Counter()
-            for sp in row:
-                common[round(sp.size, 1)] += len(sp.text.strip())
-            main = common.most_common(1)[0][0] if common else 0
-            max_size = max((sp.size for sp in row if not (len(sp.text.strip()) == 1 and not sp.text.strip().isalnum()
-                                                             and sp.size > 1.3 * main)), default=0) \
-                or max(sp.size for sp in row)
-            # what counts as smaller type: symbols of a maths font can be set larger than the text around
-            # them (ϕ at 9.7 pt in 8 pt text), which must not turn that text into superscript
-            on_line = [sp for sp in row if abs(sp.baseline - baseline) < 0.1 * sp.size]
-            line_sizes = Counter()
-            for sp in on_line:
-                line_sizes[round(sp.size, 1)] += len(sp.text.strip())
-            line_main = line_sizes.most_common(1)[0][0] if line_sizes else max_size
-            ref_size = max((sp.size for sp in on_line if sp.size <= 1.15 * line_main), default=0) or max_size
-            prev: Optional[_Span] = None
-            prev_math = False
-            accents = [sp for sp in row if _is_accent(sp)]
-            row = [sp for sp in row if not _is_accent(sp)] or row
-            positions: list[tuple[int, float]] = []  # (index in text, x centre) of each character
-            right_edge = 0.0  # rightmost ink so far (stacked indices end at different points)
-            inline_images: dict[str, ImageData] = {}
-            stack_of: dict[int, int] = {}
-            stacks = _stacks(row, rules, baseline, max_size) if any(is_math_font(sp.font) for sp in row) else []
-            for k, (_r, members, _t) in enumerate(stacks):
-                for sp in members:
-                    stack_of[id(sp)] = k
-            emitted: set[int] = set()
-            row = _group_scripts(row, baseline, ref_size, stack_of)
-            for sp in row:
-                if id(sp) in stack_of:
-                    k = stack_of[id(sp)]
-                    if k in emitted:
-                        continue
-                    emitted.add(k)
-                    rect, members, alt = stacks[k]
-                    # tight above and below: the neighbouring lines' letters come close to a fraction
-                    clip = pymupdf.Rect(rect[0] - 0.8, rect[1] - 0.2, rect[2] + 0.8, rect[3] + 0.2)
-                    try:
-                        pix = page.get_pixmap(clip=clip, dpi=EQUATION_DPI, alpha=True)
-                    except Exception:
-                        pix = None
-                    if pix is None:
-                        continue
-                    ph = new_placeholder()
-                    inline_images[ph] = ImageData(pix.tobytes("png"), "png", pix.width, pix.height, kind="inline-math",
-                                                  alt=alt, text_size=float(max_size), descent=clip.y1 - baseline,
-                                                  width_pt=clip.width)
-                    if text and not text[-1].isspace() and rect[0] - right_edge > max_size * 0.15:
-                        text += " "
-                    styles.append(StyleRange(len(text), len(text) + 1, math=True))
-                    text += ph
-                    positions.append((len(text) - 1, (rect[0] + rect[2]) / 2))
-                    prev, prev_math = sp, True
-                    right_edge = max(right_edge, rect[2])
+    for row in _rows(spans, rules):
+        bno = Counter(sp.block_no for sp in row).most_common(1)[0][0]
+        full = [sp for sp in row if sp.size >= max(o.size for o in row) * 0.85]
+        weights = Counter()
+        for sp in full:
+            weights[round(sp.baseline, 1)] += len(sp.text.strip()) or 1
+        baseline = weights.most_common(1)[0][0] if weights else row[0].baseline
+        text = ""
+        styles: list[StyleRange] = []
+        weighted = Counter()
+        bold_chars = italic_chars = 0
+        fonts = Counter()
+        # the text size of the row; a bullet or symbol drawn in a much larger font does not count
+        common = Counter()
+        for sp in row:
+            common[round(sp.size, 1)] += len(sp.text.strip())
+        main = common.most_common(1)[0][0] if common else 0
+        max_size = max((sp.size for sp in row if not (len(sp.text.strip()) == 1 and not sp.text.strip().isalnum()
+                                                         and sp.size > 1.3 * main)), default=0) \
+            or max(sp.size for sp in row)
+        # what counts as smaller type: symbols of a maths font can be set larger than the text around
+        # them (ϕ at 9.7 pt in 8 pt text), which must not turn that text into superscript
+        on_line = [sp for sp in row if abs(sp.baseline - baseline) < 0.1 * sp.size]
+        line_sizes = Counter()
+        for sp in on_line:
+            line_sizes[round(sp.size, 1)] += len(sp.text.strip())
+        line_main = line_sizes.most_common(1)[0][0] if line_sizes else max_size
+        ref_size = max((sp.size for sp in on_line if sp.size <= 1.15 * line_main), default=0) or max_size
+        prev: Optional[_Span] = None
+        prev_math = False
+        accents = [sp for sp in row if _is_accent(sp)]
+        row = [sp for sp in row if not _is_accent(sp)] or row
+        positions: list[tuple[int, float]] = []  # (index in text, x centre) of each character
+        right_edge = 0.0  # rightmost ink so far (stacked indices end at different points)
+        inline_images: dict[str, ImageData] = {}
+        stack_of: dict[int, int] = {}
+        stacks = _stacks(row, rules, baseline, max_size) if any(is_math_font(sp.font) for sp in row) else []
+        for k, (_r, members, _t) in enumerate(stacks):
+            for sp in members:
+                stack_of[id(sp)] = k
+        emitted: set[int] = set()
+        row = _group_scripts(row, baseline, ref_size, stack_of)
+        for sp in row:
+            if id(sp) in stack_of:
+                k = stack_of[id(sp)]
+                if k in emitted:
                     continue
-                math_font = is_math_font(sp.font)
-                t = math_text(sp.font, sp.text) if math_font else sp.text
+                emitted.add(k)
+                rect, members, alt = stacks[k]
+                # tight above and below: the neighbouring lines' letters come close to a fraction
+                clip = pymupdf.Rect(rect[0] - 0.8, rect[1] - 0.2, rect[2] + 0.8, rect[3] + 0.2)
+                try:
+                    pix = page.get_pixmap(clip=clip, dpi=EQUATION_DPI, alpha=True)
+                except Exception:
+                    pix = None
+                if pix is None:
+                    continue
+                ph = new_placeholder()
+                inline_images[ph] = ImageData(pix.tobytes("png"), "png", pix.width, pix.height, kind="inline-math",
+                                              alt=alt, text_size=float(max_size), descent=clip.y1 - baseline,
+                                              width_pt=clip.width)
+                if text and not text[-1].isspace() and rect[0] - right_edge > max_size * 0.15:
+                    text += " "
+                styles.append(StyleRange(len(text), len(text) + 1, math=True))
+                text += ph
+                positions.append((len(text) - 1, (rect[0] + rect[2]) / 2))
+                prev, prev_math = sp, True
+                right_edge = max(right_edge, rect[2])
+                continue
+            math_font = is_math_font(sp.font)
+            t = math_text(sp.font, sp.text) if math_font else sp.text
+            if not t:
+                continue
+            small = sp.size < ref_size * 0.85
+            # position decides (PyMuPDF's own superscript flag also marks some full-size commas)
+            sup = small and (sp.baseline < baseline - 0.12 * max_size or
+                             (bool(sp.flags & 1) and sp.baseline < baseline + 0.02 * max_size))
+            sub = small and not sup and sp.baseline > baseline + 0.08 * max_size
+            if sup or sub:
+                t = t.strip()  # "W" + " K" (an index) is W^K, not "W K"
                 if not t:
                     continue
-                small = sp.size < ref_size * 0.85
-                # position decides (PyMuPDF's own superscript flag also marks some full-size commas)
-                sup = small and (sp.baseline < baseline - 0.12 * max_size or
-                                 (bool(sp.flags & 1) and sp.baseline < baseline + 0.02 * max_size))
-                sub = small and not sup and sp.baseline > baseline + 0.08 * max_size
-                if sup or sub:
-                    t = t.strip()  # "W" + " K" (an index) is W^K, not "W K"
-                    if not t:
-                        continue
-                gap = sp.x0 - right_edge if prev is not None else 0
-                math = math_font or (not tex_body and bool(TEX_TEXT_FONT_RE.match(_font_family(sp.font)))) \
-                    or ((sup or sub) and prev_math and gap < 0.2 * max_size)
-                # word-per-span layers carry no spaces; formulas and scripts are spaced by position
-                if prev is not None and text and not text[-1].isspace() and not t[0].isspace() \
-                        and gap > max_size * (0.2 if (sup or sub) else 0.15):
-                    text += " "
-                elif text[-1:] in (",", ";") and t[0].isalpha() and not (sup or sub) and len(text) > 1 \
-                        and not text[-2].isdigit():
-                    text += " "  # "∈ ℝ^h, b": the space after a comma is not always stored as a gap
-                start = len(text)
-                text += t
-                step = (sp.x1 - sp.x0) / max(1, len(t))
-                positions += [(start + k, sp.x0 + step * (k + 0.5)) for k, c in enumerate(t) if not c.isspace()]
-                bold = _is_bold_font(sp.font, sp.flags) or bool(re.match(r"^(CMBX|CMMIB|CMBSY)", base_font(sp.font)))
-                italic = _is_italic_font(sp.font, sp.flags) or (is_math_italic(sp.font) and any(c.isalpha() for c in t))
-                n = len(t.strip())
-                if not (sup or sub):
-                    weighted[round(sp.size, 1)] += n
-                bold_chars += n if bold else 0
-                italic_chars += n if italic else 0
-                fonts[sp.font] += n
-                if bold or italic or sup or sub or math:
-                    styles.append(StyleRange(start, len(text), bold, italic, sup, sub, math))
-                prev, prev_math = sp, math or (prev_math and (sup or sub))
-                right_edge = max(right_edge, sp.x1)
-            # accents: a combining mark after the letter underneath (x̂, h̃)
-            for acc in sorted(accents, key=lambda a: -(a.x0 + a.x1) / 2):
-                if acc in row or not positions:
-                    continue
-                cx = (acc.x0 + acc.x1) / 2
-                idx, x = min(positions, key=lambda p: abs(p[1] - cx))
-                if abs(x - cx) > max(4.0, acc.size * 0.6):
-                    continue
-                mark = ACCENTS.get(acc.text.strip()[0], "")
-                if not mark:
-                    continue
-                k = idx + 1
-                text = text[:k] + mark + text[k:]
-                styles = [st.moved(0, st.start + (1 if st.start >= k else 0), st.end + (1 if st.end >= k else 0))
-                          for st in styles]
-                positions = [(i + 1 if i >= k else i, px) for i, px in positions]
-            stripped = text.strip()
-            if not stripped:
+            gap = sp.x0 - right_edge if prev is not None else 0
+            math = math_font or (not tex_body and bool(TEX_TEXT_FONT_RE.match(_font_family(sp.font)))) \
+                or ((sup or sub) and prev_math and gap < 0.2 * max_size)
+            # word-per-span layers carry no spaces; formulas and scripts are spaced by position
+            if prev is not None and text and not text[-1].isspace() and not t[0].isspace() \
+                    and gap > max_size * (0.2 if (sup or sub) else 0.15):
+                text += " "
+            elif text[-1:] in (",", ";") and t[0].isalpha() and not (sup or sub) and len(text) > 1 \
+                    and not text[-2].isdigit():
+                text += " "  # "∈ ℝ^h, b": the space after a comma is not always stored as a gap
+            start = len(text)
+            text += t
+            step = (sp.x1 - sp.x0) / max(1, len(t))
+            positions += [(start + k, sp.x0 + step * (k + 0.5)) for k, c in enumerate(t) if not c.isspace()]
+            bold = _is_bold_font(sp.font, sp.flags) or bool(re.match(r"^(CMBX|CMMIB|CMBSY)", base_font(sp.font)))
+            italic = _is_italic_font(sp.font, sp.flags) or (is_math_italic(sp.font) and any(c.isalpha() for c in t))
+            n = len(t.strip())
+            if not (sup or sub):
+                weighted[round(sp.size, 1)] += n
+            bold_chars += n if bold else 0
+            italic_chars += n if italic else 0
+            fonts[sp.font] += n
+            if bold or italic or sup or sub or math:
+                styles.append(StyleRange(start, len(text), bold, italic, sup, sub, math))
+            prev, prev_math = sp, math or (prev_math and (sup or sub))
+            right_edge = max(right_edge, sp.x1)
+        # accents: a combining mark after the letter underneath (x̂, h̃)
+        for acc in sorted(accents, key=lambda a: -(a.x0 + a.x1) / 2):
+            if acc in row or not positions:
                 continue
-            # TeX's older fonts write "ö" as a spacing ¨ before the o: join them into one letter
-            for m in reversed(list(SPACING_ACCENT_RE.finditer(text))):
-                accent, base = [g for g in m.groups() if g]
-                letter = unicodedata.normalize("NFC", base + SPACING_ACCENTS[accent])
-                text, styles = _replace_run(text, styles, m.start(), m.end(), letter)
-            leader = LEADER_RE.search(text)
-            if leader:  # "2.1. Results . . . . . . . 12" (a printed table of contents): one short leader
-                text, styles = _replace_run(text, styles, leader.start(), leader.end(), " … ")
-            if re.fullmatch(r"(?:\S ){4,}\S", stripped) and stripped.replace(" ", "").isalpha() \
-                    and (stripped.isupper() or len(stripped) >= 15) \
-                    and not any(st.math or st.superscript or st.subscript for st in styles) \
-                    and not any(is_math_font(sp.font) for sp in row):
-                text, styles = _unspace(text, styles, positions,
-                                        [(sp.x0, sp.x1) for sp in row if len(sp.text.strip()) == 1])
-            lead = len(text) - len(text.lstrip())
-            text = text.strip()
-            styles = [st.moved(-lead, max(lead, st.start), min(len(text) + lead, st.end))
-                      for st in styles if st.end - lead > 0 and st.start - lead < len(text)]
-            total = max(1, len(re.sub(r"\s", "", text)))
-            size = weighted.most_common(1)[0][0] if weighted else max_size or 10.0
-            bbox = (min(sp.bbox[0] for sp in row), min(sp.bbox[1] for sp in row),
-                    max(sp.bbox[2] for sp in row), max(sp.bbox[3] for sp in row))
-            lines.append(RawLine(
-                text=text, bbox=bbox, size=float(size), page=pno, block_no=bno,
-                styles=styles, bold=bold_chars / total > 0.6, italic=italic_chars / total > 0.6,
-                font=fonts.most_common(1)[0][0] if fonts else "", baseline=baseline,
-                inline_images=inline_images,
-            ))
+            cx = (acc.x0 + acc.x1) / 2
+            idx, x = min(positions, key=lambda p: abs(p[1] - cx))
+            if abs(x - cx) > max(4.0, acc.size * 0.6):
+                continue
+            mark = ACCENTS.get(acc.text.strip()[0], "")
+            if not mark:
+                continue
+            k = idx + 1
+            text = text[:k] + mark + text[k:]
+            styles = [st.moved(0, st.start + (1 if st.start >= k else 0), st.end + (1 if st.end >= k else 0))
+                      for st in styles]
+            positions = [(i + 1 if i >= k else i, px) for i, px in positions]
+        stripped = text.strip()
+        if not stripped:
+            continue
+        # TeX's older fonts write "ö" as a spacing ¨ before the o: join them into one letter
+        for m in reversed(list(SPACING_ACCENT_RE.finditer(text))):
+            accent, base = [g for g in m.groups() if g]
+            letter = unicodedata.normalize("NFC", base + SPACING_ACCENTS[accent])
+            text, styles = _replace_run(text, styles, m.start(), m.end(), letter)
+        leader = LEADER_RE.search(text)
+        if leader:  # "2.1. Results . . . . . . . 12" (a printed table of contents): one short leader
+            text, styles = _replace_run(text, styles, leader.start(), leader.end(), " … ")
+        if re.fullmatch(r"(?:\S ){4,}\S", stripped) and stripped.replace(" ", "").isalpha() \
+                and (stripped.isupper() or len(stripped) >= 15) \
+                and not any(st.math or st.superscript or st.subscript for st in styles) \
+                and not any(is_math_font(sp.font) for sp in row):
+            text, styles = _unspace(text, styles, positions,
+                                    [(sp.x0, sp.x1) for sp in row if len(sp.text.strip()) == 1])
+        lead = len(text) - len(text.lstrip())
+        text = text.strip()
+        styles = [st.moved(-lead, max(lead, st.start), min(len(text) + lead, st.end))
+                  for st in styles if st.end - lead > 0 and st.start - lead < len(text)]
+        total = max(1, len(re.sub(r"\s", "", text)))
+        size = weighted.most_common(1)[0][0] if weighted else max_size or 10.0
+        bbox = (min(sp.bbox[0] for sp in row), min(sp.bbox[1] for sp in row),
+                max(sp.bbox[2] for sp in row), max(sp.bbox[3] for sp in row))
+        lines.append(RawLine(
+            text=text, bbox=bbox, size=float(size), page=pno, block_no=bno,
+            styles=styles, bold=bold_chars / total > 0.6, italic=italic_chars / total > 0.6,
+            font=fonts.most_common(1)[0][0] if fonts else "", baseline=baseline,
+            inline_images=inline_images,
+        ))
     return _merge_same_baseline(lines)
 
 

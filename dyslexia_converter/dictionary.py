@@ -69,10 +69,6 @@ def _load() -> dict:
     return _data
 
 
-def has_dictionary(language: str) -> bool:
-    """Whether meanings can be looked up on this device for a language (English only, for now)."""
-    return language == "en" and DATA.exists()
-
 
 def _bases(word: str) -> list[tuple[str, str]]:
     """Possible dictionary forms of an English word, with the part of speech they would be."""

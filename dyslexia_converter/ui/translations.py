@@ -96,12 +96,6 @@ T: dict[str, dict[str, str]] = {
         'de': 'Rosa',
         'es': 'Rosa',
         'it': 'Rosa'},
-    'Tip: click on the converted page to start reading there.': {
-        'nl': 'Tip: klik op de omgezette pagina om daar te beginnen met voorlezen.',
-        'fr': 'Astuce : cliquez sur la page convertie pour commencer la lecture à cet endroit.',
-        'de': 'Tipp: Klicken Sie auf die umgewandelte Seite, um dort mit dem Vorlesen zu beginnen.',
-        'es': 'Consejo: haz clic en la página convertida para empezar a leer desde allí.',
-        'it': 'Suggerimento: fai clic sulla pagina convertita per iniziare a leggere da lì.'},
     'No {language} voice is installed on this computer, so another voice reads the text. You can add one in Windows Settings > Time & language > Speech > Add voices, then restart the app.': {
         'nl': 'Er is geen stem voor het {language} geïnstalleerd op deze computer, dus een andere stem leest de tekst. Je kunt er een toevoegen via Windows-instellingen > Tijd en taal > Spraak > Stemmen toevoegen, en daarna de app opnieuw starten.',
         'fr': "Aucune voix en {language} n'est installée sur cet ordinateur ; une autre voix lit donc le texte. Vous pouvez en ajouter une dans Paramètres Windows > Heure et langue > Voix > Ajouter des voix, puis redémarrer l'appli.",
@@ -206,12 +200,6 @@ T: dict[str, dict[str, str]] = {
         'de': 'Auf diesen Seiten gibt es keinen Text zum Vorlesen.',
         'es': 'No hay texto para leer en estas páginas.',
         'it': "Non c'è testo da leggere in queste pagine."},
-    'Reads the converted document aloud with the voices on this computer, from the page you are looking at. Nothing leaves this device.': {
-        'nl': 'Leest het omgezette document voor met de stemmen op deze computer, vanaf de pagina die je bekijkt. Er verlaat niets dit apparaat.',
-        'fr': 'Lit le document converti à voix haute avec les voix de cet ordinateur, à partir de la page affichée. Rien ne quitte cet appareil.',
-        'de': 'Liest das umgewandelte Dokument mit den Stimmen dieses Computers vor, ab der angezeigten Seite. Nichts verlässt dieses Gerät.',
-        'es': 'Lee en voz alta el documento convertido con las voces de este ordenador, desde la página que estás viendo. Nada sale de este dispositivo.',
-        'it': 'Legge ad alta voce il documento convertito con le voci di questo computer, dalla pagina che stai guardando. Nulla lascia questo dispositivo.'},
     # ---------------------------------------------------------------- AI privacy log and preview
     'Answer received': {
         'nl': 'Ontvangen antwoord',

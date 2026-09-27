@@ -16,7 +16,6 @@ import re
 import uuid
 import zipfile
 from pathlib import Path
-from typing import Optional
 from xml.sax.saxutils import escape, unescape
 
 from ..fonts import get_family

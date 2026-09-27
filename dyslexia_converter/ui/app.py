@@ -129,11 +129,6 @@ class ConverterApp:
                                           duration=ft.Duration(seconds=6 if error else 4)))
 
     # ---------------------------------------------------------------- notices
-    def set_notices(self, notices: list[tuple[str, str, Optional[tuple[str, Callable]]]]) -> None:
-        """Show (kind, message, optional (button label, handler)) notices below the header."""
-        self._notices = list(notices)
-        self._render_notices()
-
     def _render_notices(self) -> None:
         """Show the notices (warnings, information, actions such as "review corrections") in the notices panel."""
         items = getattr(self, "_notices", [])

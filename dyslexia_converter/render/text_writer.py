@@ -43,8 +43,8 @@ def build_text(result: ComposeResult) -> str:
     return "\n\n".join(x for x in out if x) + "\n"
 
 
-def _md_runs(item: RItem, bionic: bool = True) -> str:
-    """An item's text as Markdown (bold, italic, indices; ``bionic`` keeps bold word starts)."""
+def _md_runs(item: RItem) -> str:
+    """An item's text as Markdown (bold, italic, indices)."""
     parts = []
     for r in item.runs:
         t = _unpack(r.text).replace("*", "\\*").replace("_", "\\_")

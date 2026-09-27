@@ -47,12 +47,9 @@ class ConsentRequired(Exception):
 
 @dataclass
 class UsageEntry:
-    """What one AI task used: how many items, how many characters were sent, whether it came from the cache, and the
-    tokens.
-    """
+    """What one AI task used: how many items, whether it came from the cache, and the tokens."""
     task: str
     items: int
-    chars_sent: int
     cached: bool
     input_tokens: int = 0
     output_tokens: int = 0
@@ -233,7 +230,7 @@ class AIAssistant:
         entry.input_tokens, entry.output_tokens = reply.input_tokens, reply.output_tokens
         entry.cached_tokens = reply.cached_tokens
         self.log.add(entry)
-        self.usage.append(UsageEntry(request.task.name, len(request.keys), entry.chars, False,
+        self.usage.append(UsageEntry(request.task.name, len(request.keys), False,
                                      reply.input_tokens, reply.output_tokens))
         return reply
 
@@ -243,7 +240,7 @@ class AIAssistant:
         """Decide for each candidate whether it is a citation. Returns candidate key -> is_citation."""
         requests, decisions = self.plan_citations(candidates)
         if decisions:
-            self.usage.append(UsageEntry("citations", len(decisions), 0, True))
+            self.usage.append(UsageEntry("citations", len(decisions), True))
         for n, req in enumerate(requests):
             if progress:
                 progress("Asking AI about uncertain citations", n / max(1, len(requests)))
@@ -264,7 +261,7 @@ class AIAssistant:
         """
         requests, known = self.plan_ocr(items)
         if known:
-            self.usage.append(UsageEntry("ocr", len(known), 0, True))
+            self.usage.append(UsageEntry("ocr", len(known), True))
         for i, verdict in known.items():
             _apply_ocr(items[i][0], verdict)
         for n, req in enumerate(requests):

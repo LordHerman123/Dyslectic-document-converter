@@ -10,7 +10,6 @@ order, plus the document language and the "this PDF is tagged" flag. Inline form
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 import pymupdf
 

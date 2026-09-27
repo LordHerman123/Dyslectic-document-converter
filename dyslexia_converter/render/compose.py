@@ -62,12 +62,11 @@ class RItem:
 
 @dataclass
 class ComposeResult:
-    """The composed document: its items, the headings for the contents, citation statistics, the language of added
+    """The composed document: its items, the headings for the contents, uncertain citations, the language of added
     words, inline formula pictures, and which original page each block came from.
     """
     items: list[RItem]
     headings: list[tuple[int, str]]  # (level, text) for the document map
-    citation_count: int = 0
     uncertain_citations: list[tuple[str, Citation]] = field(default_factory=list)
     language: str = "en"  # language of the words the converter adds (Contents, Notes, ...)
     inline_images: dict[str, ImageData] = field(default_factory=dict)  # small formulas inside the text
@@ -353,7 +352,7 @@ def compose(doc: Document, settings: FormatSettings, ai_citation_decisions: Opti
     if settings.about_note:
         items.append(RItem("about", [Run(_about_text(doc, settings, bool(citation_numbers)))]))
 
-    return ComposeResult(items, headings, len(citation_numbers), uncertain, lang, dict(doc.inline_images),
+    return ComposeResult(items, headings, uncertain, lang, dict(doc.inline_images),
                          {b.id: _physical_page(doc, b.page) for b in doc.blocks})
 
 
