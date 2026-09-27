@@ -19,6 +19,7 @@ import flet as ft
 from .. import dictionary
 from .. import highlights as hl
 from ..fonts import FONT_CHOICES
+from ..ai.providers import PROVIDERS
 from ..render import preview
 from ..speech import sentence_at
 
@@ -96,6 +97,12 @@ class FocusMode:
         self._paragraphs: list[tuple[int, int]] = []
         self._more = False  # the selection toolbar shows Select and Start / End
         self._pen_drag = False  # a selection being made with a mouse or pen
+        self._ai_scope = "page"  # what the AI summary is of: page, section, selection or document
+        self._ai_result = None  # (summary, first word, last word)
+        self._ai_busy = False
+        self._ai_error = ""
+        self._last_sel: Optional[tuple[int, int]] = None
+        self._toc_starts: list[int] = []  # first word of every heading in the converted document
         self._notes_only = False
         self._colour_filter: set[str] = set()
         self.bars_hidden = False
@@ -183,7 +190,7 @@ class FocusMode:
             ft.IconButton(ft.Icons.CLOSE, tooltip=t("Leave focus mode"), on_click=self.on_close),
             ft.Container(width=4),
             self.read_toggle, self.settings_toggle, self.view_toggle, self.mark_toggle, self.swatches,
-            self.ruler_toggle, self.notes_toggle,
+            self.ruler_toggle, self.notes_toggle, self._ai_button(),
             ft.Container(expand=True),
             self.page_label,
             app.build_export_menu(compact=True),
@@ -342,6 +349,7 @@ class FocusMode:
         self.words = hl.document_words(units)
         self._sentences = hl.sentence_spans(self.words)
         self._paragraphs = hl.paragraph_spans(self.words)
+        self._toc_starts = await app.in_thread(self._heading_starts)
         self._lines = {}
         page_bg = TINT_COLOURS.get(self.tint, TINT_COLOURS["white"])[0]
         self.images, self.frames, self.detectors = [], [], []
@@ -1035,6 +1043,8 @@ class FocusMode:
             btn(ft.Icons.STICKY_NOTE_2_OUTLINED, t("Note"), lambda e: app.page.run_task(self.open_note, a, b),
                 tip=t("Add or edit a note (N)")),
             btn(ft.Icons.VOLUME_UP, t("Read"), lambda e: app.say_word(text), visible=app._speech_allowed()),
+            btn(ft.Icons.SMART_TOY_OUTLINED, t("Summarise"), lambda e: app.page.run_task(self.summarise_selection, a, b),
+                visible=self._ai_on() and b - a >= 15, tip=t("AI summary of the selection")),
             btn(ft.Icons.MENU_BOOK_OUTLINED, t("Meaning"), lambda e: app.page.run_task(
                 self.open_card, self.words[a][0], a), visible=a == b),
             btn(ft.Icons.DELETE_OUTLINE, t("Remove"), lambda e: app.page.run_task(self.unmark, a, b),
@@ -1229,16 +1239,256 @@ class FocusMode:
         await self.close_card()
         self._offer_undo(self.app.t("Highlight removed"), before)
 
+    # ------------------------------------------------------------------ AI summary (only when AI is on)
+    def _ai_on(self) -> bool:
+        """Whether AI summaries can be made: AI-assisted mode, the privacy notice accepted, and a key."""
+        s = self.app.ai_settings
+        return s.mode == "ai_assisted" and s.consent_given and self.app.assistant.has_key
+
+    def _ai_button(self) -> ft.IconButton:
+        """The robot button (the icon of the AI settings tab): the summary panel, or greyed out while AI is off."""
+        t = self.app.t
+        on = self._ai_on()
+        self.ai_toggle = ft.IconButton(ft.Icons.SMART_TOY_OUTLINED, on_click=self.on_ai_button,
+                                       tooltip=t("AI summary") if on else t("AI summary (AI is off)"),
+                                       icon_color=None if on else "#9E9E9E", style=self._toggle_style())
+        return self.ai_toggle
+
+    async def on_ai_button(self, e) -> None:
+        """The robot button: open or close the summary panel, or explain how to switch AI on."""
+        if not self._ai_on():
+            self._ai_off_dialog()
+            return
+        if self.sel:
+            self._last_sel = self.sel
+        self._open_side("ai" if self._side_mode != "ai" else None)
+
+    def _ai_off_dialog(self) -> None:
+        """AI is off: say what AI summaries need, with a way to the AI settings."""
+        app, t = self.app, self.app.t
+
+        async def open_settings(e):
+            """Leave focus mode and show the AI settings tab."""
+            app.page.pop_dialog()
+            await self.close()
+            app.tabs.selected_index = app.ai_tab_index
+            app.page.update()
+
+        app.page.show_dialog(ft.AlertDialog(
+            title=ft.Row([ft.Icon(ft.Icons.SMART_TOY_OUTLINED, color="#9E9E9E"),
+                          ft.Text(t("AI summaries are off"), size=app.fs(18))], spacing=10),
+            content=ft.Text(t("To get a summary of a page, section or selection, switch on AI-assisted mode in AI "
+                              "settings. Nothing is sent to an AI provider until you do."), size=app.fs(14),
+                            width=380),
+            actions=[ft.TextButton(t("Not now"), on_click=lambda e: app.page.pop_dialog()),
+                     ft.FilledButton(t("Open AI settings"), icon=ft.Icons.SETTINGS, on_click=open_settings)]))
+
+    def _heading_starts(self) -> list[int]:
+        """The first word of every heading in the converted document (from its bookmarks), for "this section"."""
+        import pymupdf
+
+        try:
+            with pymupdf.open(stream=self.app.converted_pdf, filetype="pdf") as d:
+                toc = d.get_toc()
+        except Exception:
+            return []
+        starts = []
+        for _, title, page in toc:
+            target = [w.lower() for w in title.split()[:3]]
+            if not target:
+                continue
+            for n, (p, text, _) in enumerate(self.words):
+                if p == page - 1 and [x[1].lower() for x in self.words[n:n + len(target)]] == target:
+                    starts.append(n)
+                    break
+        return sorted(set(starts))
+
+    def _scope_span(self, scope: str) -> Optional[tuple[int, int]]:
+        """The words the summary is of: the current page, the section around it, the selection, or everything."""
+        if not self.words:
+            return None
+        on_page = [n for n, w in enumerate(self.words) if w[0] == self.current]
+        if scope == "document":
+            return 0, len(self.words) - 1
+        if scope == "selection":
+            return self.sel or self._last_sel
+        if scope == "section":
+            here = on_page[0] if on_page else 0
+            start = max([s for s in self._toc_starts if s <= here], default=0)
+            end = min([s for s in self._toc_starts if s > here], default=len(self.words)) - 1
+            return start, end
+        return (on_page[0], on_page[-1]) if on_page else None
+
+    def _ai_panel(self) -> ft.Control:
+        """The summary panel: what to summarise, length, plain language, what will be sent, and the summary."""
+        app, t = self.app, self.app.t
+        ui = app.ui
+        chips = [ft.Chip(label=ft.Text(t(label)), data=key, selected=self._ai_scope == key,
+                         on_select=self.on_ai_scope,
+                         disabled=key == "selection" and not (self.sel or self._last_sel))
+                 for key, label in (("page", "This page"), ("section", "This section"),
+                                    ("selection", "Selection"), ("document", "Whole document"))]
+        rows: list[ft.Control] = [
+            ft.Row([ft.Icon(ft.Icons.SMART_TOY_OUTLINED, color=ft.Colors.PRIMARY),
+                    ft.Text(t("AI summary"), size=app.fs(16), weight=ft.FontWeight.BOLD, expand=True),
+                    ft.IconButton(ft.Icons.CLOSE, tooltip=t("Close"), on_click=lambda e: self._open_side(None))]),
+            app.text(t("Summarise"), 12, color=ft.Colors.ON_SURFACE_VARIANT),
+            ft.Row(chips, wrap=True, spacing=6),
+            ft.Row([app.text(t("Length"), 12, color=ft.Colors.ON_SURFACE_VARIANT),
+                    ft.SegmentedButton(segments=[ft.Segment("short", label=ft.Text(t("Short"))),
+                                                 ft.Segment("detailed", label=ft.Text(t("Detailed")))],
+                                       selected=["detailed" if ui.get("ai_summary_detailed") else "short"],
+                                       on_change=self.on_ai_length)], spacing=10),
+            ft.Switch(label=t("Plain language (short sentences, easy words)"),
+                      value=bool(ui.get("ai_summary_plain", True)), on_change=self.on_ai_plain,
+                      label_text_style=ft.TextStyle(size=app.fs(13))),
+        ]
+        span = self._scope_span(self._ai_scope)
+        words = (span[1] - span[0] + 1) if span else 0
+        provider = PROVIDERS.get(app.ai_settings.provider)
+        where = f"{provider.label if provider else app.ai_settings.provider}"
+        model = app.ai_settings.model or (provider.default_model if provider else "")
+        rows.append(ft.Container(ft.Row([
+            ft.Icon(ft.Icons.CLOUD_UPLOAD_OUTLINED, size=18, color="#8A5A00"),
+            ft.Text(t("About {n} words will be sent to {provider} ({model}). Every request is recorded in the "
+                      "privacy log.", n=words, provider=where, model=model), size=app.fs(12), expand=True,
+                    color="#4A3A10")], vertical_alignment=ft.CrossAxisAlignment.START),
+            bgcolor="#FFF3D6", border_radius=8, padding=10))
+        busy = ft.Row([ft.ProgressRing(width=18, height=18, stroke_width=2), app.text(t("Summarising..."), 13)],
+                      visible=self._ai_busy)
+        rows += [ft.FilledButton(t("Summarise"), icon=ft.Icons.SMART_TOY_OUTLINED, on_click=self.run_summary,
+                                 disabled=self._ai_busy or not words), busy]
+        if self._ai_error:
+            rows.append(ft.Text(self._ai_error, size=app.fs(13), color=ft.Colors.ERROR))
+        if self._ai_result:
+            summary, a, b = self._ai_result
+            rows += [ft.Divider(height=10), self._ai_warning()]
+            if summary.title:
+                rows.append(ft.Text(summary.title, size=app.fs(15), weight=ft.FontWeight.BOLD, selectable=True))
+            rows += [ft.Row([ft.Text("•", size=app.fs(15)), ft.Text(p, size=app.fs(14), expand=True,
+                                                                        selectable=True)],
+                            vertical_alignment=ft.CrossAxisAlignment.START) for p in summary.points]
+            text = self._summary_text(summary)
+            rows.append(ft.Row([
+                ft.TextButton(t("Copy"), icon=ft.Icons.CONTENT_COPY,
+                              on_click=lambda e: app.page.run_task(self._copy_text, text)),
+                ft.TextButton(t("Read aloud"), icon=ft.Icons.VOLUME_UP, visible=app._speech_allowed(),
+                              on_click=lambda e: app.say_word(text)),
+                ft.TextButton(t("Save as note"), icon=ft.Icons.STICKY_NOTE_2_OUTLINED,
+                              on_click=lambda e: app.page.run_task(self.save_summary_note))], spacing=0, wrap=True))
+        return ft.Column(rows, spacing=10, scroll=ft.ScrollMode.AUTO, expand=True)
+
+    def _ai_warning(self) -> ft.Control:
+        """The notice on every summary that AI can make mistakes: amber card with an accent bar and an icon."""
+        app, t = self.app, self.app.t
+        return ft.Container(ft.Row([
+            ft.Container(width=4, height=40, bgcolor="#E0A100", border_radius=2),
+            ft.Icon(ft.Icons.WARNING_AMBER_ROUNDED, color="#B77900", size=22),
+            ft.Column([ft.Text(t("Made by AI"), size=app.fs(13), weight=ft.FontWeight.BOLD, color="#5C4200"),
+                       ft.Text(t("AI can make mistakes. Check the summary against the text before you use it."),
+                               size=app.fs(12), color="#5C4200")], spacing=2, tight=True, expand=True),
+        ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            bgcolor="#FFF4D6", border=ft.Border.all(1, "#F1D48A"), border_radius=10,
+            padding=ft.Padding.only(left=0, right=12, top=10, bottom=10), clip_behavior=ft.ClipBehavior.HARD_EDGE)
+
+    @staticmethod
+    def _summary_text(summary) -> str:
+        """A summary as plain text (title, then one point per line)."""
+        lines = [summary.title] if summary.title else []
+        return "\n".join(lines + [f"- {p}" for p in summary.points])
+
+    def on_ai_scope(self, e) -> None:
+        """A scope chip: summarise this page, this section, the selection or the whole document."""
+        self._ai_scope = e.control.data
+        self._open_side("ai")
+
+    def on_ai_length(self, e) -> None:
+        """Short or Detailed (remembered)."""
+        self._save("ai_summary_detailed", "detailed" in (e.control.selected or []))
+
+    def on_ai_plain(self, e) -> None:
+        """Plain language on or off (remembered)."""
+        self._save("ai_summary_plain", bool(e.control.value))
+
+    async def summarise_selection(self, a: int, b: int) -> None:
+        """"Summarise" on the selection toolbar: open the summary panel for the selection."""
+        self._last_sel = (a, b)
+        self._ai_scope = "selection"
+        await self.close_card()
+        self._open_side("ai")
+
+    async def run_summary(self, e=None) -> None:
+        """Send the chosen text for a summary (in a thread) and show it."""
+        from ..ai.assistant import ConsentRequired
+        from ..ai.providers import AIError
+
+        app, t = self.app, self.app.t
+        span = self._scope_span(self._ai_scope)
+        if not span:
+            return
+        a, b = span
+        language = app.session.document.language if app.session else "en"
+        self._ai_busy, self._ai_error = True, ""
+        self._open_side("ai")
+        try:
+            summary = await app.in_thread(app.assistant.summarise, hl.text_of(self.words, a, b), language,
+                                          bool(app.ui.get("ai_summary_detailed")),
+                                          bool(app.ui.get("ai_summary_plain", True)))
+            self._ai_result = (summary, a, b)
+        except ConsentRequired:
+            self._ai_error = t("AI is off. Choose 'AI-assisted' in AI settings to use it.")
+        except AIError as ex:
+            self._ai_error = t.message(str(ex))
+        except Exception as ex:  # a network problem: say so, the document is unchanged
+            self._ai_error = t("The summary could not be made:") + " " + type(ex).__name__
+        finally:
+            self._ai_busy = False
+        if self._side_mode == "ai":
+            self._open_side("ai")
+        app.refresh_ai_log()
+
+    async def _copy_text(self, text: str) -> None:
+        """Copy some text (the summary) to the clipboard."""
+        await self.app.clipboard.set(text)
+        self._toast(self.app.t("Copied."))
+
+    async def save_summary_note(self) -> None:
+        """Keep the summary as a note on the first sentence of the part summarised (it shows in the notes list)."""
+        if not self._ai_result:
+            return
+        summary, a, _ = self._ai_result
+        s0, s1 = hl.span_at(self._sentences, a)
+        note = self.app.t("AI summary (check it against the text):") + "\n" + self._summary_text(summary)
+        k = self._exact(s0, s1)
+        if k is None:
+            self.highlights = hl.add(self.highlights, s0, s1, "blue", self.words, note)
+        else:
+            self.highlights = hl.set_note(self.highlights, k, note)
+        await self._changed()
+        for p in self._pages_of((s0, s1)):
+            await self.redraw(p)
+        self._toast(self.app.t("Saved as a note."))
+
     # ------------------------------------------------------------------ notes and highlights panel
     def on_notes_panel(self, e) -> None:
         """The notes button: show or hide the list of highlights and notes beside the pages."""
-        open_ = self.side.content is None
-        self.notes_toggle.selected = open_
-        self.side.width = min(360.0, max(260.0, self._avail()[0] * 0.35)) if open_ else 0
-        self.side.content = self._notes_panel() if open_ else None
-        self.side.padding = 12 if open_ else 0
+        self._open_side("notes" if self._side_mode != "notes" else None)
+
+    @property
+    def _side_mode(self) -> Optional[str]:
+        """What the side panel shows now: "notes", "ai", or None when it is folded away."""
+        return self.side.data if self.side.content is not None else None
+
+    def _open_side(self, mode: Optional[str]) -> None:
+        """Show the notes list or the AI summary beside the pages (or neither)."""
+        self.notes_toggle.selected = mode == "notes"
+        self.ai_toggle.selected = mode == "ai"
+        self.side.data = mode
+        self.side.width = min(380.0, max(260.0, self._avail()[0] * 0.35)) if mode else 0
+        self.side.content = (self._notes_panel() if mode == "notes" else self._ai_panel()) if mode else None
+        self.side.padding = 12 if mode else 0
         self.app.page.update()
-        if open_:
+        if mode == "notes":
             self._refresh_notes()
 
     def _notes_panel(self) -> ft.Control:
@@ -1272,7 +1522,7 @@ class FocusMode:
 
     def _refresh_notes(self) -> None:
         """Fill the notes list with the highlights that pass the filters."""
-        if self.side.content is None:
+        if self._side_mode != "notes":
             return
         app, t = self.app, self.app.t
         items = []

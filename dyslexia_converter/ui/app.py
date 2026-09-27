@@ -247,6 +247,7 @@ class ConverterApp:
             (t("Settings"), ft.Icons.SETTINGS_OUTLINED, self.build_settings_tab()),
             (t("Help"), ft.Icons.HELP_OUTLINE, self.build_help_tab())]
         self.settings_tab_index = len(tabs) - 2
+        self.ai_tab_index = len(tabs) - 3
         self.tabs = ft.Tabs(
             length=len(tabs), selected_index=0, animation_duration=ft.Duration(milliseconds=0), expand=True,
             content=ft.Column([
@@ -785,7 +786,7 @@ class ConverterApp:
         """One privacy-log entry, expandable to show exactly what was sent and received."""
         import time
         t = self.t
-        task = t("Citations") if e.task == "citations" else t("OCR words")
+        task = {"citations": t("Citations"), "summary": t("Summary")}.get(e.task, t("OCR words"))
         stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(e.when))
         title = f"{stamp} · {task} · {e.provider} / {e.model}"
         sub = t("{items} item(s), {chars} characters of document text, {tin} tokens in, {tout} tokens out",
@@ -1072,6 +1073,8 @@ class ConverterApp:
             self.text(t("What never changes"), 16, weight=ft.FontWeight.BOLD),
             self.text(t("The author's words. The converter does not summarise, paraphrase, simplify or remove "
                         "text. Your original PDF is never modified or overwritten."), 14),
+            self.text(t("With AI-assisted mode on, Focus mode can make a summary on request. It is shown next to "
+                        "the text, marked as made by AI, and never replaces the author's words."), 14),
             self.text(t("Document language"), 16, weight=ft.FontWeight.BOLD),
             self.text(t("The language of each PDF is detected automatically from its text. If the guess is "
                         "wrong, choose the language at the top of the Convert tab."), 14),

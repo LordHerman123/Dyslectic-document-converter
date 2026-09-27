@@ -26,8 +26,8 @@ from ..model import Correction
 from ..settings import AISettings, app_data_dir
 from .keystore import KeyStore, redact
 from .log import LogEntry, RequestLog
-from .privacy import window
-from .prompts import CITATIONS, OCR, Task, citation_prompt, ocr_prompt
+from .privacy import mask, window
+from .prompts import CITATIONS, OCR, SUMMARY, Task, citation_prompt, ocr_prompt, summary_prompt
 from .providers import AIError, Reply, make_provider
 
 PRIVACY_NOTICE = (
@@ -38,6 +38,7 @@ PRIVACY_NOTICE = (
     "apply. Choose 'Local-only' at any time to keep all content on this device."
 )
 CHUNK = 30  # items per request: the fixed instructions and examples are shared by more items
+SUMMARY_WORDS = 3000  # a longer text is summarised in parts, and the parts' points summarised once more
 
 
 class ConsentRequired(Exception):
@@ -234,6 +235,48 @@ class AIAssistant:
                                      reply.input_tokens, reply.output_tokens))
         return reply
 
+    # ------------------------------------------------------------------ summaries
+    def summary_words(self, text: str) -> int:
+        """How many words a summary of ``text`` sends (to tell the user before sending)."""
+        return len(text.split())
+
+    def summarise(self, text: str, language: str = "en", detailed: bool = False, plain: bool = True,
+                  progress: Optional[Callable[[str, float], None]] = None) -> Summary:
+        """A summary of a part of the document chosen by the reader (only in AI-assisted mode, with consent).
+
+        E-mail addresses, links and long numbers are masked first. A long text is summarised in parts of about
+        SUMMARY_WORDS words, and the points of the parts are summarised once more. Answers are cached, so
+        summarising the same text again sends nothing.
+        """
+        self._provider()  # refuses when AI is off or there is no consent or key
+        parts = _summary_parts(mask(text))
+        if not parts:
+            return Summary("", [])
+        if len(parts) > 1:
+            points = []
+            for n, part in enumerate(parts):
+                if progress:
+                    progress(f"Summarising part {n + 1} of {len(parts)}", n / (len(parts) + 1))
+                s = self._summary_request(part, language, False, False)
+                points += [f"{s.title}: {p}" for p in s.points] if s.title else s.points
+            text = "\n".join(f"- {p}" for p in points)
+        else:
+            text = parts[0]
+        return self._summary_request(text, language, detailed, plain)
+
+    def _summary_request(self, text: str, language: str, detailed: bool, plain: bool) -> Summary:
+        """One summary request (or its cached answer)."""
+        prompt = summary_prompt(text, language, detailed, plain)
+        ck = self._item_key("summary", prompt)
+        hit = self.cache.get(ck)
+        if hit is None:
+            reply = self.send(Request(SUMMARY, prompt, [ck], [None]))
+            hit = {"t": str(reply.data.get("t", "")), "b": [str(p) for p in reply.data.get("b", []) if str(p).strip()]}
+            self.cache.put(ck, hit)
+        else:
+            self.usage.append(UsageEntry("summary", 1, True))
+        return Summary(hit.get("t", ""), list(hit.get("b", [])))
+
     # ------------------------------------------------------------------ tasks
     def classify_citations(self, candidates: list[tuple[str, str, int, int]],
                            progress: Optional[Callable[[str, float], None]] = None) -> dict[str, bool]:
@@ -277,6 +320,29 @@ class AIAssistant:
                 values[req.keys[i]] = verdict
                 _apply_ocr(c, verdict)
             self.cache.put_many(values)
+
+
+@dataclass
+class Summary:
+    """An AI summary: a short title and the main points."""
+    title: str
+    points: list[str]
+
+
+def _summary_parts(text: str, size: int = SUMMARY_WORDS) -> list[str]:
+    """The text in parts of about ``size`` words, cut after a sentence where possible."""
+    words = text.split()
+    parts, start = [], 0
+    while start < len(words):
+        end = min(len(words), start + size)
+        if end < len(words):  # end the part at the last full stop in its final fifth
+            for k in range(end, start + size * 4 // 5, -1):
+                if words[k - 1].endswith((".", "!", "?")):
+                    end = k
+                    break
+        parts.append(" ".join(words[start:end]))
+        start = end
+    return parts
 
 
 def _apply_ocr(c: Correction, verdict: dict) -> None:
