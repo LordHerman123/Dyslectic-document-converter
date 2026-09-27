@@ -94,6 +94,7 @@ class ConverterApp:
         self._render_task: Optional[asyncio.Task] = None
         self._controls: dict[str, ft.Control] = {}
         self.file_picker = ft.FilePicker()
+        self.clipboard = ft.Clipboard()  # "Copy" in focus mode
         install_log_redaction()
 
     # ================================================================ helpers

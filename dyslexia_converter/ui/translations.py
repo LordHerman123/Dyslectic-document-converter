@@ -1326,10 +1326,8 @@ T: dict[str, dict[str, str]] = {
     'One word later': {'nl': 'Eén woord later', 'fr': 'Un mot plus loin', 'de': 'Ein Wort später', 'es': 'Una palabra después', 'it': 'Una parola dopo'},
     'Page {n}': {'nl': 'Pagina {n}', 'fr': 'Page {n}', 'de': 'Seite {n}', 'es': 'Página {n}', 'it': 'Pagina {n}'},
     'Paragraph': {'nl': 'Alinea', 'fr': 'Paragraphe', 'de': 'Absatz', 'es': 'Párrafo', 'it': 'Paragrafo'},
-    'Read the selection': {'nl': 'De selectie voorlezen', 'fr': 'Lire la sélection', 'de': 'Die Auswahl vorlesen', 'es': 'Leer la selección', 'it': 'Leggi la selezione'},
     'Save your highlights and notes as a Word document': {'nl': 'Je markeringen en notities opslaan als Word-document', 'fr': 'Enregistrer vos surlignages et notes en document Word', 'de': 'Ihre Markierungen und Notizen als Word-Dokument speichern', 'es': 'Guardar tus resaltados y notas como documento de Word', 'it': 'Salva evidenziazioni e note come documento Word'},
     'Select': {'nl': 'Selecteren', 'fr': 'Sélectionner', 'de': 'Auswählen', 'es': 'Seleccionar', 'it': 'Seleziona'},
-    'Selected: {n} words': {'nl': 'Geselecteerd: {n} woorden', 'fr': 'Sélection : {n} mots', 'de': 'Ausgewählt: {n} Wörter', 'es': 'Seleccionado: {n} palabras', 'it': 'Selezionate: {n} parole'},
     'Sentence': {'nl': 'Zin', 'fr': 'Phrase', 'de': 'Satz', 'es': 'Frase', 'it': 'Frase'},
     'Speak your note (Windows voice typing)': {'nl': 'Je notitie inspreken (Windows-spraakinvoer)', 'fr': 'Dicter votre note (saisie vocale Windows)', 'de': 'Notiz diktieren (Windows-Spracheingabe)', 'es': 'Dictar tu nota (escritura por voz de Windows)', 'it': 'Detta la nota (digitazione vocale di Windows)'},
     'Start': {'nl': 'Begin', 'fr': 'Début', 'de': 'Anfang', 'es': 'Inicio', 'it': 'Inizio'},
@@ -1338,6 +1336,20 @@ T: dict[str, dict[str, str]] = {
     'With notes': {'nl': 'Met notities', 'fr': 'Avec notes', 'de': 'Mit Notizen', 'es': 'Con notas', 'it': 'Con note'},
     'Word': {'nl': 'Woord', 'fr': 'Mot', 'de': 'Wort', 'es': 'Palabra', 'it': 'Parola'},
     'Your note': {'nl': 'Je notitie', 'fr': 'Votre note', 'de': 'Ihre Notiz', 'es': 'Tu nota', 'it': 'La tua nota'},
+    # focus mode: selection toolbar, copy and undo (1.10)
+    '1 word': {'nl': '1 woord', 'fr': '1 mot', 'de': '1 Wort', 'es': '1 palabra', 'it': '1 parola'},
+    '{n} words': {'nl': '{n} woorden', 'fr': '{n} mots', 'de': '{n} Wörter', 'es': '{n} palabras', 'it': '{n} parole'},
+    'Add or edit a note (N)': {'nl': 'Notitie toevoegen of bewerken (N)', 'fr': 'Ajouter ou modifier une note (N)', 'de': 'Notiz hinzufügen oder bearbeiten (N)', 'es': 'Añadir o editar una nota (N)', 'it': 'Aggiungi o modifica una nota (N)'},
+    'Close (Esc)': {'nl': 'Sluiten (Esc)', 'fr': 'Fermer (Échap)', 'de': 'Schließen (Esc)', 'es': 'Cerrar (Esc)', 'it': 'Chiudi (Esc)'},
+    'Copied.': {'nl': 'Gekopieerd.', 'fr': 'Copié.', 'de': 'Kopiert.', 'es': 'Copiado.', 'it': 'Copiato.'},
+    'Copy': {'nl': 'Kopiëren', 'fr': 'Copier', 'de': 'Kopieren', 'es': 'Copiar', 'it': 'Copia'},
+    'Highlight removed': {'nl': 'Markering verwijderd', 'fr': 'Surlignage supprimé', 'de': 'Markierung entfernt', 'es': 'Resaltado eliminado', 'it': 'Evidenziazione rimossa'},
+    'Highlighted in {colour}': {'nl': 'Gemarkeerd in {colour}', 'fr': 'Surligné en {colour}', 'de': 'In {colour} markiert', 'es': 'Resaltado en {colour}', 'it': 'Evidenziato in {colour}'},
+    'Meaning': {'nl': 'Betekenis', 'fr': 'Sens', 'de': 'Bedeutung', 'es': 'Significado', 'it': 'Significato'},
+    'More: select the sentence or paragraph, adjust': {'nl': 'Meer: de zin of alinea selecteren, aanpassen', 'fr': 'Plus : sélectionner la phrase ou le paragraphe, ajuster', 'de': 'Mehr: Satz oder Absatz auswählen, anpassen', 'es': 'Más: seleccionar la frase o el párrafo, ajustar', 'it': 'Altro: seleziona la frase o il paragrafo, regola'},
+    'Read': {'nl': 'Voorlezen', 'fr': 'Lire', 'de': 'Vorlesen', 'es': 'Leer', 'it': 'Leggi'},
+    'Remove': {'nl': 'Verwijderen', 'fr': 'Supprimer', 'de': 'Entfernen', 'es': 'Quitar', 'it': 'Rimuovi'},
+    'Remove the highlight (Delete)': {'nl': 'De markering verwijderen (Delete)', 'fr': 'Supprimer le surlignage (Suppr)', 'de': 'Die Markierung entfernen (Entf)', 'es': 'Quitar el resaltado (Supr)', 'it': "Rimuovi l'evidenziazione (Canc)"},
 }
 
 # messages from the processing core, matched in i18n.MESSAGE_PATTERNS; {0}, {1}... are the parts found
