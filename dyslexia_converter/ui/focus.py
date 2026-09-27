@@ -168,14 +168,11 @@ class FocusMode:
         self.read_toggle = ft.IconButton(ft.Icons.VOLUME_UP, tooltip=t("Read aloud"), on_click=self.on_read_panel,
                                          selected=bool(app.ui.get("read_panel_open", False)),
                                          style=self._toggle_style(), visible=app._speech_allowed())
-        self.settings_toggle = ft.IconButton(ft.Icons.TEXT_FIELDS, tooltip=t("Reading settings"),
+        self.settings_toggle = ft.IconButton(ft.Icons.TEXT_FIELDS, tooltip=t("Reading settings: text, spacing and "
+                                                                           "page colour"),
                                              on_click=self.on_settings_panel,
                                              selected=bool(app.ui.get("focus_settings_open", False)),
                                              style=self._toggle_style())
-        self.view_toggle = ft.IconButton(ft.Icons.PALETTE_OUTLINED, tooltip=t("View: page colour, pages, rotation"),
-                                         on_click=self.on_view_panel,
-                                         selected=bool(app.ui.get("focus_view_open", False)),
-                                         style=self._toggle_style())
         self.mark_toggle = ft.IconButton(ft.Icons.BORDER_COLOR, tooltip=t("Highlighter"), on_click=self.on_marker,
                                          style=self._toggle_style())
         self.swatches = ft.Row([self._swatch(name) for name in SWATCHES] + [
@@ -189,11 +186,12 @@ class FocusMode:
         self.top = ft.Container(ft.Row([
             ft.IconButton(ft.Icons.CLOSE, tooltip=t("Leave focus mode"), on_click=self.on_close),
             ft.Container(width=4),
-            self.read_toggle, self.settings_toggle, self.view_toggle, self.mark_toggle, self.swatches,
+            self.read_toggle, self.settings_toggle, self.mark_toggle, self.swatches,
             self.ruler_toggle, self.notes_toggle, self._ai_button(),
             ft.Container(expand=True),
             self.page_label,
             app.build_export_menu(compact=True),
+            *self._page_buttons(),
             ft.IconButton(ft.Icons.ZOOM_OUT, tooltip=t("Smaller"), on_click=lambda e: self._zoom_by(1 / 1.1)),
             ft.IconButton(ft.Icons.ZOOM_IN, tooltip=t("Larger"), on_click=lambda e: self._zoom_by(1.1)),
             ft.IconButton(ft.Icons.FULLSCREEN, tooltip=t("Hide the bars (Esc brings them back)"),
@@ -205,8 +203,8 @@ class FocusMode:
         # the read-aloud controls move here from the main view while focus mode is open
         app.read_panel.content = None
         self.read_panel = self._panel(app.read_row, "read_panel_open")
+        # one panel for how the text and page look (read aloud keeps its own)
         self.settings_panel = self._panel(self._settings_row(), "focus_settings_open")
-        self.view_panel = self._panel(self._view_row(), "focus_view_open")
         self.divider = ft.Divider(height=1)
         self.list = ft.ListView(expand=True, spacing=self.GAP, on_scroll=self.on_scroll,
                                 padding=ft.Padding.symmetric(vertical=self.PAD))
@@ -237,7 +235,7 @@ class FocusMode:
                                       bgcolor="#66000000", border_radius=24, right=10, top=10, visible=False)
         self.counter = ft.Container(ft.Text("", color="#FFFFFF", size=13), bgcolor="#88000000", border_radius=14,
                                     padding=ft.Padding.symmetric(horizontal=12, vertical=4), visible=False)
-        self.column = ft.Column([self.top, self.read_panel, self.settings_panel, self.view_panel, self.divider,
+        self.column = ft.Column([self.top, self.read_panel, self.settings_panel, self.divider,
                                  ft.Row([self.body, self.side], expand=True, spacing=0,
                                         vertical_alignment=ft.CrossAxisAlignment.STRETCH)],
                                 expand=True, spacing=0, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)
@@ -1694,51 +1692,48 @@ class FocusMode:
         self.app.store.save_ui(self.app.ui)
         self.app.page.update()
 
-    def on_view_panel(self, e) -> None:
-        """The view button: fold the view options (page colour, layout, fit width, rotate) out or away."""
-        self._fold(self.view_panel, not self._is_open(self.view_panel))
-        self.view_toggle.selected = self._is_open(self.view_panel)
-        self._save("focus_view_open", self.view_toggle.selected)
-        self.app.page.update()
-
     # ------------------------------------------------------------------ view: page colour, layout, rotation
-    def _view_row(self) -> ft.Control:
-        """The view options: page colours, Scroll / Pages, Fit width and Rotate."""
+    def _page_buttons(self) -> list[ft.Control]:
+        """The page buttons that are always in the top bar: one page at a time or scrolling, fit width, and
+        rotate (with the angle beside it once turned)."""
         t = self.app.t
-        self.tint_row = ft.Row([self._tint_swatch(name) for name in TINT_COLOURS], spacing=8, tight=True)
-        self.layout_seg = ft.SegmentedButton(
-            segments=[ft.Segment("scroll", label=ft.Text(t("Scroll")), icon=ft.Icon(ft.Icons.SWAP_VERT)),
-                      ft.Segment("pages", label=ft.Text(t("Pages")), icon=ft.Icon(ft.Icons.SWAP_HORIZ))],
-            selected=[self.layout], on_change=self.on_layout)
-        self.fit_btn = ft.OutlinedButton(t("Fit width"), icon=ft.Icons.FIT_SCREEN, on_click=self.on_fit,
-                                         tooltip=t("Make the pages as wide as the window"))
-        self.rotate_btn = ft.OutlinedButton(t("Rotate"), icon=ft.Icons.ROTATE_90_DEGREES_CW, on_click=self.on_rotate,
-                                            tooltip=t("Turn the reading view a quarter turn"))
+        self.layout_btn = ft.IconButton(ft.Icons.SWAP_VERT, selected_icon=ft.Icons.SWAP_HORIZ,
+                                        on_click=self.on_layout, style=self._toggle_style())
+        self.fit_btn = ft.IconButton(ft.Icons.FIT_SCREEN, tooltip=t("Make the pages as wide as the window"),
+                                     on_click=self.on_fit, style=self._toggle_style())
+        self.rotate_btn = ft.IconButton(ft.Icons.ROTATE_90_DEGREES_CW, on_click=self.on_rotate,
+                                        tooltip=t("Turn the reading view a quarter turn"), style=self._toggle_style())
+        self.rotate_label = self.app.text("", 12)
+        return [ft.Container(width=6), self.layout_btn, self.fit_btn,
+                ft.Row([self.rotate_btn, self.rotate_label], spacing=0, tight=True), ft.Container(width=6)]
+
+    def _tint_picker(self) -> ft.Control:
+        """The page colours as a compact row of dots (their names are in the tooltips), for the reading settings
+        panel; the page buttons (layout, fit width, rotate) are always in the top bar."""
+        self.tint_row = ft.Row([self._tint_swatch(name) for name in TINT_COLOURS], spacing=6, tight=True)
         self._refresh_view_row()
-        return ft.Row([self.app.text(t("Page colour"), 13, weight=ft.FontWeight.W_500), self.tint_row,
-                       ft.Container(width=12), self.layout_seg, self.fit_btn, self.rotate_btn],
-                      spacing=12, wrap=True, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+        return ft.Column([self.app.text(self.app.t("Page colour"), 13), self.tint_row], spacing=4, tight=True)
 
     def _tint_swatch(self, name: str) -> ft.Control:
-        """A round page colour button with its name under it."""
-        return ft.Column([ft.Container(width=32, height=32, border_radius=16, bgcolor=TINT_COLOURS[name][0],
-                                       data=name, on_click=self.on_tint, tooltip=self.app.t(name.capitalize())),
-                          self.app.text(self.app.t(name.capitalize()), 11)],
-                         spacing=2, horizontal_alignment=ft.CrossAxisAlignment.CENTER, tight=True)
+        """A round page colour button (its name in the tooltip)."""
+        return ft.Container(width=26, height=26, border_radius=13, bgcolor=TINT_COLOURS[name][0], data=name,
+                            on_click=self.on_tint, tooltip=self.app.t(name.capitalize()))
 
     def _refresh_view_row(self) -> None:
-        """Show the chosen page colour, layout, fit width and rotation on the view panel's buttons."""
+        """Show the chosen page colour (view panel) and layout, fit width and rotation (top bar buttons)."""
         if not hasattr(self, "tint_row"):
             return
-        for col in self.tint_row.controls:
-            dot = col.controls[0]
+        for dot in self.tint_row.controls:
             chosen = dot.data == self.tint
             dot.border = ft.Border.all(3 if chosen else 1, ft.Colors.PRIMARY if chosen else ft.Colors.OUTLINE)
-        on = ft.ButtonStyle(bgcolor=ft.Colors.PRIMARY_CONTAINER)
-        self.fit_btn.style = on if self.fit else None
+        t = self.app.t
+        self.fit_btn.selected = self.fit
         self.fit_btn.disabled = self.layout == "pages"
-        self.rotate_btn.content = self.app.t("Rotate") + (f" ({self.turns * 90}°)" if self.turns else "")
-        self.layout_seg.selected = [self.layout]
+        self.rotate_btn.selected = bool(self.turns)
+        self.rotate_label.value = f"{self.turns * 90}°" if self.turns else ""
+        self.layout_btn.selected = self.layout == "pages"
+        self.layout_btn.tooltip = t("One page at a time (click to scroll instead)") if self.layout == "pages" \
+            else t("Scrolling pages (click for one page at a time)")
 
     def _apply_tint(self) -> None:
         """Colour the page frames and the area around them in the chosen page colour."""
@@ -1756,10 +1751,8 @@ class FocusMode:
         self._start_rendering()
 
     async def on_layout(self, e) -> None:
-        """Scroll / Pages: switch between one scrolling column and one page at a time."""
-        sel = e.control.selected
-        layout = (list(sel)[0] if sel else "scroll")
-        self._save("focus_layout", layout)
+        """The layout button: switch between one scrolling column and one page at a time."""
+        self._save("focus_layout", "scroll" if self.layout == "pages" else "pages")
         self.page_zoom = 1.0
         self._refresh_view_row()
         await self._show_layout()
@@ -1796,8 +1789,8 @@ class FocusMode:
     def on_hide_bars(self, e) -> None:
         """Hide the top bar and panels to read without distractions (Esc or the small button brings them back)."""
         self.bars_hidden = True
-        self._open_panels = [p for p in (self.read_panel, self.settings_panel, self.view_panel) if self._is_open(p)]
-        for panel in (self.read_panel, self.settings_panel, self.view_panel):
+        self._open_panels = [p for p in (self.read_panel, self.settings_panel) if self._is_open(p)]
+        for panel in (self.read_panel, self.settings_panel):
             self._fold(panel, False)
         self.top.height = 0
         self.top.padding = 0
@@ -1871,6 +1864,7 @@ class FocusMode:
             await set_value("bold_word_start", bool(e.control.value))
 
         return ft.Row([
+            self._tint_picker(),
             ft.Dropdown(label=t("Font"), value=app.settings.font, width=210, dense=True, text_size=app.fs(13),
                         options=[ft.DropdownOption(key=f, text=f) for f in FONT_CHOICES], on_select=font_changed),
             slider("font_size", t("Font size"), 9, 24, 0.5, "pt"),
