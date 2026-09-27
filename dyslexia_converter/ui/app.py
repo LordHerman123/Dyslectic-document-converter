@@ -38,6 +38,16 @@ EXPORTS = [("pdf", "PDF", "pdf"), ("printable_pdf", "Printable PDF", "pdf"), ("d
 EXPORT_ICONS = {"pdf": ft.Icons.PICTURE_AS_PDF_OUTLINED, "printable_pdf": ft.Icons.PRINT_OUTLINED,
                 "docx": ft.Icons.DESCRIPTION_OUTLINED, "epub": ft.Icons.MENU_BOOK_OUTLINED,
                 "txt": ft.Icons.NOTES, "md": ft.Icons.CODE}
+# fonts for the app itself (menus, buttons): key -> (family, file in assets/fonts, name, note); the first is the
+# default. They only change the app, never the converted documents.
+APP_FONTS = {
+    "atkinson": ("Atkinson", "AtkinsonHyperlegible-Regular.ttf", "Standard",
+                 "Atkinson Hyperlegible · clear, distinct letters (default)"),
+    "opendyslexic": ("OpenDyslexic", "OpenDyslexic-Regular.ttf", "OpenDyslexic",
+                     "Heavier letter bottoms, so letters don't flip"),
+    "liberation": ("Liberation", "LiberationSans-Regular.ttf", "Arial-style", "Liberation Sans · plain and familiar"),
+    "dejavu": ("DejaVu", "DejaVuSans.ttf", "Verdana-style", "DejaVu Sans · wide letters, open spacing"),
+}
 # document languages (codes used by the core) and their English names (translated in the UI)
 DOC_LANGUAGES = [("en", "English"), ("nl", "Dutch"), ("de", "German"), ("fr", "French"), ("es", "Spanish"),
                  ("it", "Italian"), ("pt", "Portuguese")]
@@ -294,9 +304,9 @@ class ConverterApp:
         """Use the light or dark (and optionally high-contrast) colours and the app's bundled font."""
         dark = bool(self.ui.get("dark_mode"))
         self.pal = palette(dark, bool(self.ui.get("high_contrast")))
-        # the app itself uses a bundled, highly legible font (works offline too)
-        self.page.fonts = {"Atkinson": "fonts/AtkinsonHyperlegible-Regular.ttf"}
-        theme = make_theme(self.pal, "Atkinson")
+        # the app itself uses a bundled font (works offline too): the one chosen in Settings, Standard by default
+        self.page.fonts = {family: "fonts/" + file for family, file, _, _ in APP_FONTS.values()}
+        theme = make_theme(self.pal, APP_FONTS.get(self.ui.get("app_font"), APP_FONTS["atkinson"])[0])
         self.page.theme = self.page.dark_theme = theme
         self.page.theme_mode = ft.ThemeMode.DARK if dark else ft.ThemeMode.LIGHT
         self.page.bgcolor = self.pal["bg"]
@@ -1174,6 +1184,7 @@ class ConverterApp:
             card([heading(t("Appearance")),
                   ft.Row([app_lang, scale], wrap=True, spacing=16),
                   ft.Row([dark, contrast], wrap=True, spacing=24),
+                  self._app_font_picker(),
                   self.text(t("These only change the app. Your exported documents keep their own layout "
                               "and colours (see the Convert tab)."), 12, italic=True)]),
             card([heading(t("Text recognition (OCR)")),
@@ -1196,6 +1207,39 @@ class ConverterApp:
             self.end_space(),
         ], scroll=ft.ScrollMode.AUTO, spacing=12, expand=True, horizontal_alignment=ft.CrossAxisAlignment.STRETCH),
             padding=16, expand=True)
+
+    def _app_font_picker(self) -> ft.Control:
+        """App font: one card per font, each showing a sample in that font; the chosen one is outlined."""
+        t, pal = self.t, self.pal
+        chosen = self.ui.get("app_font") if self.ui.get("app_font") in APP_FONTS else "atkinson"
+
+        def card(key: str) -> ft.Control:
+            """One font to pick: a sample, its name and a short note, all in that font."""
+            family, _, name, note = APP_FONTS[key]
+            on = key == chosen
+            return ft.Container(ft.Column([
+                ft.Row([ft.Text("Aa Bb dq pb 123", size=self.fs(20), font_family=family),
+                        ft.Icon(ft.Icons.CHECK_CIRCLE, color=pal["primary"], size=20) if on else ft.Container()],
+                       alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                ft.Text(t(name), size=self.fs(15), weight=ft.FontWeight.BOLD, font_family=family),
+                ft.Text(t(note), size=self.fs(12), color=pal["muted"], font_family=family)], spacing=4, tight=True),
+                width=250, padding=12, border_radius=12, bgcolor=pal["surface"], data=key, on_click=self.on_app_font,
+                tooltip=t("Use this font in the app"),
+                border=ft.Border.all(2 if on else 1, pal["primary"] if on else pal["outline_variant"]))
+
+        return ft.Column([
+            self.text(t("App font"), 15, weight=ft.FontWeight.BOLD),
+            ft.Row([card(k) for k in APP_FONTS], wrap=True, spacing=12, run_spacing=12),
+            self.text(t("Changes the font of the app's menus and buttons. The font of your converted documents is "
+                        "chosen in the Convert tab."), 12)], spacing=8)
+
+    async def on_app_font(self, e):
+        """A font card: use that font in the whole app (remembered for next time)."""
+        if e.control.data == self.ui.get("app_font", "atkinson"):
+            return
+        self.ui["app_font"] = e.control.data
+        self.store.save_ui(self.ui)
+        await self.rebuild(tab=self.settings_tab_index)
 
     async def on_app_language(self, e):
         """A different app language: rebuild the window in it."""
@@ -1318,8 +1362,8 @@ class ConverterApp:
                 (t("Privacy log:"), t("every request is listed with the exact text that was sent.")),
             ]),
             (ft.Icons.SETTINGS_OUTLINED, t("Settings"), t("How the app itself looks"), t("Change how the app itself looks, so it is comfortable for your eyes."), [
-                (t("Appearance:"), t("app language, dark mode, high-contrast colours and app text size. These "
-                                     "only change the app, not your documents.")),
+                (t("Appearance:"), t("app language, app font, dark mode, high-contrast colours and app text size. "
+                                     "These only change the app, not your documents.")),
             ]),
         ]
         shortcuts = [("Ctrl+C", t("Copy the selection")), ("1 - 4", t("Highlight the selection in a colour")),
