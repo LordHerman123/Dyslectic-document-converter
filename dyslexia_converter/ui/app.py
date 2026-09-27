@@ -49,7 +49,18 @@ def _speed_text(v: float) -> str:
 
 
 class ConverterApp:
+    """The whole app window: tabs, controls and the state of the open document.
+
+    One instance per window (see :func:`main`). It holds the user's settings (``settings`` for the document
+    layout, ``ai_settings``, and ``ui`` for app preferences such as language, dark mode and read-aloud choices),
+    the loaded document (``session``) and the converted PDF shown in the preview (``converted_pdf``). ``build``
+    creates the controls; ``rebuild`` recreates them after a language or text size change. Document work runs in a
+    thread (:meth:`in_thread`) so the window stays responsive.
+    """
     def __init__(self, page: ft.Page):
+        """Load the saved settings and set up the helpers (translator, speech, AI assistant, focus mode); nothing
+        is shown until :meth:`build`.
+        """
         self.page = page
         self.store = SettingsStore()
         self.settings: FormatSettings = self.store.load_format() if self.store.has_saved_format() \
@@ -87,6 +98,7 @@ class ConverterApp:
 
     # ================================================================ helpers
     def fs(self, base: float = 15) -> float:
+        """A font size scaled by the user's text size setting."""
         return round(base * float(self.ui.get("text_scale", 1.0)), 1)
 
     @staticmethod
@@ -95,12 +107,17 @@ class ConverterApp:
         return ft.Container(height=56)
 
     def text(self, value: str, size: float = 15, **kw) -> ft.Text:
+        """A Text control in the scaled font size."""
         return ft.Text(value, size=self.fs(size), **kw)
 
     def lang_name(self, code: str) -> str:
+        """The translated name of a document language code ("nl" -> "Dutch" in the app's language)."""
         return self.t(dict(DOC_LANGUAGES).get(code, code))
 
     def notify(self, message: str, error: bool = False) -> None:
+        """Tell the user something: a short pop-up, or for errors and long messages an entry in the notices panel
+        that stays until dismissed.
+        """
         if error or len(message) > 90:
             # long or important messages stay visible in the notices panel instead of a pop-up
             self._notices = [("warning" if error else "info", message, None)] + getattr(self, "_notices", [])
@@ -118,6 +135,7 @@ class ConverterApp:
         self._render_notices()
 
     def _render_notices(self) -> None:
+        """Show the notices (warnings, information, actions such as "review corrections") in the notices panel."""
         items = getattr(self, "_notices", [])
         self.notice_list.controls.clear()
         for idx, (kind, message, action) in enumerate(items):
@@ -139,6 +157,7 @@ class ConverterApp:
         self.notices.height = min(150, 52 * len(items)) if items else 0
 
     def _dismiss(self, e) -> None:
+        """The close button of a notice."""
         idx = e.control.data
         if 0 <= idx < len(getattr(self, "_notices", [])):
             del self._notices[idx]
@@ -146,6 +165,7 @@ class ConverterApp:
         self.page.update()
 
     def _review_notice(self) -> Optional[tuple[str, str, Optional[tuple[str, Callable]]]]:
+        """A notice that points to the OCR review tab when corrections are waiting, or None."""
         if not self.session:
             return None
         pending = len(self.session.pending_corrections())
@@ -153,6 +173,7 @@ class ConverterApp:
             return None
 
         async def open_review(e):
+            """Switch to the OCR review tab."""
             self.tabs.selected_index = self.review_tab_index
             self.page.update()
 
@@ -161,16 +182,23 @@ class ConverterApp:
         return ("action", msg, (self.t("Review now"), open_review))
 
     def update_review_notice(self) -> None:
+        """Refresh the "corrections waiting" notice after corrections change."""
         notices = [n for n in getattr(self, "_notices", []) if n[0] != "action"]
         rn = self._review_notice()
         self._notices = ([rn] if rn else []) + notices
         self._render_notices()
 
     async def in_thread(self, fn: Callable, *args):
+        """Run slow work (reading, converting, rendering) in a worker thread and wait for it without freezing the
+        window.
+        """
         return await asyncio.to_thread(fn, *args)
 
     # ================================================================ build
     def build(self) -> None:
+        """Create all controls: the header, the tabs (Convert, OCR review, Document map, AI settings, Settings,
+        Help) and the status bar.
+        """
         p = self.page
         t = self.t
         p.title = f"Dyslexia Converter {__version__}"
@@ -259,6 +287,7 @@ class ConverterApp:
                                     tooltip=self.t("Opens PayPal in your web browser (optional)"))
 
     def apply_theme(self) -> None:
+        """Use the light or dark (and optionally high-contrast) colours and the app's bundled font."""
         dark = bool(self.ui.get("dark_mode"))
         self.pal = palette(dark, bool(self.ui.get("high_contrast")))
         # the app itself uses a bundled, highly legible font (works offline too)
@@ -279,18 +308,22 @@ class ConverterApp:
         self.page.update()
 
     def _mode_label(self) -> str:
+        """The text of the privacy status in the header (local-only or AI-assisted), shorter on narrow windows."""
         if self.ai_settings.mode == "ai_assisted":
             return self.t("AI-assisted")
         return self.t("Local-only") if (self.page.width or 1200) < 820 else \
             self.t("Local-only: nothing leaves this device")
 
     def _mode_color(self) -> str:
+        """Colour of the privacy status: AI-assisted stands out from local-only."""
         return self.pal["status_ai"] if self.ai_settings.mode == "ai_assisted" else self.pal["status_local"]
 
     def _mode_icon(self) -> str:
+        """Icon of the privacy status: a lock for local-only, a cloud for AI-assisted."""
         return ft.Icons.CLOUD_OUTLINED if self.ai_settings.mode == "ai_assisted" else ft.Icons.LOCK_OUTLINE
 
     def _update_mode_status(self) -> None:
+        """Refresh the privacy status in the header after the AI mode changed."""
         self.mode_icon.icon = self._mode_icon()
         self.mode_icon.color = self._mode_color()
         self.mode_text.value = self._mode_label()
@@ -298,15 +331,20 @@ class ConverterApp:
 
     # ---------------------------------------------------------------- convert tab
     def slider(self, key: str, label: str, lo: float, hi: float, step: float, unit: str) -> ft.Control:
+        """A labelled slider for one layout setting (``key`` in FormatSettings); the document is converted again
+        when it is let go.
+        """
         value_text = self.text(f"{getattr(self.settings, key):g} {unit}", 14)
         divisions = int(round((hi - lo) / step))
 
         def changed(e):
+            """Show the value while the slider moves."""
             v = round(float(e.control.value) / step) * step
             value_text.value = f"{v:g} {unit}"
             value_text.update()
 
         async def done(e):
+            """The slider was let go: store the value (rounded to the step) and convert again."""
             v = round(float(e.control.value) / step) * step
             setattr(self.settings, key, round(v, 2))
             await self.settings_changed()
@@ -319,7 +357,9 @@ class ConverterApp:
         return ft.Column([ft.Row([self.text(label, 14), ft.Container(expand=True), value_text]), s], spacing=0)
 
     def switch(self, key: str, label: str, help_text: str = "") -> ft.Control:
+        """A switch for one on/off setting (``key`` in FormatSettings)."""
         async def changed(e):
+            """Store the new value; settings that change how the PDF is read load it again."""
             setattr(self.settings, key, bool(e.control.value))
             await self.settings_changed(reload=key in RELOAD_KEYS)
 
@@ -329,7 +369,9 @@ class ConverterApp:
         return sw
 
     def dropdown(self, key: str, label: str, options: list[tuple[str, str]]) -> ft.Dropdown:
+        """A dropdown for one setting (``key`` in FormatSettings) with (value, label) options."""
         async def changed(e):
+            """Store the choice; settings that change how the PDF is read load it again."""
             setattr(self.settings, key, e.control.value)
             await self.settings_changed(reload=key in RELOAD_KEYS)
 
@@ -340,6 +382,9 @@ class ConverterApp:
         return d
 
     def build_convert_tab(self) -> ft.Control:
+        """The Convert tab: the settings column on the left and the preview (Original / Both / Converted, read
+        aloud, focus mode, export) on the right. Returns both columns.
+        """
         t = self.t
         presets = ["Standard", "Spacious", "High Readability", "Compact print", "My Settings"]
         self.preset_dd = ft.Dropdown(label=t("Preset"), value="", expand=True, text_size=self.fs(14),
@@ -351,6 +396,7 @@ class ConverterApp:
                                          [(code, t(name)) for code, name in DOC_LANGUAGES])
 
         def section(title: str, controls: list[ft.Control], expanded: bool = False) -> ft.Control:
+            """A collapsible group of settings with a title."""
             return ft.ExpansionTile(title=self.text(title, 16, weight=ft.FontWeight.BOLD), expanded=expanded,
                                     controls=[ft.Container(ft.Column(controls, spacing=10),
                                                            padding=ft.Padding.only(left=8, right=8, top=8, bottom=10))],
@@ -456,10 +502,15 @@ class ConverterApp:
             selected=[self.view_mode], show_selected_icon=False, on_change=self.on_view_mode)
 
         def nav(which: str, label: ft.Text) -> ft.Row:
+            """Previous / next page buttons around a page label, for the original (``which`` = "orig") or
+            converted preview.
+            """
             async def prev(e):
+                """Show the previous page."""
                 await self.page_step(which, -1)
 
             async def nxt(e):
+                """Show the next page."""
                 await self.page_step(which, 1)
 
             return ft.Row([
@@ -500,6 +551,9 @@ class ConverterApp:
 
     # ---------------------------------------------------------------- review tab
     def build_review_tab(self) -> ft.Control:
+        """The OCR review tab: the corrections made to scanned text (accept, reject, retype) and the user's own
+        dictionary.
+        """
         t = self.t
         self.review_summary = self.text(t("No scanned document loaded."), 14)
         self.review_list = ft.ListView(expand=True, spacing=8, padding=8)
@@ -520,6 +574,7 @@ class ConverterApp:
         ], expand=True), padding=16, expand=True)
 
     def refresh_review(self) -> None:
+        """Fill the review list with the current document's corrections (or explain why there are none)."""
         t = self.t
         self.update_review_notice()
         self.review_list.controls.clear()
@@ -579,6 +634,7 @@ class ConverterApp:
             ], spacing=4), padding=12)))
 
     def _correction(self, cid: str):
+        """The correction with id ``cid`` in the current document, or None."""
         return next((c for c in self.session.document.corrections if c.id == cid), None) if self.session else None
 
     async def on_edit_text(self, e):
@@ -591,6 +647,7 @@ class ConverterApp:
                              autofocus=True, text_size=self.fs(16), width=640)
 
         async def save(_):
+            """Store the retyped sentence as a user edit and convert again."""
             self.page.pop_dialog()
             edit = self.session.edit_text(c, field.value or "")
             if edit is None:
@@ -601,6 +658,7 @@ class ConverterApp:
             self.notify(t("Your correction was saved. You can undo it at any time."))
 
         def cancel(_):
+            """Close the dialog without changes."""
             self.page.pop_dialog()
 
         self.page.show_dialog(ft.AlertDialog(
@@ -613,12 +671,14 @@ class ConverterApp:
                      ft.FilledButton(t("Save"), icon=ft.Icons.CHECK, on_click=save)]))
 
     async def on_remove_user_edit(self, e):
+        """Undo one of the user's own text edits."""
         self.session.remove_user_edit(e.control.data)
         self.refresh_review()
         await self.rerender()
 
     # ---------------------------------------------------------------- map tab
     def build_map_tab(self) -> ft.Control:
+        """The Document map tab: the headings found, to jump to a part of the document."""
         t = self.t
         self.map_list = ft.ListView(expand=True, spacing=2, padding=8)
         return ft.Container(ft.Column([
@@ -629,6 +689,7 @@ class ConverterApp:
         ], expand=True), padding=16, expand=True)
 
     def refresh_map(self) -> None:
+        """List the headings of the converted document (its PDF outline)."""
         self.map_list.controls.clear()
         if not self.converted_pdf:
             return
@@ -645,6 +706,7 @@ class ConverterApp:
             self.map_list.controls.append(self.text(self.t("No headings were detected."), 14))
 
     async def on_map_click(self, e):
+        """A heading in the map: show its page in the preview."""
         self.conv_page = int(e.control.data)
         if self.view_mode == "side":
             self._original_follows()
@@ -654,6 +716,9 @@ class ConverterApp:
 
     # ---------------------------------------------------------------- AI tab
     def build_ai_tab(self) -> ft.Control:
+        """The AI settings tab: local-only or AI-assisted, provider, model, key, what AI may be used for, and the
+        privacy log of everything sent.
+        """
         t = self.t
         a = self.ai_settings
         self.ai_mode = ft.RadioGroup(value=a.mode, on_change=self.on_ai_mode, content=ft.Column([
@@ -706,6 +771,7 @@ class ConverterApp:
     LOG_SHOWN = 50  # latest requests shown in the AI tab; the saved log has them all
 
     def refresh_ai_log(self) -> None:
+        """Show the privacy log: a summary and one entry per request sent to an AI provider."""
         t = self.t
         entries = self.assistant.log.entries()
         if not entries:
@@ -720,6 +786,7 @@ class ConverterApp:
         self.ai_log_list.controls = [self._log_tile(e) for e in reversed(entries[-self.LOG_SHOWN:])]
 
     def _log_tile(self, e) -> ft.Control:
+        """One privacy-log entry, expandable to show exactly what was sent and received."""
         import time
         t = self.t
         task = t("Citations") if e.task == "citations" else t("OCR words")
@@ -731,6 +798,7 @@ class ConverterApp:
             sub += " · " + t("failed")
 
         def block(label: str, value: str) -> ft.Control:
+            """A labelled box with selectable text."""
             return ft.Column([self.text(label, 13, weight=ft.FontWeight.BOLD),
                               ft.Container(self.text(value, 12, selectable=True),
                                            padding=8, border_radius=6, bgcolor=ft.Colors.SURFACE_CONTAINER_LOW)],
@@ -745,6 +813,7 @@ class ConverterApp:
             ], spacing=10), padding=ft.Padding.only(left=8, right=8, bottom=10))])
 
     async def on_save_ai_log(self, e):
+        """Save the privacy log as a text file."""
         t = self.t
         data = self.assistant.log.as_text().encode("utf-8")
         if not data:
@@ -760,6 +829,7 @@ class ConverterApp:
             self.notify(t("Privacy log saved."))
 
     async def on_clear_ai_log(self, e):
+        """Delete the privacy log from this device (after asking)."""
         t = self.t
         if not await self.confirm(t("Clear log"), t("Remove the privacy log from this device?"), t("Clear log"),
                                   t("Cancel")):
@@ -769,6 +839,7 @@ class ConverterApp:
         self.page.update()
 
     def _refresh_ai_controls(self) -> None:
+        """Show the models, notes and key status of the chosen AI provider."""
         cls = PROVIDERS.get(self.ai_settings.provider)
         models = cls.models if cls else []
         self.ai_model.options = [ft.DropdownOption(key=m, text=m) for m in models]
@@ -781,6 +852,7 @@ class ConverterApp:
             self._update_mode_status()
 
     async def on_ai_mode(self, e):
+        """Local-only / AI-assisted; switching AI on first asks for consent with the privacy notice."""
         mode = e.control.value
         if mode == "ai_assisted" and not self.ai_settings.consent_given:
             ok = await self.confirm(self.t("Before using AI"), self.t(PRIVACY_NOTICE),
@@ -796,6 +868,7 @@ class ConverterApp:
         self.page.update()
 
     async def on_ai_provider(self, e):
+        """A different AI provider: forget the model chosen for the previous one."""
         self.ai_settings.provider = e.control.value
         self.ai_settings.model = ""
         self.store.save_ai(self.ai_settings)
@@ -803,15 +876,18 @@ class ConverterApp:
         self.page.update()
 
     async def on_ai_model(self, e):
+        """Remember the model chosen."""
         self.ai_settings.model = e.control.value
         self.store.save_ai(self.ai_settings)
 
     async def on_ai_tasks(self, e):
+        """Remember what AI may be used for (citations, OCR words)."""
         self.ai_settings.use_for_citations = bool(self.ai_cit.value)
         self.ai_settings.use_for_ocr = bool(self.ai_ocr.value)
         self.store.save_ai(self.ai_settings)
 
     async def on_save_key(self, e):
+        """Store the API key for the chosen provider on this device."""
         key = (self.ai_key.value or "").strip()
         if not key:
             self.notify(self.t("Enter a key first."), error=True)
@@ -823,16 +899,19 @@ class ConverterApp:
         self.notify(self.t("API key saved on this device."))
 
     async def on_remove_key(self, e):
+        """Delete the stored API key for the chosen provider."""
         self.keystore.remove(self.ai_settings.provider)
         self._refresh_ai_controls()
         self.page.update()
         self.notify(self.t("API key removed."))
 
     async def on_clear_cache(self, e):
+        """Forget the cached AI answers (they are reused so the same text is never sent twice)."""
         self.assistant.cache.clear()
         self.notify(self.t("AI cache cleared."))
 
     async def on_run_ai(self, e):
+        """Run the AI tasks on the open document, after checking that AI is on and a key is set."""
         t = self.t
         if not self.session:
             self.notify(t("Open a PDF first."), error=True)
@@ -896,6 +975,9 @@ class ConverterApp:
 
     # ---------------------------------------------------------------- settings tab
     def build_settings_tab(self) -> ft.Control:
+        """The Settings tab: app language, text size, dark mode, high contrast, where data is kept and saved OCR
+        results.
+        """
         t = self.t
         from ..settings import app_data_dir
 
@@ -915,9 +997,11 @@ class ConverterApp:
         tess = find_tesseract()
 
         def heading(s: str) -> ft.Control:
+            """A section heading."""
             return self.text(s, 17, weight=ft.FontWeight.BOLD)
 
         def card(controls: list[ft.Control]) -> ft.Control:
+            """A card grouping some settings."""
             return ft.Card(content=ft.Container(ft.Column(controls, spacing=10), padding=16))
 
         return ft.Container(ft.Column([
@@ -949,32 +1033,38 @@ class ConverterApp:
             padding=16, expand=True)
 
     async def on_app_language(self, e):
+        """A different app language: rebuild the window in it."""
         self.ui["app_language"] = e.control.value
         self.store.save_ui(self.ui)
         self.t = Translator(e.control.value)
         await self.rebuild(tab=self.settings_tab_index)
 
     async def on_ui_scale(self, e):
+        """A different text size: rebuild the window with it."""
         self.ui["text_scale"] = float(e.control.value)
         self.store.save_ui(self.ui)
         await self.rebuild(tab=self.settings_tab_index)
 
     async def on_contrast(self, e):
+        """High-contrast colours on or off."""
         self.ui["high_contrast"] = bool(e.control.value)
         self.store.save_ui(self.ui)
         self.restyle()
 
     async def on_dark_mode(self, e):
+        """Dark mode on or off."""
         self.ui["dark_mode"] = bool(e.control.value)
         self.store.save_ui(self.ui)
         self.restyle()
 
     async def on_clear_ocr_cache(self, e):
+        """Delete the saved OCR results (scanned documents are then read again when opened)."""
         n = await self.in_thread(pipeline.clear_ocr_cache)
         self.notify(self.t("Saved OCR results cleared ({n} document(s)).", n=n))
 
     # ---------------------------------------------------------------- help tab
     def build_help_tab(self) -> ft.Control:
+        """The Help tab: how the app works, what it never changes, privacy, and where to get the newest version."""
         t = self.t
         return ft.Container(ft.Column([
             self.text(t("How it works"), 18, weight=ft.FontWeight.BOLD),
@@ -1011,7 +1101,9 @@ class ConverterApp:
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
 
         def close(result: bool):
+            """A button handler that closes the dialog with ``result`` as the answer."""
             def handler(e):
+                """Close the dialog and give the answer."""
                 self.page.pop_dialog()
                 if not fut.done():
                     fut.set_result(result)
@@ -1025,6 +1117,7 @@ class ConverterApp:
         return await fut
 
     def busy(self, on: bool, message: str = "") -> None:
+        """Show or hide the progress bar, with a status message."""
         self.progress.visible = on
         self.progress.value = None if on else 0
         if message:
@@ -1033,6 +1126,7 @@ class ConverterApp:
 
     # ================================================================ events
     async def on_open(self, e):
+        """Open PDF: choose a file (in the web version it is uploaded to a private working copy) and load it."""
         files = await self.file_picker.pick_files(dialog_title=self.t("Choose a PDF"), allowed_extensions=["pdf"],
                                                   file_type=ft.FilePickerFileType.CUSTOM,
                                                   with_data=self.page.web)
@@ -1050,10 +1144,12 @@ class ConverterApp:
         await self.load_document()
 
     async def on_page_range(self, e):
+        """The page range changed: load the document again with it."""
         if self.source_path:
             await self.load_document()
 
     def _page_range(self) -> Optional[tuple[int, int]]:
+        """The first and last page to convert as entered, or None for the whole document."""
         try:
             a = int(self.tf_first.value) if self.tf_first.value else None
             b = int(self.tf_last.value) if self.tf_last.value else None
@@ -1065,6 +1161,7 @@ class ConverterApp:
         return (a or 1, b or 10 ** 6)
 
     def doc_status(self) -> str:
+        """One line about the open document: its name, what kind of PDF it is and its language."""
         t = self.t
         d = self.session.document
         name = Path(self.source_path).name
@@ -1076,10 +1173,14 @@ class ConverterApp:
         return t("{name}: {kind}. Language: {language}.", name=name, kind=kind, language=self.lang_name(d.language))
 
     async def load_document(self) -> None:
+        """Read the chosen PDF (text, OCR where needed, structure) in a thread, with progress in the status bar,
+        then convert and show it.
+        """
         name = Path(self.source_path).name
         self.busy(True, self.t("Reading {name}...", name=name))
 
         def progress(msg: str, frac: float) -> None:
+            """Progress from the reader: show the message and how far it is."""
             self.status.value = self.t.message(msg)
             self.progress.value = frac
             try:
@@ -1111,12 +1212,14 @@ class ConverterApp:
         await self.rerender()
 
     async def on_preset(self, e):
+        """A preset: use its settings."""
         name = e.control.value
         self.settings = self.store.preset(name)
         self.sync_controls()
         await self.settings_changed(recompute=True)
 
     def sync_controls(self) -> None:
+        """Make every setting control show the current value (after a preset, a reset or a change in focus mode)."""
         for key, ctl in self._controls.items():
             if key.endswith("_text"):
                 continue
@@ -1128,10 +1231,12 @@ class ConverterApp:
         self.page.update()
 
     async def on_save_settings(self, e):
+        """Save the current settings as "My Settings" (used from then on when the app starts)."""
         self.store.save_format(self.settings)
         self.notify(self.t("Saved as 'My Settings'. They will be used next time you open the app."))
 
     async def on_restore_defaults(self, e):
+        """Go back to the Standard preset."""
         self.settings = self.store.reset_format()
         self.sync_controls()
         self.preset_dd.value = "Standard"
@@ -1139,9 +1244,13 @@ class ConverterApp:
         self.notify(self.t("Default settings restored."))
 
     def _font_note(self) -> str:
+        """A note when the chosen font is not installed and a similar free font is used instead."""
         return self.t.message(get_family(self.settings.font).substitute_note)
 
     async def settings_changed(self, recompute: bool = False, reload: bool = False) -> None:
+        """A setting changed: convert again (``reload``: read the PDF again; ``recompute``: redo the OCR
+        corrections).
+        """
         if reload and self.source_path:
             self.font_note.value = self._font_note()
             await self.load_document()
@@ -1156,6 +1265,7 @@ class ConverterApp:
         await self.rerender()
 
     async def rerender(self) -> None:
+        """Convert the document again with the current settings and show the result (also in focus mode)."""
         if not self.session:
             return
         self.stop_reading()  # the pages change: what was being read no longer matches
@@ -1259,6 +1369,7 @@ class ConverterApp:
             divider.visible = item.visible = has
 
     async def on_export_highlights(self, e):
+        """"Include my highlights (PDF)" in the Export menu: switch it on or off (remembered)."""
         on = not bool(self.ui.get("export_highlights", True))
         self.ui["export_highlights"] = on
         self.store.save_ui(self.ui)
@@ -1267,11 +1378,13 @@ class ConverterApp:
         self.page.update()
 
     def _tap_tooltip(self) -> None:
+        """Explain on the tap-to-read button whether clicking the page starts reading."""
         on = bool(self.ui.get("tap_to_read", True))
         self.tap_btn.tooltip = self.t("Tap to read: on - click on the page to start reading there") if on else \
             self.t("Tap to read: off - clicking on the page does not start reading")
 
     async def on_tap_toggle(self, e):
+        """The tap-to-read button: switch it on or off."""
         self.ui["tap_to_read"] = not bool(self.ui.get("tap_to_read", True))
         self.store.save_ui(self.ui)
         self.tap_btn.selected = self.ui["tap_to_read"]
@@ -1279,6 +1392,7 @@ class ConverterApp:
         self.page.update()
 
     async def on_read_panel(self, e):
+        """The Read aloud button: fold the read-aloud controls out or away."""
         open_ = not bool(self.ui.get("read_panel_open", False))
         self.ui["read_panel_open"] = open_
         self.store.save_ui(self.ui)
@@ -1286,6 +1400,7 @@ class ConverterApp:
         self.page.update()
 
     async def on_focus(self, e):
+        """The Focus mode button."""
         await self.focus.open()
 
     def _speech_allowed(self) -> bool:
@@ -1318,6 +1433,7 @@ class ConverterApp:
                            "restart the app.", language=self.lang_name(lang)), error=True)
 
     def _voice(self) -> Optional[str]:
+        """The voice to read with: the one chosen, or the best one for the document's language."""
         v = self.ui.get("read_voice", "auto")
         if v and v != "auto":
             return v
@@ -1332,6 +1448,7 @@ class ConverterApp:
             await self.start_reading()
 
     async def _units(self) -> list:
+        """The converted document as sentences with their places on the pages (worked out once per conversion)."""
         if self._read_units is None:
             skip = self._contents_pages()
             self._read_units = await self.in_thread(lambda: speech.reading_units(self.converted_pdf,
@@ -1365,6 +1482,7 @@ class ConverterApp:
         await self.start_reading(si)
 
     def on_conv_size(self, e):
+        """Remember the size of the converted preview, to turn clicks into page positions."""
         self._conv_box = (e.width, e.height)
 
     async def start_reading(self, start: Optional[int] = None) -> None:
@@ -1384,6 +1502,7 @@ class ConverterApp:
         loop = asyncio.get_running_loop()
 
         def post(coro):
+            """Hand work from the speech thread to the app's event loop."""
             try:
                 asyncio.run_coroutine_threadsafe(coro, loop)
             except RuntimeError:
@@ -1448,6 +1567,7 @@ class ConverterApp:
             self._hl_busy = False
 
     async def _read_done(self, finished: bool) -> None:
+        """Reading aloud ended (finished, paused, or stopped by an error, which is reported)."""
         was_reading = self._reading
         self._reading = False
         if finished:
@@ -1475,12 +1595,14 @@ class ConverterApp:
             self._update_read_buttons()
 
     async def on_read_pause(self, e):
+        """Pause reading aloud (the play button continues from here)."""
         self._reading = False
         self.speaker.stop()
         self._update_read_buttons()
         self.page.update()
 
     async def on_read_stop(self, e):
+        """Stop reading aloud and forget the position."""
         self._reading = False
         self.speaker.stop()
         self._read_pos = None
@@ -1492,11 +1614,13 @@ class ConverterApp:
         await self.show_pages()
 
     async def _restart_reading(self) -> None:
+        """Start the current sentence again (after the speed or voice changed while reading)."""
         if self._reading:
             await self.on_read_pause(None)
             await self.on_read(None)
 
     async def on_read_speed(self, e):
+        """A new reading speed."""
         self.ui["read_speed"] = round(float(e.control.value), 2)
         self.speed_label.value = _speed_text(self.ui["read_speed"])
         self.store.save_ui(self.ui)
@@ -1504,15 +1628,18 @@ class ConverterApp:
         await self._restart_reading()  # the new speed starts with the current sentence
 
     async def on_read_voice(self, e):
+        """A different voice."""
         self.ui["read_voice"] = e.control.value
         self.store.save_ui(self.ui)
         await self._restart_reading()
 
     async def on_read_follow(self, e):
+        """"Turn pages along" on or off."""
         self.ui["read_follow"] = bool(e.control.value)
         self.store.save_ui(self.ui)
 
     async def show_pages(self) -> None:
+        """Render and show the current original and converted pages in the preview."""
         if self.source_path:
             self.orig_img.src = await self.in_thread(preview.render_page, self.source_path, self.orig_page, 800)
             self.orig_label.value = f"{self.t('Original')} {self.orig_page + 1} / {self.orig_count}"
@@ -1522,6 +1649,7 @@ class ConverterApp:
         self.page.update()
 
     async def page_step(self, which: str, delta: int) -> None:
+        """Go ``delta`` pages in the original ("orig") or converted preview; in Both view the other side follows."""
         if which == "orig":
             self.orig_page = max(0, min(self.orig_count - 1, self.orig_page + delta))
             if self.view_mode == "side":
@@ -1533,6 +1661,7 @@ class ConverterApp:
         await self.show_pages()
 
     def _page_map(self) -> dict[int, list[int]]:
+        """Which converted pages show each original page (from the conversion), for keeping Both view in step."""
         return getattr(self.session, "page_map", None) or {}
 
     def _original_follows(self, delta: int = 1) -> None:
@@ -1553,6 +1682,7 @@ class ConverterApp:
             self.conv_page = max(0, min(self.conv_count - 1, hit))
 
     async def on_view_mode(self, e):
+        """Original / Both / Converted."""
         mode = list(e.control.selected)[0] if e.control.selected else "side"
         self.view_mode = mode
         self.orig_panel.visible = mode in ("orig", "side")
@@ -1560,6 +1690,9 @@ class ConverterApp:
         self.page.update()
 
     async def on_export(self, e):
+        """Export in the format of the menu item chosen: convert, add highlights to PDFs when asked, and save
+        where the user picks (never over the original).
+        """
         t = self.t
         if not self.session:
             self.notify(t("Open a PDF first."), error=True)
@@ -1598,22 +1731,26 @@ class ConverterApp:
 
     # ---- review events
     async def on_accept(self, e):
+        """Accept an OCR correction."""
         self.session.set_correction(e.control.data, "accepted")
         self.refresh_review()
         await self.rerender()
 
     async def on_reject(self, e):
+        """Reject an OCR correction (the original OCR text is used)."""
         self.session.set_correction(e.control.data, "rejected")
         self.refresh_review()
         await self.rerender()
 
     async def on_undo_all(self, e):
+        """Undo every OCR correction."""
         if self.session:
             self.session.revert_all_corrections()
             self.refresh_review()
             await self.rerender()
 
     async def on_add_word(self, e):
+        """Add the typed word to the user's dictionary."""
         w = (self.word_field.value or "").strip()
         if w:
             await self._add_word(w)
@@ -1621,9 +1758,11 @@ class ConverterApp:
             self.page.update()
 
     async def on_add_word_from_review(self, e):
+        """Add a word from the review list to the user's dictionary (so it is no longer "corrected")."""
         await self._add_word(e.control.data)
 
     async def _add_word(self, word: str) -> None:
+        """Add a word to the user's dictionary and redo the corrections with it."""
         self.custom_words.add(word)
         self.words_view.value = ", ".join(sorted(self.custom_words.words))
         if self.session and self.session.document.ocr_used:
@@ -1635,6 +1774,7 @@ class ConverterApp:
 
 
 def _blank_png() -> bytes:
+    """A small transparent PNG for an empty preview."""
     import io
 
     from PIL import Image
@@ -1645,6 +1785,7 @@ def _blank_png() -> bytes:
 
 
 def main(page: ft.Page) -> None:
+    """Flet entry point: build the app in the window Flet gives us."""
     app = ConverterApp(page)
     app.build()
     page.update()
@@ -1654,4 +1795,5 @@ ASSETS_DIR = str(Path(__file__).resolve().parent.parent / "assets")
 
 
 def run() -> None:
+    """Start the app (desktop window, or the web version when Flet is run that way)."""
     ft.run(main, assets_dir=ASSETS_DIR)

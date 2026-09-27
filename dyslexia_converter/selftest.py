@@ -82,6 +82,9 @@ def _dictionary_report() -> str:
 
 
 def run(argv: list[str]) -> int:
+    """``--selftest input.pdf output.pdf [log.txt]``: report the version, OCR engine, speech and dictionary, convert
+    a PDF, and write the report (used on the packaged Windows app in CI). Returns the exit code.
+    """
     src = Path(argv[0]) if argv else None
     out = Path(argv[1]) if len(argv) > 1 else None
     log = Path(argv[2]) if len(argv) > 2 else (out.with_suffix(".log") if out else Path("selftest.log"))

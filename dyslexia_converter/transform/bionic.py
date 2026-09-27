@@ -14,6 +14,7 @@ SKIP_TOKEN_RE = re.compile(
 
 
 def bold_length(word_len: int, amount: str) -> int:
+    """How many letters at the start of a word are set in bold (``amount``: first letter, 25 %, 40 % or automatic)."""
     if word_len <= 0:
         return 0
     if amount == "first_letter":

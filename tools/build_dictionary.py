@@ -21,10 +21,12 @@ OUT = Path(__file__).resolve().parent.parent / "dyslexia_converter" / "assets" /
 
 
 def main(zip_path: str) -> None:
+    """Build the dictionary file from the WordNet zip."""
     z = zipfile.ZipFile(zip_path)
     root = next(n.split("/")[0] for n in z.namelist() if n.endswith("data.noun"))
 
     def lines(name: str):
+        """The data lines of a WordNet file (the licence header lines start with a space)."""
         for line in z.read(f"{root}/{name}").decode("utf-8").splitlines():
             if line and not line.startswith(" "):
                 yield line

@@ -21,6 +21,9 @@ ASSET_DIR = Path(__file__).parent / "assets" / "fonts"
 
 @dataclass(frozen=True)
 class FontFamily:
+    """The four font files of a family (regular, bold, italic, bold italic), with a note for the user when a similar
+    free font stands in for one that is not installed.
+    """
     name: str
     regular: str
     bold: str
@@ -66,6 +69,7 @@ MATH_FAMILY = "Times New Roman"
 
 
 def _system_font_dirs() -> list[Path]:
+    """The folders where this operating system keeps installed fonts."""
     dirs: list[Path] = []
     if sys.platform.startswith("win"):
         dirs.append(Path(os.environ.get("WINDIR", "C:\\Windows")) / "Fonts")
@@ -83,6 +87,7 @@ def _system_font_dirs() -> list[Path]:
 
 @lru_cache(maxsize=None)
 def _system_index() -> dict[str, str]:
+    """Every installed .ttf font file by lower-case file name."""
     index: dict[str, str] = {}
     for d in _system_font_dirs():
         for root, _dirs, files in os.walk(d):
@@ -93,6 +98,7 @@ def _system_index() -> dict[str, str]:
 
 
 def _find_system(candidates: tuple[str, ...]) -> Optional[str]:
+    """The first of the candidate file names that is installed, or None."""
     index = _system_index()
     for c in candidates:
         if c.lower() in index:
@@ -102,6 +108,9 @@ def _find_system(candidates: tuple[str, ...]) -> Optional[str]:
 
 @lru_cache(maxsize=None)
 def get_family(name: str) -> FontFamily:
+    """The font files for a family name: bundled fonts, installed system fonts, or a similar bundled free font as a
+    stand-in.
+    """
     if name in _BUNDLED:
         paths = [str(ASSET_DIR / f) for f in _BUNDLED[name]]
         return FontFamily(name, *paths)
@@ -119,6 +128,7 @@ def get_family(name: str) -> FontFamily:
 
 
 def font_path(family: str, bold: bool = False, italic: bool = False) -> str:
+    """The file of one style of a family."""
     fam = get_family(family)
     if bold and italic:
         return fam.bold_italic

@@ -36,6 +36,12 @@ CAPTION_RE = re.compile(r"^\s*(fig\.?|figure|figuur|afb\.?|afbeelding|table|tab\
 
 @dataclass
 class RawLine:
+    """One line of text as read from a page, before structure detection.
+
+    ``bbox`` is in PDF points on the page; ``size`` is the font size; ``source`` says whether it came from the
+    PDF's text ("text"), OCR ("ocr") or the scanner's stored text; ``styles`` mark bold, italic, math and links
+    within the line; ``conf`` holds OCR word confidences.
+    """
     text: str
     bbox: Rect
     size: float
@@ -54,39 +60,47 @@ class RawLine:
 
     @property
     def x0(self) -> float:
+        """Left edge (points)."""
         return self.bbox[0]
 
     @property
     def y0(self) -> float:
+        """Top edge (points)."""
         return self.bbox[1]
 
     @property
     def x1(self) -> float:
+        """Right edge (points)."""
         return self.bbox[2]
 
     @property
     def y1(self) -> float:
+        """Bottom edge (points)."""
         return self.bbox[3]
 
     @property
     def height(self) -> float:
+        """Height of the line's box (points)."""
         return self.bbox[3] - self.bbox[1]
 
 
 @dataclass
 class RawFigure:
+    """A picture on a page (a photo, graph or formula kept as an image) with where it was."""
     bbox: Rect
     image: ImageData
 
 
 @dataclass
 class RawTable:
+    """A table found on a page, with where it was."""
     bbox: Rect
     table: TableData
 
 
 @dataclass
 class RawPage:
+    """Everything read from one page: its lines, figures and tables, and facts about the page."""
     info: PageInfo
     lines: list[RawLine] = field(default_factory=list)
     figures: list[RawFigure] = field(default_factory=list)
@@ -95,6 +109,7 @@ class RawPage:
 
 @dataclass
 class RawDocument:
+    """The whole PDF as read: its pages, title, author, bookmarks (level, title, page) and warnings for the user."""
     pages: list[RawPage]
     title: str = ""
     author: str = ""
@@ -105,10 +120,12 @@ class RawDocument:
 # --------------------------------------------------------------------------- helpers
 
 def _area(r: Rect) -> float:
+    """Area of a rectangle (0 when it is empty)."""
     return max(0.0, r[2] - r[0]) * max(0.0, r[3] - r[1])
 
 
 def _intersect(a: Rect, b: Rect) -> Rect:
+    """The overlap of two rectangles (may be empty: check with :func:`_area`)."""
     return (max(a[0], b[0]), max(a[1], b[1]), min(a[2], b[2]), min(a[3], b[3]))
 
 
@@ -119,22 +136,27 @@ def overlap_ratio(inner: Rect, outer: Rect) -> float:
 
 
 def _union(a: Rect, b: Rect) -> Rect:
+    """The smallest rectangle around two rectangles."""
     return (min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3]))
 
 
 def _expand(r: Rect, d: float) -> Rect:
+    """A rectangle grown by ``d`` points on every side."""
     return (r[0] - d, r[1] - d, r[2] + d, r[3] + d)
 
 
 def _is_bold_font(name: str, flags: int) -> bool:
+    """Whether a font is bold, from its flags or its name."""
     return bool(flags & 16) or bool(re.search(r"bold|black|heavy|semibold|demi", name, re.I))
 
 
 def _is_italic_font(name: str, flags: int) -> bool:
+    """Whether a font is italic, from its flags or its name."""
     return bool(flags & 2) or bool(re.search(r"italic|oblique", name, re.I))
 
 
 def render_clip(page: pymupdf.Page, rect: Rect, dpi: int = FIGURE_DPI) -> ImageData:
+    """A part of a page as a PNG picture (for figures and formulas kept as images)."""
     pix = page.get_pixmap(clip=pymupdf.Rect(rect), dpi=dpi, alpha=False)
     return ImageData(pix.tobytes("png"), "png", pix.width, pix.height)
 
@@ -238,9 +260,11 @@ def _page_mapper(page: pymupdf.Page):
     origin = pymupdf.Point(0, 0) * m
 
     def rect(r) -> Rect:
+        """A rectangle in unrotated page coordinates."""
         return tuple(pymupdf.Rect(r) * m)
 
     def direction(d) -> tuple[float, float]:
+        """A text direction in unrotated page coordinates."""
         q = pymupdf.Point(d) * m - origin
         return (q.x, q.y)
 
@@ -249,6 +273,7 @@ def _page_mapper(page: pymupdf.Page):
 
 @dataclass
 class _Span:
+    """A run of characters in one font from the PDF's text, with its box and baseline (points)."""
     text: str
     bbox: Rect
     baseline: float
@@ -259,14 +284,17 @@ class _Span:
 
     @property
     def x0(self) -> float:
+        """Left edge (points)."""
         return self.bbox[0]
 
     @property
     def x1(self) -> float:
+        """Right edge (points)."""
         return self.bbox[2]
 
     @property
     def mid_y(self) -> float:
+        """Vertical middle of the span's box (points)."""
         return (self.bbox[1] + self.bbox[3]) / 2
 
 
@@ -278,6 +306,7 @@ ACCENTS = {"˜": "\u0303", "~": "\u0303", "ˆ": "\u0302", "^": "\u0302", "¯": "
 
 
 def _is_accent(sp: "_Span") -> bool:
+    """Whether a span is only a loose accent mark (placed over a letter by position in some PDFs)."""
     t = sp.text.strip()
     return bool(t) and len(t) <= 3 and all(c in ACCENTS or c.isspace() for c in t) and not t.startswith("→")
 
@@ -298,9 +327,11 @@ LEADER_RE = re.compile(r"\s*(?:\.\s?){5,}\s*(?=\S*\s*$)")
 
 def _replace_run(text: str, styles: list[StyleRange], start: int, end: int, repl: str
                  ) -> tuple[str, list[StyleRange]]:
+    """Replace text[start:end] with ``repl`` and move the style ranges along with the text."""
     delta = len(repl) - (end - start)
 
     def at(i: int) -> int:
+        """Where position ``i`` ends up after the replacement."""
         return i if i <= start else (start + len(repl) if i < end else i + delta)
     moved = [replace(st, start=at(st.start), end=at(st.end)) for st in styles]
     return text[:start] + repl + text[end:], [st for st in moved if st.end > st.start]
@@ -329,6 +360,7 @@ def _unspace(text: str, styles: list[StyleRange], positions: list[tuple[int, flo
     lead = len(text) - len(text.lstrip())
 
     def at(i: int) -> int:
+        """Where position ``i`` of the old text ends up in the new text."""
         keys = [k for k in new_index if k >= i]
         return new_index[min(keys)] if keys else len(out)
     moved = [replace(st, start=at(st.start), end=at(st.end) if st.end < len(text) else len(out)) for st in styles]
@@ -403,6 +435,9 @@ def _rotated_blocks(page: pymupdf.Page, taken: list[Rect]) -> list[RawFigure]:
 
 
 def _page_spans(page: pymupdf.Page) -> list[_Span]:
+    """Every horizontal run of text on a page, in unrotated page coordinates (rotated text such as margin notes and
+    watermarks is left out).
+    """
     d = page.get_text("rawdict", flags=pymupdf.TEXTFLAGS_RAWDICT & ~pymupdf.TEXT_PRESERVE_IMAGES)
     to_page, to_dir = _page_mapper(page)
     spans: list[_Span] = []
@@ -442,6 +477,7 @@ def _attach_small(sp: _Span, rows: list[dict], rules: Optional[list[Rect]]) -> b
         return False
 
     def nearest(expand: float, key) -> Optional[dict]:
+        """The row a small span most likely belongs to (within ``expand`` extra font sizes), ranked by ``key``."""
         best, best_d = None, None
         for row in rows:
             lo = row["baseline"] - (1.05 + expand) * row["size"]
@@ -491,6 +527,9 @@ def _rows(spans: list[_Span], rules: Optional[list[Rect]] = None) -> list[list[_
         main[bno] = c.most_common(1)[0][0]
 
     def is_small(sp: _Span) -> bool:
+        """Whether a span is small (an index, accent or big math sign) and is placed by position instead of by
+        baseline.
+        """
         if _is_accent(sp):
             return True  # an accent over a letter belongs to that letter's line
         if re.match(r"^(CMEX|MTEX|TXEX|PXEX|RMTEX)", base_font(sp.font), re.I):
@@ -503,6 +542,9 @@ def _rows(spans: list[_Span], rules: Optional[list[Rect]] = None) -> list[list[_
     rows: list[dict] = []
 
     def join(sp: _Span, by_box: bool) -> bool:
+        """Put a span into an existing row when it lines up with it (``by_box``: by its box instead of its
+        baseline); False when it starts a new row.
+        """
         for row in rows:
             size = max(sp.size, row["size"])
             if by_box:
@@ -646,6 +688,7 @@ def new_placeholder() -> str:
 
 
 def is_placeholder(ch: str) -> bool:
+    """Whether a character is a private-use placeholder (used internally for formula parts)."""
     return 0xF0000 <= ord(ch) <= 0xFFFFD
 
 
@@ -657,6 +700,7 @@ def _stacks(row: list[_Span], rules: list[Rect], baseline: float, size: float) -
     found: list[tuple[Rect, list[_Span], str]] = []
 
     def cx(sp: _Span) -> float:
+        """Horizontal centre of a span."""
         return (sp.x0 + sp.x1) / 2
 
     for r in rules:
@@ -718,6 +762,7 @@ def _group_scripts(row: list[_Span], baseline: float, ref_size: float, skip: dic
     cluster: list[_Span] = []
 
     def flush() -> None:
+        """Write out the collected indices; a sub- and superscript on the same character stay together."""
         subs = [sp for sp in cluster if sp.baseline > baseline]
         sups = [sp for sp in cluster if sp.baseline <= baseline]
         if subs and sups and min(sp.x0 for sp in sups) < max(sp.x1 for sp in subs) - 0.5 and \
@@ -739,6 +784,7 @@ def _group_scripts(row: list[_Span], baseline: float, ref_size: float, skip: dic
 
 
 def _text_lines(page: pymupdf.Page, pno: int) -> list[RawLine]:
+    """The text lines of a page, with bold/italic/math styles, formulas recognised and indices placed."""
     spans = _page_spans(page)
     try:
         rules = [tuple(d["rect"]) for d in page.get_drawings()
@@ -914,6 +960,7 @@ def _text_lines(page: pymupdf.Page, pno: int) -> list[RawLine]:
 
 
 def _continues_line(prev: RawLine, ln: RawLine) -> bool:
+    """Whether line ``ln`` is the continuation of ``prev`` on the same visual line (split by fonts or formulas)."""
     gap = ln.x0 - prev.x1
     size = max(prev.size, ln.size)
     has_math = any(st.math for st in prev.styles + ln.styles)
@@ -974,6 +1021,9 @@ def _clear_of_text(clip: Rect, rect: Rect, lines: list[RawLine]) -> Rect:
 
 def _figures(page: pymupdf.Page, doc: pymupdf.Document, lines: list[RawLine],
              exclude: list[Rect], repeated_xrefs: set[int]) -> list[RawFigure]:
+    """The pictures on a page (photos, graphs, drawings), leaving out logos repeated on every page, full-page
+    backgrounds and areas in ``exclude`` (tables, formulas).
+    """
     prect = tuple(page.rect)
     parea = _area(prect)
     regions: list[list] = []  # [rect, xref or 0]
@@ -1007,6 +1057,7 @@ def _figures(page: pymupdf.Page, doc: pymupdf.Document, lines: list[RawLine],
         regions.append([r, 0])
 
     def merge_overlapping(grow: float) -> None:
+        """Join picture regions that touch or overlap (within ``grow`` points) into one figure."""
         merged = True
         while merged:
             merged = False
@@ -1163,6 +1214,7 @@ def _equations(page: pymupdf.Page, lines: list[RawLine]) -> tuple[list[RawFigure
     body = sizes.most_common(1)[0][0] if sizes else 10
 
     def column(l: RawLine) -> tuple[float, float]:
+        """The text column a line is in (left, right)."""
         left = [c for c in cols if c[0] <= l.x0 + 3 and l.x1 <= c[1] + 0.25 * (c[1] - c[0])]
         return max(left, key=lambda c: c[0]) if left else min(cols, key=lambda c: abs(c[0] - l.x0))
 
@@ -1174,6 +1226,7 @@ def _equations(page: pymupdf.Page, lines: list[RawLine]) -> tuple[list[RawFigure
     def spaced(l: RawLine) -> bool:
         """Extra white space above or below, as TeX puts around display equations."""
         def near(o: RawLine) -> bool:
+            """Whether another line overlaps this one horizontally."""
             return o is not l and min(o.x1, l.x1) - max(o.x0, l.x0) > 0
         above = [l.y0 - o.y1 for o in lines if near(o) and o.y1 <= l.y0 + 1]
         below = [o.y0 - l.y1 for o in lines if near(o) and o.y0 >= l.y1 - 1]
@@ -1217,6 +1270,7 @@ def _equations(page: pymupdf.Page, lines: list[RawLine]) -> tuple[list[RawFigure
     candidates = {id(l) for l in marked}
 
     def inline(l: RawLine) -> bool:
+        """Whether a formula-looking line is part of the running text (not a display equation)."""
         left = column(l)[0]
         # the last line of a paragraph that happens to be all formula: it starts where the text above starts
         # and follows it at the normal line distance
@@ -1253,6 +1307,7 @@ def _equations(page: pymupdf.Page, lines: list[RawLine]) -> tuple[list[RawFigure
         col = column(n)
 
         def formula_like(l: RawLine) -> bool:
+            """Whether a line next to a numbered formula is part of it (short, mostly formula)."""
             if l is n or id(l) in kept or column(l) != col or l.x1 > n.x0 + 1 or CAPTION_RE.match(l.text):
                 return False
             math, formula, total, words = _math_profile(l)
@@ -1351,6 +1406,7 @@ def _equations(page: pymupdf.Page, lines: list[RawLine]) -> tuple[list[RawFigure
         pix = page.get_pixmap(clip=pymupdf.Rect(clip), dpi=EQUATION_DPI, alpha=True)
 
         def alt_of(members: list[RawLine]) -> str:
+            """The text of a formula built from several lines, read top to bottom, left to right."""
             ordered = sorted(members, key=lambda l: (round(l.y0 / 3), l.x0))
             alt = " ".join(l.text for l in ordered)
             for l in members:
@@ -1397,6 +1453,7 @@ def _ink_bands(pix: pymupdf.Pixmap, body: float) -> list[tuple[int, int]]:
     cols = alpha > 20
 
     def width(b0: int, b1: int) -> int:
+        """Width of the inked part of rows b0..b1 of the picture (pixels)."""
         inked_x = np.flatnonzero(cols[b0:b1].any(axis=0))
         return int(inked_x[-1] - inked_x[0]) if len(inked_x) else 0
     changed = True
@@ -1415,6 +1472,7 @@ def _ink_bands(pix: pymupdf.Pixmap, body: float) -> list[tuple[int, int]]:
 
 
 def _crop_rows(pix: pymupdf.Pixmap, y0: int, y1: int) -> pymupdf.Pixmap:
+    """Rows y0..y1 of a pixmap as a new pixmap."""
     part = pymupdf.Pixmap(pix.colorspace, pymupdf.IRect(0, 0, pix.width, y1 - y0), pix.alpha)
     stride = pix.stride
     part.set_origin(0, 0)
@@ -1460,6 +1518,7 @@ def _close_number_gap(pix: pymupdf.Pixmap, body: float) -> tuple[bytes, int, int
 # --------------------------------------------------------------------------- tables
 
 def _tables(page: pymupdf.Page) -> list[RawTable]:
+    """The tables PyMuPDF finds on a page, checked against the page's ruling lines and turned into TableData."""
     out: list[RawTable] = []
     try:
         found = page.find_tables()
@@ -1493,6 +1552,7 @@ TABLE_CAPTION_RE = re.compile(r"^\s*(table|tab\.?|tabel)\s*[\dIVX]+", re.I)
 
 
 def _horizontal_rules(drawings: list[dict]) -> list[Rect]:
+    """Horizontal lines drawn on a page (at least 40 points wide), as (x0, y, x1, y)."""
     out = []
     for d in drawings:
         r = d["rect"]
@@ -1530,6 +1590,9 @@ def _rule_tables(page: pymupdf.Page, existing: list[RawTable]) -> list[RawTable]
         page_lines = []
 
     def caption_between(y0: float, y1: float, x0: float, x1: float) -> bool:
+        """Whether a table/figure caption lies between two heights within x0..x1 (the ruled area is then not one
+        table).
+        """
         for l in page_lines:
             b = l["bbox"]
             if y0 < b[1] and b[3] < y1 and b[0] < x1 and b[2] > x0 and \
@@ -1627,6 +1690,7 @@ def _rule_tables(page: pymupdf.Page, existing: list[RawTable]) -> list[RawTable]
             continue
 
         def col_of(w) -> int:
+            """The column a word's box falls in, from the column borders ``cuts``."""
             cx = (w[0] + w[2]) / 2
             return sum(1 for c in cuts if cx > c)
 
@@ -1823,6 +1887,9 @@ def _scan_formulas(lines: list[RawLine], width: float, crop: Callable[[Rect], Im
     text_w = max(1.0, right - left)
 
     def formula_like(l: RawLine) -> bool:
+        """Whether an OCR line looks like a formula OCR could not read (set apart, few real words, low
+        confidence, or an equation number).
+        """
         body = re.sub(r"\s", "", l.text)
         if len(body) < 3 or (len(body) <= 5 and re.fullmatch(r"[\divxlcIVXLC.\-–—]+", body)):
             return False  # page numbers
@@ -1914,6 +1981,9 @@ def _is_ocr_noise(line: RawLine) -> bool:
 
 def _figures_from_regions(regions: list[Rect], lines: list[RawLine], page_area: float,
                           crop: Callable[[Rect], ImageData]) -> list[RawFigure]:
+    """Figures cut from picture regions of a scanned page (too small, too large or overlapping regions skipped; edges
+    that clip text lines trimmed).
+    """
     figures: list[RawFigure] = []
     for r in regions:
         if _area(r) < 0.015 * page_area or _area(r) > 0.9 * page_area:
@@ -1944,7 +2014,9 @@ def _ocr_page(page: pymupdf.Page, pno: int, engine: OcrEngine, languages: list[s
 
 
 def _photo_crop(photo, dpi: int) -> Callable[[Rect], ImageData]:
+    """A function that cuts a region (points) out of a scanned page's photo as a PNG at up to 200 dpi."""
     def crop(r: Rect) -> ImageData:
+        """The region ``r`` (points) of the photo as a PNG."""
         k = dpi / 72.0
         box = (max(0, int(r[0] * k)), max(0, int(r[1] * k)), min(photo.width, int(r[2] * k)),
                min(photo.height, int(r[3] * k)))
@@ -1982,6 +2054,7 @@ def _scan_pages(rendered, source_page: int, engine: OcrEngine, languages: list[s
 
 def _scan_image_pages(rendered, source_page: int, engine: OcrEngine, languages: list[str],
                       split_spreads: bool) -> list[RawPage]:
+    """OCR one scanned page (split into two book pages when it is a spread), with its figures."""
     from .scan import prepare_page
 
     out: list[RawPage] = []
@@ -2001,6 +2074,7 @@ def _ocr_quality(pages: list[RawPage]) -> float:
 
 
 def _poor_ocr(pages: list[RawPage]) -> bool:
+    """Whether OCR found little text or had low confidence (then the scanner's own text may be better)."""
     words = sum(len(l.conf) for p in pages for l in p.lines)
     return words < 15 or _ocr_quality(pages) < 55
 
@@ -2053,6 +2127,7 @@ def _text_layer_scan_page(page: pymupdf.Page, pno: int,
 
 
 def _garbled(line: RawLine, known: Callable[[str], bool]) -> bool:
+    """Whether a line of the scanner's stored text is mostly non-words (then OCR is used instead)."""
     words = re.findall(r"[A-Za-z]{3,}", line.text)
     if len(line.text) < 15 or not words:
         return False
@@ -2061,6 +2136,7 @@ def _garbled(line: RawLine, known: Callable[[str], bool]) -> bool:
 
 def _replace_garbled_halves(page: pymupdf.Page, lines: list[RawLine], figures: list[RawFigure],
                             known: Callable[[str], bool], photo, dpi: int):
+    """Where the scanner's stored text is garbled on (half of) a page, use the page picture for that part instead."""
     w, h = page.rect.width, page.rect.height
     halves = [(0.0, w / 2), (w / 2, w)] if w > h * 1.15 else [(0.0, w)]  # spreads: judge each book page
     crop = _photo_crop(photo, dpi)
@@ -2143,6 +2219,7 @@ def _scan_graphic_regions(png: bytes, lines: list[RawLine], width: float, height
 # --------------------------------------------------------------------------- main entry
 
 def _duration(seconds: float) -> str:
+    """A rough time left for the progress message ("25 s", "3 min")."""
     if seconds < 60:
         return f"{max(1, int(round(seconds / 5.0) * 5))} s"
     return f"{int(round(seconds / 60.0))} min"
@@ -2191,6 +2268,7 @@ def read_pdf(path: str, ocr_engine: Optional[OcrEngine] = None, languages: Optio
         lock = threading.Lock()
 
         def report_scan(_fut) -> None:
+            """A scanned page is done: update the progress with an estimate of the time left."""
             with lock:
                 scans_done[0] += 1
                 done = scans_done[0]

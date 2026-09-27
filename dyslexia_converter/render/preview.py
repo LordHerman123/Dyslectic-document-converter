@@ -5,6 +5,7 @@ import pymupdf
 
 
 def page_count(pdf: bytes | str) -> int:
+    """Number of pages in a PDF (given as bytes or a file path)."""
     with _open(pdf) as doc:
         return doc.page_count
 
@@ -42,6 +43,7 @@ def render_page(pdf: bytes | str, index: int, width_px: int = 700) -> bytes:
 
 
 def _open(pdf: bytes | str) -> pymupdf.Document:
+    """Open a PDF given as bytes (the converted document in memory) or as a file path."""
     if isinstance(pdf, (bytes, bytearray)):
         return pymupdf.open(stream=bytes(pdf), filetype="pdf")
     return pymupdf.open(pdf)
@@ -55,6 +57,11 @@ TINTS = {"white": (255, 255, 255), "cream": (250, 241, 214), "blue": (214, 230, 
 
 
 def _tinted(base, tint: str):
+    """The page picture in a reading colour.
+
+    Light colours multiply the page (black text stays black, white paper takes the colour); "dark" inverts it to
+    light text on a dark page.
+    """
     from PIL import Image, ImageChops, ImageOps
 
     if tint == "dark":

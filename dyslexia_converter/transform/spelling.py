@@ -48,6 +48,7 @@ STOPWORDS = {
 
 
 def detect_language(text: str) -> str:
+    """The language of a text (en, nl, de, fr, es, it, pt), guessed from common short words; English when unsure."""
     words = Counter(w.lower() for w in TOKEN_RE.findall(text[:20000]))
     scores = {lang: sum(words[w] for w in sw) for lang, sw in STOPWORDS.items()}
     best = max(scores, key=scores.get)
@@ -58,6 +59,7 @@ class CustomWords:
     """User dictionary stored as a plain text file (one word per line)."""
 
     def __init__(self, path: Optional[Path] = None):
+        """Load the user's words (none yet when the file does not exist)."""
         self.path = path or (app_data_dir() / "custom_words.txt")
         self.words: set[str] = set()
         try:
@@ -66,25 +68,30 @@ class CustomWords:
             pass
 
     def add(self, word: str) -> None:
+        """Add a word and save."""
         word = word.strip()
         if word:
             self.words.add(word)
             self._save()
 
     def remove(self, word: str) -> None:
+        """Remove a word and save."""
         self.words.discard(word)
         self._save()
 
     def _save(self) -> None:
+        """Write the words, one per line, sorted."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text("\n".join(sorted(self.words, key=str.lower)) + "\n", encoding="utf-8")
 
     def __contains__(self, word: str) -> bool:
+        """Whether a word is in the user's dictionary (also in another case)."""
         return word in self.words or word.lower() in {w.lower() for w in self.words}
 
 
 @lru_cache(maxsize=None)
 def _spellchecker(lang: str):
+    """A pyspellchecker for a language (English when the language is not available)."""
     from spellchecker import SpellChecker
 
     try:
@@ -97,15 +104,20 @@ class Dictionary:
     """Word lookup for one or more languages (pyspellchecker backend)."""
 
     def __init__(self, languages: Iterable[str], custom: Optional[CustomWords] = None):
+        """Check words in these languages (unsupported ones are dropped) and the user's own words."""
         self.languages = [l for l in languages if l in SUPPORTED_LANGUAGES] or ["en"]
         self.checkers = [_spellchecker(l) for l in self.languages]
         self.custom = custom
         self._cand_cache: dict[str, set[str]] = {}
 
     def _in_dict(self, w: str) -> bool:
+        """Whether a lower-case word is in any of the language dictionaries."""
         return any(w in c for c in self.checkers)
 
     def known(self, word: str) -> bool:
+        """Whether a word is correct: in the user's words, a dictionary, a possessive of a known word, or made of
+        known parts.
+        """
         if self.custom is not None and word in self.custom:
             return True
         w = word.lower().replace("\u2019", "'").replace("\u2018", "'")
@@ -143,6 +155,7 @@ class Dictionary:
         return any(w in _spellchecker(l) for l in others)
 
     def frequency(self, word: str) -> float:
+        """How common a word is (0 when unknown): used to choose between correction candidates."""
         w = word.lower()
         return max((c.word_usage_frequency(w) for c in self.checkers), default=0.0)
 
@@ -262,11 +275,15 @@ INFLECTIONS = ("s", "es", "ed", "d", "ing", "ly", "er", "ers", "al", "ally", "ne
 
 
 def _is_inflection(a: str, b: str) -> bool:
+    """Whether one word is the other plus a common ending ("test"/"tests"): such pairs are not corrected into each
+    other.
+    """
     long, short = (a, b) if len(a) > len(b) else (b, a)
     return long.startswith(short) and long[len(short):] in INFLECTIONS
 
 
 def match_case(template: str, word: str) -> str:
+    """``word`` in the capitalisation of ``template`` (all caps, first capital, or lower case)."""
     if template.isupper():
         return word.upper()
     if template[:1].isupper():
@@ -275,12 +292,22 @@ def match_case(template: str, word: str) -> str:
 
 
 class OcrCorrector:
+    """Suggests corrections for OCR errors with the local dictionary (no AI needed).
+
+    A word is only corrected when it is unknown, not protected (names, abbreviations, numbers, words used several
+    times in the document), and a known word is close enough to it; ``threshold`` is the confidence needed to
+    apply a correction automatically.
+    """
     def __init__(self, dictionary: Dictionary, threshold: float = 0.9):
+        """``threshold``: corrections at least this sure are applied; others wait in the review tab."""
         self.dictionary = dictionary
         self.threshold = threshold
 
     # ---------------------------------------------------------------- helpers
     def _protected(self, token: str, text: str, pos: int, doc_counts: Counter) -> bool:
+        """Whether a token must be left alone: short words, abbreviations, names, identifiers, numbers, foreign
+        words, or words the document uses more than once.
+        """
         if len(token) <= 2:
             return True
         if self.dictionary.languages == ["en"] and re.search(r"[\u00C0-\u024F]", token):
@@ -304,6 +331,9 @@ class OcrCorrector:
 
     def suggest(self, token: str, text: str, pos: int, doc_counts: Counter,
                 word_conf: Optional[float] = None) -> Optional[tuple[str, float]]:
+        """A correction for one token (the corrected word and how sure it is), or None. ``word_conf`` is the OCR
+        confidence of the word.
+        """
         d = self.dictionary
         if d.known(token) or self._protected(token, text, pos, doc_counts):
             return None
@@ -423,6 +453,7 @@ class OcrCorrector:
 
 
 def _word_conf(block: Block, pos: int) -> Optional[float]:
+    """The OCR confidence of the word at position ``pos`` in a block, if known."""
     for c in block.ocr_confidence:
         if c.start <= pos < c.end:
             return c.confidence
@@ -433,6 +464,7 @@ def word_rejoiner(dictionary: Dictionary):
     """Decide whether two pieces at a line/page break are one word that lost its hyphen in OCR."""
 
     def decide(left: str, right: str) -> bool:
+        """Join the two pieces when only the joined word is a known word."""
         if dictionary.known(left) and dictionary.known(right):
             return False
         return dictionary.known(left + right)
@@ -444,6 +476,9 @@ def dehyphenator(dictionary: Dictionary):
     """Decide whether ``left-`` + ``right`` at a line break is one word."""
 
     def decide(left: str, right: str) -> bool:
+        """Join the pieces when the joined word is known, or when neither piece is a word; keep the hyphen for
+        real compounds ("well-known").
+        """
         joined = left + right
         if dictionary.known(joined):
             return True

@@ -27,6 +27,7 @@ ALIGN = {"left": WD_ALIGN_PARAGRAPH.LEFT, "center": WD_ALIGN_PARAGRAPH.CENTER,
 
 
 def _set_char_spacing(run, pts: float) -> None:
+    """Extra space between letters of a run, in points."""
     if not pts:
         return
     rpr = run._r.get_or_add_rPr()
@@ -36,6 +37,7 @@ def _set_char_spacing(run, pts: float) -> None:
 
 
 def _shade(paragraph, hex_fill: str) -> None:
+    """A background colour behind a paragraph."""
     ppr = paragraph._p.get_or_add_pPr()
     shd = OxmlElement("w:shd")
     shd.set(qn("w:val"), "clear")
@@ -46,6 +48,9 @@ def _shade(paragraph, hex_fill: str) -> None:
 
 def _add_runs(p, item: RItem, s: FormatSettings, size: float, bold_all: bool = False,
               images: Optional[dict] = None) -> None:
+    """Add an item's text to a Word paragraph with its styles (bold, italic, indices, bold word starts) and formula
+    pictures.
+    """
     color = RGBColor.from_string(s.text_color.lstrip("#").upper()) if not s.ink_saving else RGBColor(0, 0, 0)
     images = images or {}
     for r in item.runs:
@@ -75,6 +80,9 @@ def _add_runs(p, item: RItem, s: FormatSettings, size: float, bold_all: bool = F
 
 
 def build_docx(result: ComposeResult, s: FormatSettings, title: str = "", author: str = "") -> bytes:
+    """The composed document as a Word file (bytes): A4 page, the reading column as margins, the user's font and
+    spacing, headings as Word headings.
+    """
     d = DocxDocument()
     sec = d.sections[0]
     sec.page_width, sec.page_height = Cm(21.0), Cm(29.7)

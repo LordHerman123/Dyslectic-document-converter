@@ -35,13 +35,16 @@ class ScanPage:
 
     @property
     def width_pt(self) -> float:
+        """Width of the page in points (from the picture's size and resolution)."""
         return self.image.width * 72.0 / self.dpi
 
     @property
     def height_pt(self) -> float:
+        """Height of the page in points."""
         return self.image.height * 72.0 / self.dpi
 
     def png(self) -> bytes:
+        """The cleaned picture as PNG bytes, for OCR."""
         buf = io.BytesIO()
         self.image.save(buf, format="PNG")
         return buf.getvalue()
@@ -50,6 +53,7 @@ class ScanPage:
 # ----------------------------------------------------------------------------- basics
 
 def to_gray(img: Image.Image) -> np.ndarray:
+    """A picture as a greyscale array of floats (0 = black, 255 = white)."""
     return np.asarray(img.convert("L"), dtype=np.float32)
 
 
@@ -140,6 +144,9 @@ def estimate_skew(ink: np.ndarray, max_angle: float = 4.0, step: float = 0.1) ->
     xs = xs - small.shape[1] / 2
 
     def score(angle: float) -> float:
+        """How sharply the ink falls into text rows when the page is turned by ``angle`` degrees (higher is
+        straighter).
+        """
         t = np.tan(np.radians(angle))
         rows = np.round(ys + xs * t).astype(np.int64)
         rows -= rows.min()
@@ -154,6 +161,7 @@ def estimate_skew(ink: np.ndarray, max_angle: float = 4.0, step: float = 0.1) ->
 
 
 def rotate(img: Image.Image, angle: float, fill) -> Image.Image:
+    """Turn a picture by ``angle`` degrees (clockwise positive), filling the corners with ``fill``."""
     if abs(angle) < 0.05:
         return img
     return img.rotate(-angle, resample=Image.BICUBIC, expand=False, fillcolor=fill)
@@ -162,6 +170,7 @@ def rotate(img: Image.Image, angle: float, fill) -> Image.Image:
 # ----------------------------------------------------------------------------- curved lines (book curl)
 
 def _smooth1d(a: np.ndarray, k: int, axis: int = 0) -> np.ndarray:
+    """A moving average over ``k`` values along an axis (``k`` made odd)."""
     k = max(1, int(k)) | 1
     ker = np.ones(k) / k
     pad = k // 2
@@ -235,6 +244,7 @@ def curl_field(ink: np.ndarray, win_lines: int = 6):
 
 
 def _interp_extrapolate(x: np.ndarray, xp: np.ndarray, fp: np.ndarray) -> np.ndarray:
+    """Linear interpolation that continues the first and last slope beyond the known points."""
     y = np.interp(x, xp, fp)
     if len(xp) >= 2:
         lo, hi = x < xp[0], x > xp[-1]

@@ -11,7 +11,7 @@ Your original PDF is only ever read, never modified.
 Everything works **locally and without AI**. AI is an optional extra that you turn on with your own
 API key. When it's on, it only sees small snippets that the local rules couldn't decide.
 
-## Download for Windows (version 1.6)
+## Download for Windows (version 1.8)
 
 Get `DyslexiaConverter-1.8.0-setup.exe` (installer) or `DyslexiaConverter-1.8.0-windows.zip` (unzip and
 double-click `DyslexiaConverter.exe`) from the repository's **Releases** page. Text recognition (Tesseract)
@@ -157,6 +157,28 @@ The processing pipeline is the one from the specification:
 → layout/compose → preview → PDF/DOCX/EPUB/TXT/MD`. The stages are separate modules. The UI only calls
 `pipeline.load()`, `Session.export()` and a few session methods, so a different front end, such as a
 native Android app, can reuse the core.
+
+## For developers
+
+Every module, class and function has a docstring that says what it does and why. Start with
+`pipeline.py` (the core's front door) and `ui/app.py` (the window). Some pointers:
+
+* **Flow of a document.** `pipeline.load()` reads the PDF (`extract/pdf_reader.read_pdf`, with OCR through
+  `extract/ocr.py` for scanned pages) and detects its structure (`structure/detector.StructureDetector`)
+  into a `model.Document`. `Session.export()` composes it for the settings (`render/compose.compose`) and
+  hands the result to a writer in `render/`. The source text is never changed: OCR corrections and the
+  user's edits are kept separately and applied when composing.
+* **Adding a layout setting.** Add a field to `settings.FormatSettings` (and to the presets if needed),
+  use it in `render/compose.py` or a writer, and add a control in `ConverterApp.build_convert_tab`
+  (`self.slider`, `self.switch` or `self.dropdown` connect it to the setting).
+* **Adding an app text.** Wrap it in `t("...")`; `tests/test_i18n.py` fails until
+  `ui/translations.py` has it in every app language.
+* **Adding an export format.** Write a `build_...(result, settings)` function in `render/`, add it to
+  `Session.export()` and to `EXPORTS` in `ui/app.py`.
+* **Focus mode.** `ui/focus.py` shows the converted PDF as page pictures (`render/preview.render_highlight`
+  draws highlights, the reading ruler, the word being read and the page colour on them). Highlights
+  and notes are in `highlights.py`, the word card's dictionary in `dictionary.py`.
+* **Seeing the app while developing.** `flet run --web main.py` opens it in the browser.
 
 ## Tests
 

@@ -21,7 +21,11 @@ ENV_VARS = {"mistral": "MISTRAL_API_KEY", "anthropic": "ANTHROPIC_API_KEY", "gem
 
 
 class KeyStore:
+    """Stores API keys on this device: in the system keychain when available, otherwise in a private file readable
+    only by the user. Keys are never written to the settings or logs.
+    """
     def __init__(self, directory: Optional[Path] = None):
+        """``directory``: where the fallback file goes (the app's data folder by default)."""
         self.path = (directory or app_data_dir()) / "api_keys.json"
         try:
             import keyring  # noqa: F401
@@ -31,9 +35,11 @@ class KeyStore:
 
     @property
     def backend(self) -> str:
+        """Where keys are kept, for showing to the user."""
         return "system keychain" if self._keyring else "private file on this device"
 
     def get(self, provider: str) -> Optional[str]:
+        """The key for a provider, or None."""
         if self._keyring:
             try:
                 import keyring
@@ -51,6 +57,7 @@ class KeyStore:
         return os.environ.get(ENV_VARS.get(provider, "")) or None
 
     def set(self, provider: str, key: str) -> None:
+        """Store the key for a provider."""
         key = key.strip()
         if self._keyring:
             try:
@@ -64,6 +71,7 @@ class KeyStore:
         self._write_file(data)
 
     def remove(self, provider: str) -> None:
+        """Delete the key for a provider (from the keychain and the file)."""
         if self._keyring:
             try:
                 import keyring
@@ -76,12 +84,14 @@ class KeyStore:
             self._write_file(data)
 
     def _read_file(self) -> dict:
+        """The keys in the fallback file (empty when missing or damaged)."""
         try:
             return json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return {}
 
     def _write_file(self, data: dict) -> None:
+        """Write the fallback file, readable only by the user."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps(data), encoding="utf-8")
@@ -113,12 +123,14 @@ class RedactingFilter(logging.Filter):
     """Logging filter that strips anything that looks like an API key."""
 
     def filter(self, record: logging.LogRecord) -> bool:
+        """Replace anything that looks like a key in a log message."""
         record.msg = redact(record.getMessage())
         record.args = ()
         return True
 
 
 def install_log_redaction() -> None:
+    """Add the key-redacting filter to the root logger and its handlers (once)."""
     root = logging.getLogger()
     if not any(isinstance(f, RedactingFilter) for f in root.filters):
         root.addFilter(RedactingFilter())

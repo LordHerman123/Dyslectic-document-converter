@@ -30,6 +30,7 @@ SEARCH_WINDOW = 400  # words around the stored position searched when the text h
 
 @dataclass
 class Highlight:
+    """One highlight: a run of words in reading order with a marker colour and, optionally, a note."""
     start: int  # first word number
     end: int  # last word number (inclusive)
     colour: str
@@ -39,6 +40,7 @@ class Highlight:
 
 @dataclass
 class PageWord:
+    """A word on one page: its number in the whole document, its text and where it is (PDF points)."""
     number: int  # word number in the whole document
     text: str
     rects: list[Rect]
@@ -50,6 +52,7 @@ def document_words(sentences: list[Sentence]) -> list[tuple[int, str, list[Rect]
 
 
 def words_on_page(words: list[tuple[int, str, list[Rect]]], page: int) -> list[PageWord]:
+    """The words of one page, with their numbers in the whole document (for finding the word tapped)."""
     return [PageWord(i, text, rects) for i, (p, text, rects) in enumerate(words) if p == page]
 
 
@@ -67,6 +70,7 @@ def word_at(page_words: list[PageWord], x: float, y: float) -> Optional[int]:
 
 
 def _text(words: list[tuple[int, str, list[Rect]]], a: int, b: int) -> str:
+    """Words a..b (inclusive) joined with spaces: what a highlight stores to find its words again."""
     return " ".join(t for _, t, _ in words[a:b + 1])
 
 
@@ -164,6 +168,7 @@ def at(highlights: list[Highlight], n: int, words: list[tuple[int, str, list[Rec
 
 
 def set_note(highlights: list[Highlight], k: int, note: str) -> list[Highlight]:
+    """A copy of the highlights with the note of highlight ``k`` replaced (an empty note removes it)."""
     out = list(highlights)
     h = out[k]
     out[k] = Highlight(h.start, h.end, h.colour, h.words, note.strip())
@@ -171,6 +176,7 @@ def set_note(highlights: list[Highlight], k: int, note: str) -> list[Highlight]:
 
 
 def recolour(highlights: list[Highlight], k: int, colour: str) -> list[Highlight]:
+    """A copy of the highlights with highlight ``k`` in another marker colour (its note stays)."""
     out = list(highlights)
     h = out[k]
     out[k] = Highlight(h.start, h.end, colour, h.words, h.note)
@@ -251,16 +257,24 @@ def document_key(path: str | Path) -> str:
 
 
 class HighlightStore:
+    """The highlights of every document, in one JSON file in the app's data folder.
+
+    Keyed by :func:`document_key`, so the same PDF finds its highlights wherever it is stored. A damaged
+    or unreadable file is treated as empty; failing to write is ignored (highlights are a convenience).
+    """
     def __init__(self, path: Optional[Path] = None):
+        """``path``: where to keep the file (tests use a temporary one); by default in the app's data folder."""
         self.path = path or (app_data_dir() / "highlights.json")
 
     def _read(self) -> dict:
+        """Everything stored, or an empty dict when the file is missing or damaged."""
         try:
             return json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return {}
 
     def load(self, key: str) -> list[Highlight]:
+        """The highlights of one document; entries that cannot be read are skipped."""
         out = []
         for d in self._read().get(key, []):
             try:
@@ -271,6 +285,7 @@ class HighlightStore:
         return out
 
     def save(self, key: str, highlights: list[Highlight]) -> None:
+        """Store the highlights of one document (an empty list removes the document from the file)."""
         data = self._read()
         if highlights:
             data[key] = [asdict(h) for h in highlights]

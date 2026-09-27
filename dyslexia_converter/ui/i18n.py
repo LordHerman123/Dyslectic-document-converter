@@ -50,12 +50,20 @@ def system_language() -> str:
 
 
 class Translator:
+    """Translates the app's texts into the chosen app language.
+
+    Call it with the English text (``t("Open PDF")``), with ``{placeholders}`` filled from keyword arguments.
+    Texts without a translation stay in English. :meth:`message` also translates messages built at run time
+    (progress, warnings) through patterns.
+    """
     def __init__(self, lang: str = "en"):
+        """Use ``lang`` (en, nl, fr, de, es, it); unknown codes fall back to English."""
         self.lang = lang if lang in LANGUAGES else "en"
         self.strings = {en: tr[self.lang] for en, tr in T.items() if self.lang in tr}
         self.patterns = {key: tr[self.lang] for key, tr in PATTERNS.items() if self.lang in tr}
 
     def __call__(self, text: str, **values) -> str:
+        """The translation of an English app text, with placeholders filled in."""
         s = self.strings.get(text, text)
         return s.format(**values) if values else s
 

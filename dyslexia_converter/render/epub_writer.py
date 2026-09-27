@@ -29,11 +29,14 @@ _FONT_DIR = (Path(__file__).resolve().parents[1] / "assets" / "fonts").resolve()
 
 
 def _x(text: str) -> str:
+    """Text made safe for XHTML (characters XML does not allow are removed)."""
     return escape(_BAD_XML.sub("", text), {'"': "&quot;"})
 
 
 class _Book:
+    """Builds the EPUB's chapters, pictures, stylesheet and links from the composed document."""
     def __init__(self, result: ComposeResult, s: FormatSettings):
+        """Start an empty book for the composed document and settings."""
         self.result = result
         self.s = s
         self.images: list[tuple[str, bytes, str]] = []  # (file name, data, media type)
@@ -43,6 +46,7 @@ class _Book:
 
     # ------------------------------------------------------------------ pieces
     def image_file(self, img) -> str:
+        """The file name of a picture inside the EPUB (each picture is stored once)."""
         key = id(img)
         if key not in self._image_names:
             ext = "jpg" if img.ext in ("jpeg", "jpg") else "png"
@@ -52,11 +56,13 @@ class _Book:
         return self._image_names[key]
 
     def inline(self, runs: list[Run]) -> str:
+        """Runs of text as XHTML: bold, italic, indices, formula pictures, and note/reference markers as links."""
         images = self.result.inline_images
         out = []
         for r in runs:
             if r.marker:  # "[Note 3]", "[12]", "[21][24]": each one a link to its note or reference
                 def link(m: re.Match) -> str:
+                    """A marker as a link to its note or reference (plain text when the target is unknown)."""
                     target = self.anchors.get(m.group())
                     t = _x(m.group())
                     return f'<a epub:type="noteref" href="{target}">{t}</a>' if target else t
@@ -90,6 +96,7 @@ class _Book:
         return "".join(out).strip()
 
     def table(self, it: RItem) -> str:
+        """A table as an XHTML table, or its picture from the original when it could not be read reliably."""
         tab = it.table
         rows = tab.rows if tab else []
         if tab is None or not tab.reliable or not rows or self.s.table_mode == "image":
@@ -103,6 +110,7 @@ class _Book:
         bold = tab.bold_cells or set()
 
         def row_html(ri: int, row: list[str], tag: str) -> str:
+            """One table row as XHTML (missing cells filled, bold cells kept)."""
             cells = list(row) + [""] * (n - len(row))
             return "<tr>" + "".join(
                 f"<{tag}>{'<b>' + _x(c) + '</b>' if (ri, ci) in bold and tag == 'td' else _x(c)}</{tag}>"
@@ -189,14 +197,19 @@ class _Book:
         return out, toc
 
     def _has_title(self) -> bool:
+        """Whether the document has a title block."""
         return any(it.kind == "title" for it in self.result.items)
 
     @staticmethod
     def _id(name: str, n: int) -> str:
+        """An element id unique within the book (chapter file name and number)."""
         return f"{Path(name).stem}-{n}"
 
     # ------------------------------------------------------------------ style
     def css(self, font_files: list[tuple[str, bool, bool]], family: str) -> str:
+        """The stylesheet: the user's font (embedded), size, spacing, alignment and colours, as defaults the
+        reading app may change.
+        """
         s = self.s
         size = s.font_size or 12
         faces = "".join(
@@ -256,6 +269,7 @@ def _nested_list(entries: list[tuple[int, str]]) -> str:
 
 
 def _page(title: str, body: str, lang: str) -> str:
+    """A complete XHTML page for a chapter."""
     return (f'<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE html>\n'
             f'<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" '
             f'lang="{lang}" xml:lang="{lang}">\n<head><meta charset="utf-8"/><title>{_x(title)}</title>'
@@ -280,6 +294,9 @@ def _font_files(s: FormatSettings) -> tuple[str, list[tuple[str, bytes, bool, bo
 
 
 def build_epub(result: ComposeResult, s: FormatSettings, title: str = "", author: str = "") -> bytes:
+    """The composed document as an EPUB 3 file (bytes): chapters by top-level heading, a table of contents, embedded
+    fonts and pictures, and notes and references as links.
+    """
     lang = result.language or "en"
     book = _Book(result, s)
     chapters, toc = book.chapters()
@@ -293,6 +310,7 @@ def build_epub(result: ComposeResult, s: FormatSettings, title: str = "", author
         z.writestr(zipfile.ZipInfo("mimetype"), "application/epub+zip", compress_type=zipfile.ZIP_STORED)
 
         def put(name: str, data, deflate: bool = True):
+            """Add a file to the EPUB zip (the mimetype file must be stored uncompressed)."""
             z.writestr(name, data, compress_type=zipfile.ZIP_DEFLATED if deflate else zipfile.ZIP_STORED)
 
         put("META-INF/container.xml",

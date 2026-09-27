@@ -26,6 +26,7 @@ C_WEIGHT = 0.035       # extra thickness for the c, so it matches the bold D
 
 
 def draw(size: int = 1024) -> Image.Image:
+    """The app icon (DC on a burgundy tile) at ``size`` pixels."""
     s = size
     im = Image.new("RGBA", (s, s), (0, 0, 0, 0))
     d = ImageDraw.Draw(im)
@@ -66,6 +67,7 @@ def draw(size: int = 1024) -> Image.Image:
 
 
 def main() -> None:
+    """Write the icon files for Windows and the app."""
     big = draw(1024)
     png = big.resize((256, 256), Image.LANCZOS)
     png.save(ROOT / "windows" / "app.png")

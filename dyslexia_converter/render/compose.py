@@ -28,6 +28,7 @@ from .labels import label as doc_label
 
 @dataclass
 class Run:
+    """A piece of text in one style (bold, italic, index, formula, or an inserted marker such as [3])."""
     text: str
     bold: bool = False
     italic: bool = False
@@ -39,6 +40,9 @@ class Run:
 
 @dataclass
 class RItem:
+    """One item of the composed document (heading, paragraph, list item, figure, table, note...) ready for any output
+    format.
+    """
     kind: str
     runs: list[Run] = field(default_factory=list)
     level: int = 0
@@ -52,11 +56,15 @@ class RItem:
 
     @property
     def text(self) -> str:
+        """The item's plain text."""
         return "".join(r.text for r in self.runs)
 
 
 @dataclass
 class ComposeResult:
+    """The composed document: its items, the headings for the contents, citation statistics, the language of added
+    words, inline formula pictures, and which original page each block came from.
+    """
     items: list[RItem]
     headings: list[tuple[int, str]]  # (level, text) for the document map
     citation_count: int = 0
@@ -112,14 +120,17 @@ def _runs_from(text: str, styles, bold_spans: list[tuple[int, int]],
 
 
 def _style(r: Run) -> tuple:
+    """The style of a run as a tuple (runs with equal styles can be merged)."""
     return r.bold, r.italic, r.superscript, r.subscript, r.math
 
 
 def _math_spans(styles) -> list[tuple[int, int]]:
+    """The (start, end) ranges of formula text in a block."""
     return [(s.start, s.end) for s in styles if s.math]
 
 
 def _strip_marker(text: str) -> tuple[str, str]:
+    """Split a list item into its marker ("1.", "•") and the rest of the text."""
     m = LIST_RE.match(text)
     if not m:
         return "", text
@@ -128,6 +139,7 @@ def _strip_marker(text: str) -> tuple[str, str]:
 
 def _superscript_spans(text: str, styles) -> list[tuple[int, int]]:
     # superscripts inside formulas (x², W^Q) are never note markers or citations
+    """The superscript ranges that can be note markers (superscripts inside formulas are not)."""
     return [(s.start, s.end) for s in styles if s.superscript and not s.math and 0 <= s.start < s.end <= len(text)]
 
 
@@ -135,6 +147,12 @@ def _superscript_spans(text: str, styles) -> list[tuple[int, int]]:
 
 def compose(doc: Document, settings: FormatSettings, ai_citation_decisions: Optional[dict[str, bool]] = None,
             citation_threshold: float = 0.9) -> ComposeResult:
+    """Lay out the document for the settings: drop page furniture, move citations and footnotes when asked, number
+    references, add the contents page and the note about the conversion.
+
+    ``ai_citation_decisions`` holds the AI's verdicts on uncertain citations (only in AI-assisted mode);
+    ``citation_threshold`` is how sure the rules must be to move a citation on their own.
+    """
     ai_citation_decisions = ai_citation_decisions or {}
     lang = doc.language or "en"
     blocks = [b for b in doc.blocks if not (b.kind == BlockKind.FURNITURE and settings.remove_headers_footers)]
@@ -157,6 +175,9 @@ def compose(doc: Document, settings: FormatSettings, ai_citation_decisions: Opti
     uncertain: list[tuple[str, Citation]] = []
 
     def citation_number(item: str) -> int:
+        """The number of a citation in the reference list (a new number for citations without a matching
+        reference).
+        """
         nonlocal next_extra
         key = re.sub(r"^\s*(see(?:\s+also)?|e\.\s?g\.|cf\.|i\.\s?e\.|also|for example|zie(?:\s+ook)?)\s*,?\s*", "",
                      item, flags=re.I).strip()
@@ -344,6 +365,7 @@ def _physical_page(doc: Document, page: int) -> int:
 
 
 def _drop_prefix(runs: list[Run], n: int) -> list[Run]:
+    """The runs without their first ``n`` characters."""
     out = []
     for r in runs:
         if n <= 0:
@@ -357,6 +379,7 @@ def _drop_prefix(runs: list[Run], n: int) -> list[Run]:
 
 
 def _about_text(doc: Document, s: FormatSettings, citations_moved: bool) -> str:
+    """The note at the end about how the document was converted (source file, font, what changed)."""
     from pathlib import Path
 
     lang = doc.language or "en"

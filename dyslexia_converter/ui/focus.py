@@ -30,11 +30,20 @@ TINT_COLOURS = {"white": ("#FFFFFF", None), "cream": ("#FAF1D6", "#E9DFC4"), "bl
 
 
 class FocusMode:
+    """Focus mode: replaces the app's window content with a reader for the converted document.
+
+    Created once by the app (``app.focus``); :meth:`open` builds the view and :meth:`close` puts the normal app
+    back. Reader choices (zoom, page colour, layout, rotation, open panels) are kept in the app's UI settings, so
+    focus mode opens the way it was left. The pages are PNG pictures rendered by :mod:`..render.preview`;
+    highlights, the reading ruler, the word being read and the word on the word card are drawn into those
+    pictures.
+    """
     BASE_W = 820  # page width at 100 %
     GAP = 18
     PAD = 20
 
     def __init__(self, app: "ConverterApp"):
+        """Set up the state; nothing is shown until :meth:`open`."""
         self.app = app
         self.active = False
         ui = app.ui
@@ -68,27 +77,39 @@ class FocusMode:
     # ------------------------------------------------------------------ settings kept between sessions
     @property
     def tint(self) -> str:
+        """The page colour (white, cream, blue, green, grey or dark); dark by default in the app's dark mode."""
         default = "dark" if self.app.ui.get("dark_mode") else "white"
         return self.app.ui.get("focus_tint", default)
 
     @property
     def layout(self) -> str:
+        """"scroll" (all pages in one scrolling column) or "pages" (one page at a time)."""
         return self.app.ui.get("focus_layout", "scroll")
 
     @property
     def fit(self) -> bool:
+        """Whether the pages are as wide as the window (scrolling layout only)."""
         return bool(self.app.ui.get("focus_fit", False))
 
     @property
     def turns(self) -> int:
+        """How many quarter turns the reading view is rotated (0-3)."""
         return int(self.app.ui.get("focus_rotation", 0)) % 4
 
     def _save(self, key: str, value) -> None:
+        """Remember a reader choice in the app's UI settings (saved to disk at once)."""
         self.app.ui[key] = value
         self.app.store.save_ui(self.app.ui)
 
     # ------------------------------------------------------------------ open / close
     async def open(self) -> None:
+        """Show focus mode for the converted document, starting at the page the Convert tab shows.
+
+        Builds the top bar, the fold-out panels (read aloud, reading settings, view), the page list or single
+        page view, the word card layer and the button that brings hidden bars back, all inside a RotatedBox so
+        the whole view can be turned. The keyboard handler is replaced for arrow keys and Esc until
+        :meth:`close`.
+        """
         app, t = self.app, self.app.t
         if not app.converted_pdf:
             app.notify(t("Open a PDF first."), error=True)
@@ -185,6 +206,7 @@ class FocusMode:
         self._start_rendering()
 
     def _panel(self, content: ft.Control, key: str) -> ft.Container:
+        """A panel that folds out below the top bar, open or folded as it was left (``key`` in the UI settings)."""
         panel = ft.Container(data=content, bgcolor=ft.Colors.SURFACE_CONTAINER_LOW)
         self._fold(panel, bool(self.app.ui.get(key, False)))
         return panel
@@ -198,9 +220,11 @@ class FocusMode:
 
     @staticmethod
     def _is_open(panel: ft.Container) -> bool:
+        """Whether a fold-out panel is showing (see :meth:`_fold`)."""
         return panel.content is not None
 
     async def close(self) -> None:
+        """Leave focus mode: give the app back its own view, the read-aloud controls and keyboard handler."""
         app = self.app
         if not self.active:
             return
@@ -223,10 +247,12 @@ class FocusMode:
         await app.show_pages()
 
     async def on_close(self, e):
+        """The close (X) button."""
         await self.close()
 
     # ------------------------------------------------------------------ pages
     def on_body_size(self, e) -> None:
+        """The area for the pages changed size (window resized, panel opened, rotated): refit the pages."""
         old = self.body_size
         self.body_size = (e.width, e.height)
         # page by page the page fits the height too; a scrolling list only follows the width
@@ -235,6 +261,7 @@ class FocusMode:
             self._resize()
 
     def _avail(self) -> tuple[float, float]:
+        """Width and height available for the pages, in the rotated view's own directions."""
         w, h = self.body_size
         if not w or not h:
             pw, ph = self.app.page.width or 1200, (self.app.page.height or 800) - 60
@@ -242,6 +269,11 @@ class FocusMode:
         return w, h
 
     def _page_w(self, i: Optional[int] = None) -> float:
+        """How wide page ``i`` is shown, in pixels.
+
+        Page by page it fits the available area (times the page zoom); scrolling, it is the zoomed page width,
+        or the window width with *Fit width*.
+        """
         w, h = self._avail()
         if self.layout == "pages":
             pw, ph = self.sizes[i if i is not None else self.current] if self.sizes else (595, 842)
@@ -252,6 +284,7 @@ class FocusMode:
         return max(240.0, min(self.BASE_W * self.zoom, w - 40))
 
     async def _build_pages(self) -> None:
+        """Create one frame per page of the converted document (blank until rendered) and read its words."""
         app = self.app
         pdf = app.converted_pdf
         n = preview.page_count(pdf)
@@ -296,6 +329,7 @@ class FocusMode:
             await self.scroll_to(self.current, animate=False)
 
     def _resize(self, update: bool = True) -> None:
+        """Give every page frame its size for the current zoom, layout and window."""
         for i, (frame, (pw, ph)) in enumerate(zip(self.frames, self.sizes)):
             w = self._page_w(i)
             frame.width, frame.height = w, w * ph / pw
@@ -303,6 +337,7 @@ class FocusMode:
             self.app.page.update()
 
     def _offset(self, i: int) -> float:
+        """Scroll position (pixels) of the top of page ``i`` in the scrolling layout."""
         return self.PAD + sum(self._page_w(k) * ph / pw + self.GAP for k, (pw, ph) in enumerate(self.sizes[:i]))
 
     async def scroll_to(self, i: int, animate: bool = True, within: float = 0.0) -> None:
@@ -328,9 +363,11 @@ class FocusMode:
         self.page_label.update()
 
     async def turn(self, step: int) -> None:
+        """Go ``step`` pages forward (1) or back (-1)."""
         await self.scroll_to(self.current + step)
 
     def on_scroll(self, e: ft.OnScrollEvent) -> None:
+        """Follow scrolling: the page a third of the way down the view is the current page."""
         if not self.sizes or self.layout == "pages":
             return
         self._scroll_px = e.pixels
@@ -346,17 +383,22 @@ class FocusMode:
             self.page_label.update()
 
     def _update_label(self) -> None:
+        """Show the current page number in the top bar and in the counter over the pages."""
         text = self.app.t("Page {n} / {total}", n=self.current + 1, total=len(self.sizes))
         self.page_label.value = text
         self.counter.content.value = f"{self.current + 1} / {len(self.sizes)}"
         self.counter.visible = self.bars_hidden or self.layout == "pages"
 
     def _lines_of(self, i: int) -> list:
+        """The lines of text on page ``i`` (for the reading ruler), worked out once and kept."""
         if i not in self._lines:
             self._lines[i] = hl.lines_on_page(self.words, i)
         return self._lines[i]
 
     def _render(self, i: int) -> bytes:
+        """PNG of page ``i`` with everything drawn on it: highlights, note signs, the sentence and word being
+        read, the reading ruler, the word on the word card, in the page colour.
+        """
         width = int(max(1000, self._page_w(i) * 1.3))
         marks = hl.page_marks(self.highlights, self.words, i)
         sentence, word = (self._reading[1], self._reading[2]) if self._reading and self._reading[0] == i else ((), ())
@@ -373,6 +415,7 @@ class FocusMode:
                                         notes=hl.note_marks(self.highlights, self.words, i), picked=list(picked))
 
     def _start_rendering(self) -> None:
+        """(Re)start rendering all pages in the background (after a zoom, colour or layout change)."""
         if self._render_task:
             self._render_task.cancel()
         self._render_task = asyncio.get_running_loop().create_task(self._render_all())
@@ -391,6 +434,7 @@ class FocusMode:
                 await self.scroll_to(page, animate=False)
 
     async def redraw(self, i: int) -> None:
+        """Render page ``i`` again and show it (after a highlight, ruler or reading change)."""
         if 0 <= i < len(self.images):
             self.images[i].src = await self.app.in_thread(self._render, i)
             try:
@@ -411,6 +455,7 @@ class FocusMode:
         self._start_rendering()
 
     def _zoom_by(self, factor: float) -> None:
+        """Make the pages ``factor`` times larger (or smaller); page by page this zooms into the page."""
         if self.layout == "pages":
             self.page_zoom = round(max(1.0, min(3.0, self.page_zoom * factor)), 3)
         else:
@@ -425,9 +470,11 @@ class FocusMode:
         self._start_rendering()
 
     def on_size(self, e) -> None:
+        """Remember how large each page picture is on screen, to turn taps into page positions."""
         self.boxes[e.control.data] = (e.width, e.height)
 
     def _point(self, i: int, x: float, y: float) -> Optional[tuple[float, float]]:
+        """Where a tap at (x, y) on page picture ``i`` lands on the page, in PDF points (None beside it)."""
         box = self.boxes.get(i)
         if not box or i >= len(self.sizes):
             return None
@@ -435,9 +482,11 @@ class FocusMode:
 
     # ------------------------------------------------------------------ touch: pinch to zoom, swipe to turn
     def on_scale_start(self, e) -> None:
+        """Start of a touch gesture on a page: two fingers zoom, one finger (page by page) swipes."""
         self._pinch = {"scale": 1.0, "dx": 0.0, "fingers": 1}
 
     def on_scale_update(self, e) -> None:
+        """Track the gesture: how far two fingers spread, or how far one finger moved sideways."""
         p = self._pinch
         p["fingers"] = max(p.get("fingers", 1), e.pointer_count or 1)
         if (e.pointer_count or 1) >= 2:
@@ -446,6 +495,7 @@ class FocusMode:
             p["dx"] = p.get("dx", 0.0) + (e.focal_point_delta.x if e.focal_point_delta else 0.0)
 
     async def on_scale_end(self, e) -> None:
+        """End of the gesture: zoom by the pinch, or turn the page after a swipe of 60 pixels or more."""
         p, self._pinch = self._pinch, {}
         if not p:
             return
@@ -456,6 +506,11 @@ class FocusMode:
 
     # ------------------------------------------------------------------ keyboard
     async def on_key(self, e) -> None:
+        """Keys while focus mode is open.
+
+        Esc closes the word card or brings hidden bars back; up/down move the reading ruler (or scroll);
+        right, left, Page Up/Down and space turn pages. Keys are ignored while a note is being typed.
+        """
         if not self.active:
             return
         key = e.key
@@ -483,6 +538,9 @@ class FocusMode:
 
     # ------------------------------------------------------------------ reading aloud
     async def show_reading(self, page: int, sentence: list, word: list, follow: bool) -> None:
+        """Show the sentence and word being read aloud on ``page`` (the ruler follows, the view too when
+        ``follow``).
+        """
         previous = self._reading[0] if self._reading else None
         self._reading = (page, sentence, word)
         if self.ruler and word:  # the ruler follows the voice
@@ -499,11 +557,18 @@ class FocusMode:
         await self.redraw(page)
 
     async def reading_done(self) -> None:
+        """Reading aloud stopped: take the reading highlight off the page."""
         if self._reading is not None:
             page, self._reading = self._reading[0], None
             await self.redraw(page)
 
     async def on_tap(self, e) -> None:
+        """A tap on a page.
+
+        With the highlighter on it marks (or erases) one word; on a note sign it opens the note; with the
+        ruler on it moves the ruler to that line; and with *tap to read* on, reading aloud starts at the
+        sentence tapped.
+        """
         i = e.control.data
         pt = self._point(i, e.local_position.x, e.local_position.y)
         if pt is None:
@@ -538,12 +603,14 @@ class FocusMode:
 
     # ------------------------------------------------------------------ reading ruler
     def _line_at(self, i: int, y: float) -> Optional[int]:
+        """The line of page ``i`` nearest to height ``y`` (points), or None on a page without text."""
         lines = self._lines_of(i)
         if not lines:
             return None
         return min(range(len(lines)), key=lambda k: abs((lines[k][0] + lines[k][1]) / 2 - y))
 
     async def on_ruler(self, e) -> None:
+        """The ruler button: switch the reading ruler on (at the first line of the current page) or off."""
         if self.ruler:
             page, self.ruler = self.ruler[0], None
             self.ruler_toggle.selected = False
@@ -560,6 +627,7 @@ class FocusMode:
         await self._set_ruler(i, 0)
 
     async def _set_ruler(self, page: int, line: int) -> None:
+        """Put the ruler on a line and redraw the page(s) involved."""
         old = self.ruler
         self.ruler = (page, line)
         if old and old[0] != page:
@@ -567,6 +635,7 @@ class FocusMode:
         await self.redraw(page)
 
     async def move_ruler(self, step: int) -> None:
+        """Move the ruler ``step`` lines down (1) or up (-1), on to the next or previous page when needed."""
         page, line = self.ruler
         line += step
         while not (0 <= line < len(self._lines_of(page))):
@@ -584,6 +653,7 @@ class FocusMode:
 
     # ------------------------------------------------------------------ word card: meaning, sound, notes
     async def on_word_card(self, e) -> None:
+        """Press-and-hold or right-click on a page: open the word card for the word there."""
         if self.tool:
             return
         i = e.control.data
@@ -594,6 +664,9 @@ class FocusMode:
             await self.open_card(i, n)
 
     async def open_card(self, page: int, n: int, edit_note: bool = False) -> None:
+        """Show the word card for word ``n`` on ``page`` (looked up in the dictionary; ``edit_note`` opens the
+        note).
+        """
         app = self.app
         old = self.card_word
         self.card_word = (page, n)
@@ -609,6 +682,7 @@ class FocusMode:
         app.page.update()
 
     async def close_card(self, e=None) -> None:
+        """Close the word card and take the outline off its word."""
         self._typing = False
         self.card_layer.visible = False
         self.card_layer.content = None
@@ -618,6 +692,9 @@ class FocusMode:
             await self.redraw(old[0])
 
     def _card(self, page: int, n: int, entry, language: str, k: Optional[int], edit_note: bool) -> ft.Control:
+        """The word card: the word and its base form, syllables, say button, meanings, online look-up, highlight
+        colours and the note (``k`` is the highlight the word is in, if any).
+        """
         app, t = self.app, self.app.t
         title = entry.word if not entry.base or entry.base.lower() == entry.word.lower() else \
             f"{entry.word}  →  {entry.base}"
@@ -668,6 +745,7 @@ class FocusMode:
                                on_click=lambda e: app.page.run_task(self.card_note, page, n, note_field.value))
 
         async def show_note(e):
+            """"Add note": show the note field and put the cursor in it."""
             note_field.visible = save.visible = True
             add_note.visible = False
             app.page.update()
@@ -688,12 +766,14 @@ class FocusMode:
                        elevation=8)
 
     async def _changed(self, page: int, n: int) -> None:
+        """Highlights changed from the word card: save them and show the card again with the new state."""
         if self.app.doc_key:
             self.app.hl_store.save(self.app.doc_key, self.highlights)
         self.app.update_highlight_option()
         await self.open_card(page, n)
 
     async def card_colour(self, page: int, n: int, colour: str) -> None:
+        """A colour on the word card: highlight the word, or change the colour of the highlight it is in."""
         k = hl.at(self.highlights, n, self.words)
         if k is None:
             self.highlights = hl.add(self.highlights, n, n, colour, self.words)
@@ -702,6 +782,7 @@ class FocusMode:
         await self._changed(page, n)
 
     async def card_note(self, page: int, n: int, note: str) -> None:
+        """Save the note (a word without a highlight is highlighted in the current colour first)."""
         k = hl.at(self.highlights, n, self.words)
         if k is None:  # a note on a word that is not highlighted yet: highlight it in the current colour
             self.highlights = hl.add(self.highlights, n, n, self.colour, self.words, note.strip())
@@ -711,6 +792,7 @@ class FocusMode:
         await self._changed(page, n)
 
     async def card_remove(self, page: int, n: int) -> None:
+        """Remove the whole highlight the word is in (with its note)."""
         k = hl.at(self.highlights, n, self.words)
         if k is not None:
             where = hl.resolve(self.highlights[k], self.words)
@@ -720,9 +802,11 @@ class FocusMode:
 
     # ------------------------------------------------------------------ highlighter
     def _toggle_style(self) -> ft.ButtonStyle:
+        """Buttons that stay pressed while their panel or tool is on get a tinted background."""
         return ft.ButtonStyle(bgcolor={ft.ControlState.SELECTED: ft.Colors.PRIMARY_CONTAINER})
 
     def _swatch(self, name: str) -> ft.Control:
+        """A round colour button for the highlighter."""
         chosen = name == self.colour
         return ft.Container(width=28, height=28, border_radius=14, bgcolor=SWATCHES[name], data=name,
                             border=ft.Border.all(3 if chosen else 1,
@@ -730,6 +814,7 @@ class FocusMode:
                             on_click=self.on_colour, tooltip=self.app.t(name.capitalize()))
 
     def _refresh_swatches(self) -> None:
+        """Show which highlighter colour or the eraser is chosen; the colours show only while a tool is on."""
         for c in self.swatches.controls:
             if isinstance(c, ft.Container):
                 chosen = self.tool == "mark" and c.data == self.colour
@@ -753,12 +838,14 @@ class FocusMode:
             det.mouse_cursor = ft.MouseCursor.TEXT if on else ft.MouseCursor.CLICK
 
     def on_marker(self, e) -> None:
+        """The highlighter button: switch the highlighter on or off."""
         self.tool = None if self.tool else "mark"
         self._refresh_swatches()
         self._set_tool_gestures()
         self.app.page.update()
 
     def on_colour(self, e) -> None:
+        """A highlighter colour: choose it (and switch the highlighter on)."""
         self.colour = e.control.data
         self.tool = "mark"
         self.app.ui["focus_colour"] = self.colour
@@ -767,18 +854,21 @@ class FocusMode:
         self.app.page.update()
 
     def on_eraser(self, e) -> None:
+        """The eraser: switch it on or off."""
         self.tool = None if self.tool == "erase" else "erase"
         self._refresh_swatches()
         self._set_tool_gestures()
         self.app.page.update()
 
     def on_pan_start(self, e) -> None:
+        """Start of a drag with the highlighter or eraser: remember the first word."""
         i = e.control.data
         pt = self._point(i, e.local_position.x, e.local_position.y)
         n = hl.word_at(hl.words_on_page(self.words, i), *pt) if pt else None
         self._drag = (i, n, n) if n is not None else None
 
     async def on_pan_update(self, e) -> None:
+        """While dragging, show the stroke as it would be (not saved until the drag ends)."""
         if not self._drag:
             return
         i, first, last = self._drag
@@ -798,12 +888,14 @@ class FocusMode:
             self.highlights = keep
 
     async def on_pan_end(self, e) -> None:
+        """End of the drag: mark or erase the words dragged over."""
         if self._drag:
             i, first, last = self._drag
             self._drag = None
             await self._apply(i, first, last)
 
     async def _apply(self, page: int, a: int, b: int) -> None:
+        """Mark words a..b in the chosen colour (or erase them), save, and redraw the page."""
         if self.tool == "erase":
             self.highlights = hl.erase(self.highlights, a, b, self.words)
         else:
@@ -815,6 +907,7 @@ class FocusMode:
 
     # ------------------------------------------------------------------ fold-out panels
     def on_read_panel(self, e) -> None:
+        """The read-aloud button: fold the read-aloud controls out or away."""
         self._fold(self.read_panel, not self._is_open(self.read_panel))
         self.read_toggle.selected = self._is_open(self.read_panel)
         self.app.ui["read_panel_open"] = self.read_toggle.selected
@@ -822,6 +915,7 @@ class FocusMode:
         self.app.page.update()
 
     def on_view_panel(self, e) -> None:
+        """The view button: fold the view options (page colour, layout, fit width, rotate) out or away."""
         self._fold(self.view_panel, not self._is_open(self.view_panel))
         self.view_toggle.selected = self._is_open(self.view_panel)
         self._save("focus_view_open", self.view_toggle.selected)
@@ -829,6 +923,7 @@ class FocusMode:
 
     # ------------------------------------------------------------------ view: page colour, layout, rotation
     def _view_row(self) -> ft.Control:
+        """The view options: page colours, Scroll / Pages, Fit width and Rotate."""
         t = self.app.t
         self.tint_row = ft.Row([self._tint_swatch(name) for name in TINT_COLOURS], spacing=8, tight=True)
         self.layout_seg = ft.SegmentedButton(
@@ -845,12 +940,14 @@ class FocusMode:
                       spacing=12, wrap=True, vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
     def _tint_swatch(self, name: str) -> ft.Control:
+        """A round page colour button with its name under it."""
         return ft.Column([ft.Container(width=32, height=32, border_radius=16, bgcolor=TINT_COLOURS[name][0],
                                        data=name, on_click=self.on_tint, tooltip=self.app.t(name.capitalize())),
                           self.app.text(self.app.t(name.capitalize()), 11)],
                          spacing=2, horizontal_alignment=ft.CrossAxisAlignment.CENTER, tight=True)
 
     def _refresh_view_row(self) -> None:
+        """Show the chosen page colour, layout, fit width and rotation on the view panel's buttons."""
         if not hasattr(self, "tint_row"):
             return
         for col in self.tint_row.controls:
@@ -864,12 +961,14 @@ class FocusMode:
         self.layout_seg.selected = [self.layout]
 
     def _apply_tint(self) -> None:
+        """Colour the page frames and the area around them in the chosen page colour."""
         page_bg, around = TINT_COLOURS.get(self.tint, TINT_COLOURS["white"])
         self.body.bgcolor = around
         for frame in self.frames:
             frame.bgcolor = page_bg
 
     def on_tint(self, e) -> None:
+        """A page colour button: use it for all pages."""
         self._save("focus_tint", e.control.data)
         self._apply_tint()
         self._refresh_view_row()
@@ -877,6 +976,7 @@ class FocusMode:
         self._start_rendering()
 
     async def on_layout(self, e) -> None:
+        """Scroll / Pages: switch between one scrolling column and one page at a time."""
         sel = e.control.selected
         layout = (list(sel)[0] if sel else "scroll")
         self._save("focus_layout", layout)
@@ -886,6 +986,7 @@ class FocusMode:
         self._start_rendering()
 
     def on_fit(self, e) -> None:
+        """Fit width: make the pages as wide as the window, or go back to the zoom level."""
         self._save("focus_fit", not self.fit)
         self._refresh_view_row()
         self._resize()
@@ -893,6 +994,7 @@ class FocusMode:
         self._start_rendering()
 
     def on_rotate(self, e) -> None:
+        """Rotate: turn the reading view a quarter turn clockwise (four taps go round)."""
         self._save("focus_rotation", (self.turns + 1) % 4)
         self.root.quarter_turns = self.turns
         self.body_size = (0.0, 0.0)  # measured again after the turn
@@ -902,6 +1004,7 @@ class FocusMode:
         self._start_rendering()
 
     def _full_screen(self, on: bool) -> None:
+        """Make the app's window full screen or not (desktop app only)."""
         page = self.app.page
         if page.web or page.platform.is_mobile():
             return
@@ -911,6 +1014,7 @@ class FocusMode:
             pass
 
     def on_hide_bars(self, e) -> None:
+        """Hide the top bar and panels to read without distractions (Esc or the small button brings them back)."""
         self.bars_hidden = True
         self._open_panels = [p for p in (self.read_panel, self.settings_panel, self.view_panel) if self._is_open(p)]
         for panel in (self.read_panel, self.settings_panel, self.view_panel):
@@ -925,6 +1029,7 @@ class FocusMode:
         self.app.page.update()
 
     def on_show_bars(self, e) -> None:
+        """Bring the top bar back, with the panels that were open."""
         self.bars_hidden = False
         for panel in getattr(self, "_open_panels", []):
             self._fold(panel, True)
@@ -938,6 +1043,7 @@ class FocusMode:
         self.app.page.update()
 
     def on_settings_panel(self, e) -> None:
+        """The reading settings button: fold the settings out or away."""
         self._fold(self.settings_panel, not self._is_open(self.settings_panel))
         self.settings_toggle.selected = self._is_open(self.settings_panel)
         self.app.ui["focus_settings_open"] = self.settings_toggle.selected
@@ -949,17 +1055,21 @@ class FocusMode:
         app, t = self.app, self.app.t
 
         async def set_value(key, value):
+            """Change one setting and convert the document again with it."""
             setattr(app.settings, key, value)
             await app.settings_changed()
 
         def slider(key, label, lo, hi, step, unit):
+            """A labelled slider for one setting; the document is converted again when it is let go."""
             value_text = app.text(f"{getattr(app.settings, key):g} {unit}", 13)
 
             def moving(e):
+                """Show the value while the slider moves (without converting yet)."""
                 value_text.value = f"{round(float(e.control.value) / step) * step:g} {unit}"
                 value_text.update()
 
             async def done(e):
+                """The slider was let go: use the value (rounded to the slider's step)."""
                 await set_value(key, round(round(float(e.control.value) / step) * step, 2))
 
             return ft.Container(ft.Column([ft.Row([app.text(label, 13), value_text], spacing=6),
@@ -969,12 +1079,15 @@ class FocusMode:
                                 width=200)  # a fixed width, so the settings flow across the panel
 
         async def font_changed(e):
+            """A font was chosen."""
             await set_value("font", e.control.value)
 
         async def align_changed(e):
+            """An alignment was chosen."""
             await set_value("alignment", e.control.value)
 
         async def bold_changed(e):
+            """Bold word starts switched on or off."""
             await set_value("bold_word_start", bool(e.control.value))
 
         return ft.Row([
@@ -996,6 +1109,7 @@ class FocusMode:
 
 
 def _blank() -> bytes:
+    """A tiny transparent PNG shown until a page has been rendered."""
     from .app import _blank_png
 
     return _blank_png()

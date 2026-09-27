@@ -55,6 +55,7 @@ def _rows_left_to_right(items: list[T], bbox_of) -> list[T]:
 
 
 def _shared_gutter(a: list, b: list, bbox_of) -> bool:
+    """Whether two groups of items share a column gap (then they are columns of one layout)."""
     if len(a) < 2 or len(b) < 2:
         return False
     boxes = [bbox_of(it) for it in a + b]
@@ -68,6 +69,9 @@ def _shared_gutter(a: list, b: list, bbox_of) -> bool:
 
 
 def reading_order(items: Sequence[T], bbox_of=lambda it: it.bbox) -> list[T]:
+    """Items (lines, figures) sorted into reading order: columns left to right, top to bottom within each (recursive
+    XY-cut).
+    """
     items = list(items)
     if len(items) <= 1:
         return items
@@ -75,6 +79,9 @@ def reading_order(items: Sequence[T], bbox_of=lambda it: it.bbox) -> list[T]:
 
 
 def _xycut(items: list[T], bbox_of, depth: int) -> list[T]:
+    """Split the items at the widest gap (between columns, then between rows) and order each part; ``depth`` guards
+    against endless splitting.
+    """
     if len(items) <= 1 or depth > 40:
         return _rows_left_to_right(items, bbox_of)
     boxes = [bbox_of(it) for it in items]
@@ -85,6 +92,9 @@ def _xycut(items: list[T], bbox_of, depth: int) -> list[T]:
     region_w = max(b[2] for b in boxes) - min(b[0] for b in boxes)
 
     def stray(b) -> bool:
+        """Whether a box is a tiny mark at the very top or bottom (a page number) that should not hide a column
+        gap.
+        """
         return b[2] - b[0] < max(20.0, 0.05 * region_w) and b[3] - b[1] < 15 and (b[1] - top < 1 or bottom - b[3] < 1)
     x_gaps = _gaps([(b[0], b[2]) for b in boxes if not stray(b)], MIN_GUTTER)
     if x_gaps:

@@ -26,6 +26,7 @@ class Reply:
 
 
 def _parse(text: str) -> dict:
+    """The AI's JSON answer as a dict; an unreadable answer raises AIError (the local result is then kept)."""
     try:
         data = json.loads(text)
     except ValueError as e:
@@ -36,6 +37,9 @@ def _parse(text: str) -> dict:
 
 
 class AIProvider:
+    """Base class of the AI providers: a name, a label for the UI, the models offered and a note about cost;
+    subclasses implement ``complete_json``.
+    """
     name = ""
     label = ""
     models: list[str] = []
@@ -43,6 +47,7 @@ class AIProvider:
     note = ""
 
     def __init__(self, api_key: str, model: str = ""):
+        """``api_key`` for the provider; ``model`` or the provider's default."""
         self._key = api_key
         self.model = model or self.default_model
 
@@ -54,6 +59,7 @@ class AIProvider:
 
 
 class AnthropicProvider(AIProvider):
+    """Anthropic's Claude models through the official SDK, with structured JSON output."""
     name = "anthropic"
     label = "Anthropic (Claude)"
     models = ["claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5"]
@@ -62,6 +68,7 @@ class AnthropicProvider(AIProvider):
 
     def complete_json(self, system: str, prompt: str, schema: dict, max_tokens: int = 1024,
                       answer_hint: str = "") -> Reply:
+        """Send the instructions and prompt and return the JSON answer (matching ``schema``) with token counts."""
         try:
             import anthropic
         except ImportError as e:
@@ -100,6 +107,7 @@ class AnthropicProvider(AIProvider):
 
 
 class GeminiProvider(AIProvider):
+    """Google's Gemini models through the REST API, with JSON output."""
     name = "gemini"
     label = "Google Gemini"
     models = ["gemini-2.5-flash", "gemini-2.5-flash-lite"]
@@ -110,6 +118,7 @@ class GeminiProvider(AIProvider):
 
     def complete_json(self, system: str, prompt: str, schema: dict, max_tokens: int = 1024,
                       answer_hint: str = "") -> Reply:
+        """Send the instructions and prompt and return the JSON answer with token counts."""
         import httpx
 
         body = {
@@ -157,6 +166,7 @@ class MistralProvider(AIProvider):
 
     def complete_json(self, system: str, prompt: str, schema: dict, max_tokens: int = 1024,
                       answer_hint: str = "") -> Reply:
+        """Send the instructions and prompt and return the JSON answer with token counts."""
         import httpx
 
         body = {
@@ -194,6 +204,7 @@ PROVIDERS: dict[str, type[AIProvider]] = {p.name: p for p in (MistralProvider, A
 
 
 def make_provider(name: str, api_key: str, model: Optional[str] = None) -> AIProvider:
+    """The client for a provider by name."""
     cls = PROVIDERS.get(name)
     if cls is None:
         raise AIError(f"Unknown AI provider: {name}")

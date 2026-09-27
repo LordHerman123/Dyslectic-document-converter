@@ -19,6 +19,9 @@ MAX_ENTRIES = 500
 
 @dataclass
 class LogEntry:
+    """One request to an AI provider as it was sent and answered: task, provider, model, the exact instructions and
+    snippets, the answer, tokens and any error.
+    """
     task: str
     provider: str
     model: str
@@ -34,6 +37,7 @@ class LogEntry:
 
     @property
     def chars(self) -> int:
+        """How many characters were sent."""
         return len(self.system) + len(self.prompt)
 
     @property
@@ -43,10 +47,15 @@ class LogEntry:
 
 
 class RequestLog:
+    """The privacy log: every request sent to an AI provider, kept on this device (JSON lines, the newest
+    MAX_ENTRIES).
+    """
     def __init__(self, path: Optional[Path] = None):
+        """``path``: the log file (in the app's data folder by default)."""
         self.path = path or (app_data_dir() / "ai_requests.jsonl")
 
     def add(self, entry: LogEntry) -> None:
+        """Append an entry (failing to write is ignored)."""
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with self.path.open("a", encoding="utf-8") as f:
@@ -56,6 +65,7 @@ class RequestLog:
             pass
 
     def entries(self) -> list[LogEntry]:
+        """All logged entries, oldest first (lines that cannot be read are skipped)."""
         out: list[LogEntry] = []
         try:
             lines = self.path.read_text(encoding="utf-8").splitlines()
@@ -71,12 +81,14 @@ class RequestLog:
         return out
 
     def clear(self) -> None:
+        """Delete the log."""
         try:
             self.path.unlink()
         except OSError:
             pass
 
     def _trim(self) -> None:
+        """Keep only the newest MAX_ENTRIES entries."""
         lines = self.path.read_text(encoding="utf-8").splitlines()
         if len(lines) > MAX_ENTRIES:
             self.path.write_text("\n".join(lines[-MAX_ENTRIES:]) + "\n", encoding="utf-8")

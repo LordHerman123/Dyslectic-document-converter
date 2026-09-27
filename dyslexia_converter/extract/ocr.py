@@ -17,6 +17,9 @@ from typing import Optional, Protocol
 
 @dataclass
 class OcrWord:
+    """A word found by OCR, with its box (pixels in the page picture), confidence (0-100) and its block, paragraph
+    and line numbers.
+    """
     text: str
     bbox: tuple[float, float, float, float]  # pixels in the supplied image
     confidence: float  # 0..100
@@ -34,18 +37,23 @@ class OcrRegion:
 
 @dataclass
 class OcrResult:
+    """What OCR found on one picture: the words and the picture regions."""
     words: list[OcrWord]
     regions: list[OcrRegion]
 
 
 class OcrEngine(Protocol):
+    """What the app needs from an OCR engine (Tesseract is the one included)."""
     name: str
 
-    def available(self) -> bool: ...
+    def available(self) -> bool:
+        """Whether the engine can be used on this device."""
 
-    def languages(self) -> list[str]: ...
+    def languages(self) -> list[str]:
+        """The document languages (en, nl, ...) the engine has installed."""
 
-    def recognize(self, png: bytes, languages: list[str]) -> OcrResult: ...
+    def recognize(self, png: bytes, languages: list[str]) -> OcrResult:
+        """Read the text of a PNG page picture in the given languages."""
 
 
 LANG_CODES = {"en": "eng", "nl": "nld", "de": "deu", "fr": "fra", "es": "spa", "it": "ita", "pt": "por"}
@@ -100,15 +108,18 @@ def find_tesseract() -> Optional[str]:
 
 
 class TesseractEngine:
+    """OCR with Tesseract (bundled with the Windows app, or installed on the system)."""
     name = "Tesseract"
 
     def __init__(self, cmd: Optional[str] = None):
+        """``cmd``: the tesseract program; found automatically when not given."""
         self._cmd = cmd or find_tesseract()
         # Pages are OCR'd in parallel; one thread per Tesseract process avoids
         # the heavy slowdown of several multi-threaded Tesseracts competing.
         os.environ.setdefault("OMP_THREAD_LIMIT", "1")
 
     def available(self) -> bool:
+        """Whether pytesseract and the Tesseract program are there."""
         try:
             import pytesseract
         except ImportError:
@@ -119,6 +130,7 @@ class TesseractEngine:
         return False
 
     def languages(self) -> list[str]:
+        """The document languages whose Tesseract language data is installed."""
         import pytesseract
         try:
             installed = set(pytesseract.get_languages(config=""))
@@ -146,6 +158,7 @@ class TesseractEngine:
         return 0
 
     def recognize(self, png: bytes, languages: list[str]) -> OcrResult:
+        """Read a page picture with Tesseract; returns the words with boxes and confidences."""
         import pytesseract
         from PIL import Image
 
@@ -176,6 +189,7 @@ class TesseractEngine:
 
 
 def default_engine() -> Optional[OcrEngine]:
+    """The OCR engine to use, or None when there is none (or OCR is switched off for testing)."""
     if os.environ.get("DYSLEXIA_CONVERTER_NO_OCR"):
         return None  # testing / very slow machines: rely on text layers only
     eng = TesseractEngine()

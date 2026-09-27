@@ -32,6 +32,7 @@ _PYPHEN = {"en": "en_US", "nl": "nl_NL", "de": "de_DE", "fr": "fr", "es": "es", 
 
 @dataclass
 class Sense:
+    """One meaning of a word: its part of speech (noun, verb, ...), the meaning and an example sentence."""
     pos: str  # "noun", "verb", ...
     meaning: str
     example: str = ""
@@ -39,6 +40,7 @@ class Sense:
 
 @dataclass
 class Entry:
+    """What the word card shows for a word: its syllables and, when the dictionary has it, its meanings."""
     word: str  # as it was clicked, cleaned up
     base: str = ""  # the dictionary form the meanings belong to ("run" for "running")
     syllables: list[str] = field(default_factory=list)
@@ -57,6 +59,7 @@ _data: Optional[dict] = None
 
 
 def _load() -> dict:
+    """The dictionary data, read once and kept (an empty dictionary when the file is missing or damaged)."""
     global _data
     if _data is None:
         try:
@@ -67,6 +70,7 @@ def _load() -> dict:
 
 
 def has_dictionary(language: str) -> bool:
+    """Whether meanings can be looked up on this device for a language (English only, for now)."""
     return language == "en" and DATA.exists()
 
 
@@ -107,6 +111,10 @@ def meanings(word: str, per_pos: int = 3) -> tuple[str, list[Sense]]:
 
 
 def syllables(word: str, language: str = "en") -> list[str]:
+    """The word split into syllables with the hyphenation patterns of its language (pyphen).
+
+    When pyphen or the language's patterns are missing, the whole word comes back as one part.
+    """
     try:
         import pyphen
     except ImportError:
@@ -119,6 +127,7 @@ def syllables(word: str, language: str = "en") -> list[str]:
 
 
 def lookup(word: str, language: str = "en") -> Entry:
+    """Everything the word card needs for a word as it appears in the text (punctuation is removed)."""
     w = clean(word)
     entry = Entry(w, syllables=syllables(w, language) if w else [])
     if w and language == "en":
