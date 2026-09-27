@@ -131,6 +131,9 @@ class AISettings:
     consent_given: bool = False  # user accepted that content is sent to the provider
     use_for_citations: bool = True
     use_for_ocr: bool = True
+    # the user's named API keys: {"id", "name", "provider"} each; the secrets are in the key store under "id"
+    keys: list = field(default_factory=list)
+    active_key: str = ""  # id of the key AI requests use (its provider is ``provider``)
 
     @classmethod
     def from_dict(cls, data: dict) -> "AISettings":

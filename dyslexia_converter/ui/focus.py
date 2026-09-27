@@ -19,6 +19,7 @@ import flet as ft
 from .. import dictionary
 from .. import highlights as hl
 from ..fonts import FONT_CHOICES
+from ..ai.providers import PROVIDERS
 from ..render import preview
 from ..speech import sentence_at
 
@@ -94,6 +95,14 @@ class FocusMode:
         self._drawing = False
         self._sentences: list[tuple[int, int]] = []
         self._paragraphs: list[tuple[int, int]] = []
+        self._more = False  # the selection toolbar shows Select and Start / End
+        self._pen_drag = False  # a selection being made with a mouse or pen
+        self._ai_scope = "page"  # what the AI summary is of: page, section, selection or document
+        self._ai_result = None  # (summary, first word, last word)
+        self._ai_busy = False
+        self._ai_error = ""
+        self._last_sel: Optional[tuple[int, int]] = None
+        self._toc_starts: list[int] = []  # first word of every heading in the converted document
         self._notes_only = False
         self._colour_filter: set[str] = set()
         self.bars_hidden = False
@@ -181,7 +190,7 @@ class FocusMode:
             ft.IconButton(ft.Icons.CLOSE, tooltip=t("Leave focus mode"), on_click=self.on_close),
             ft.Container(width=4),
             self.read_toggle, self.settings_toggle, self.view_toggle, self.mark_toggle, self.swatches,
-            self.ruler_toggle, self.notes_toggle,
+            self.ruler_toggle, self.notes_toggle, self._ai_button(),
             ft.Container(expand=True),
             self.page_label,
             app.build_export_menu(compact=True),
@@ -215,7 +224,8 @@ class FocusMode:
         # the list is on the page from the start: a list added later ignores the first scroll
         # a key keeps the scroll position when a panel above folds out or away
         self.body = ft.Container(self.list if self.layout == "scroll" else self.pager, expand=True,
-                                 on_size_change=self.on_body_size, key="focus-body")
+                                 on_size_change=self.on_body_size, key="focus-body",
+                                 on_click=self.on_background_click)
         # the notes list: beside the pages, no width while closed (a control taken out of the row would make
         # the page list forget how far it was scrolled)
         self.side = ft.Container(width=0, bgcolor=ft.Colors.SURFACE, border=ft.Border.only(
@@ -245,6 +255,11 @@ class FocusMode:
         app.page.update()
         await self._show_layout()
         self._start_rendering()
+
+    async def on_background_click(self, e) -> None:
+        """A click beside the pages clears the selection and closes the card."""
+        if self.card_layer.visible or self.sel:
+            await self.close_card()
 
     def _panel(self, content: ft.Control, key: str) -> ft.Container:
         """A panel that folds out below the top bar, open or folded as it was left (``key`` in the UI settings)."""
@@ -334,12 +349,17 @@ class FocusMode:
         self.words = hl.document_words(units)
         self._sentences = hl.sentence_spans(self.words)
         self._paragraphs = hl.paragraph_spans(self.words)
+        self._toc_starts = await app.in_thread(self._heading_starts)
         self._lines = {}
         page_bg = TINT_COLOURS.get(self.tint, TINT_COLOURS["white"])[0]
         self.images, self.frames, self.detectors = [], [], []
         for i, (pw, ph) in enumerate(self.sizes):
             img = ft.Image(src=_blank(), fit=ft.BoxFit.FILL, gapless_playback=True, expand=True)
-            det = ft.GestureDetector(content=img, data=i, on_tap_up=self.on_tap,  # up: holding is not a tap
+            # a mouse or pen selects by dragging; a finger scrolls (and selects with press-and-hold)
+            pen = ft.GestureDetector(content=img, data=i, allowed_devices=[
+                ft.PointerDeviceType.MOUSE, ft.PointerDeviceType.STYLUS, ft.PointerDeviceType.INVERTED_STYLUS],
+                on_pan_start=self.on_pen_start, on_pan_update=self.on_pen_move, on_pan_end=self.on_pen_end)
+            det = ft.GestureDetector(content=pen, data=i, on_double_tap_down=self.on_double_tap, on_tap_up=self.on_tap,  # up: holding is not a tap
                                      on_long_press_start=self.on_select_start,
                                      on_long_press_move_update=self.on_select_move,
                                      on_long_press_end=self.on_select_end, on_secondary_tap_down=self.on_word_card,
@@ -457,7 +477,8 @@ class FocusMode:
                 and 0 <= self.card_word[1] < len(self.words):
             picked = self.words[self.card_word[1]][2]
         selection = []
-        if self.sel and self.card_mode in ("drag", "selection", "note"):
+        if self.sel and self.card_mode in ("drag", "selection", "note") and self._exact(*self.sel) is None:
+            # (a highlight tapped keeps its own colour; its toolbar shows it is chosen)
             selection = hl.bands([r for p, _, rs in self.words[self.sel[0]:self.sel[1] + 1] if p == i for r in rs])
         return preview.render_highlight(self.app.converted_pdf, i, width, list(sentence), list(word),
                                         marks=marks, tint=self.tint, ruler=ruler,
@@ -559,8 +580,10 @@ class FocusMode:
     async def on_key(self, e) -> None:
         """Keys while focus mode is open.
 
-        Esc closes the word card or brings hidden bars back; up/down move the reading ruler (or scroll);
-        right, left, Page Up/Down and space turn pages. Keys are ignored while a note is being typed.
+        Esc closes the card or toolbar (clearing the selection) or brings hidden bars back. With text
+        selected: Ctrl+C copies, 1-4 highlight in a colour, N opens the note, Delete removes the highlight.
+        Up/down move the reading ruler (or scroll); right, left, Page Up/Down and space turn pages. Keys are
+        ignored while a note is being typed.
         """
         if not self.active:
             return
@@ -573,6 +596,20 @@ class FocusMode:
             return
         if self._typing:  # writing a note
             return
+        if self.sel and self.card_mode == "selection":
+            a, b = self.sel
+            if key.upper() == "C" and (e.ctrl or e.meta):
+                await self.copy(a, b)
+                return
+            if key in ("1", "2", "3", "4"):
+                await self.mark(a, b, list(SWATCHES)[int(key) - 1])
+                return
+            if key.upper() == "N":
+                await self.open_note(a, b)
+                return
+            if key in ("Delete", "Backspace") and self._exact(a, b) is not None:
+                await self.unmark(a, b)
+                return
         if key in ("Arrow Down", "Arrow Up"):
             step = 1 if key == "Arrow Down" else -1
             if self.ruler:
@@ -616,8 +653,9 @@ class FocusMode:
     async def on_tap(self, e) -> None:
         """A tap on a page.
 
-        With the highlighter on it marks (or erases) one word; on a note sign it opens the note; with a card
-        open it closes the card; with the ruler on it moves the ruler to that line; and with *tap to read* on,
+        With the highlighter on it marks (or erases) one word; with text selected or a card open it clears the
+        selection and closes the card; on a note sign it opens the note; on a highlight it opens the
+        highlight's toolbar; with the ruler on it moves the ruler to that line; and with *tap to read* on,
         reading aloud starts at the sentence tapped.
         """
         i = e.control.data
@@ -629,6 +667,9 @@ class FocusMode:
             if n is not None:
                 await self._apply(i, n, n)
             return
+        if self.card_layer.visible or self.sel:  # a tap anywhere else clears the selection and closes the card
+            await self.close_card()
+            return
         for x, y in hl.note_marks(self.highlights, self.words, i):  # the note sign opens the note
             half = hl.NOTE_SIGN / 2
             if abs(pt[0] - (x + half)) < half + 6 and abs(pt[1] - (y + half)) < half + 6:
@@ -636,8 +677,11 @@ class FocusMode:
                          if h.note and hl.note_marks([h], self.words, i) == [(x, y)])
                 await self.open_bubble(k)
                 return
-        if self.card_layer.visible:  # a tap beside the card closes it
-            await self.close_card()
+        n = hl.word_at(hl.words_on_page(self.words, i), *pt)
+        k = hl.at(self.highlights, n, self.words) if n is not None else None
+        if k is not None:  # a tap on a highlight: its toolbar (colour, note, copy, read, remove)
+            self._anchor, self.sel_unit = n, None
+            await self.open_selection(*hl.resolve(self.highlights[k], self.words))
             return
         if self.ruler:
             line = self._line_at(i, pt[1])
@@ -728,12 +772,9 @@ class FocusMode:
         for page in sorted(old | self._pages_of(self.sel)):
             await self.redraw(page)
 
-    async def on_select_start(self, e) -> None:
-        """Press and hold: select the word; keep holding and drag to select more."""
-        if self.tool:
-            return
-        i = e.control.data
-        n = self._word_near(i, e.local_position.x, e.local_position.y) if e.local_position else None
+    async def _start_selection(self, i: int, x: float, y: float) -> None:
+        """Start selecting at the word under (x, y) on page picture ``i``."""
+        n = self._word_near(i, x, y)
         if n is None:
             return
         self.card_mode = "drag"
@@ -743,11 +784,11 @@ class FocusMode:
         self.app.page.update()
         await self._show_selection((n, n))
 
-    async def on_select_move(self, e) -> None:
-        """While holding and dragging: the selection runs from the first word to the word under the finger."""
-        if self.card_mode != "drag" or self._drag_page != e.control.data:
+    async def _extend_selection(self, i: int, x: float, y: float) -> None:
+        """While dragging: the selection runs from the first word to the word under the pointer."""
+        if self.card_mode != "drag" or self._drag_page != i:
             return
-        n = self._word_near(self._drag_page, e.local_position.x, e.local_position.y, clamp=True)
+        n = self._word_near(i, x, y, clamp=True)
         if n is None:
             return
         self._drag_to = n
@@ -762,8 +803,17 @@ class FocusMode:
         finally:
             self._drawing = False
 
+    async def on_select_start(self, e) -> None:
+        """Press and hold (finger): select the word; keep holding and drag to select more."""
+        if not self.tool and e.local_position:
+            await self._start_selection(e.control.data, e.local_position.x, e.local_position.y)
+
+    async def on_select_move(self, e) -> None:
+        """Holding and dragging a finger: extend the selection."""
+        await self._extend_selection(e.control.data, e.local_position.x, e.local_position.y)
+
     async def on_select_end(self, e) -> None:
-        """Letting go: open the card for the word (with its meaning) or for the words selected."""
+        """Letting go after holding: the word card for one word (with its meaning), the toolbar for more."""
         if self.card_mode != "drag" or not self.sel:
             return
         self._drag_to = None
@@ -772,6 +822,40 @@ class FocusMode:
             await self.open_card(self._drag_page, a)
         else:
             await self.open_selection(a, b)
+
+    async def on_pen_start(self, e) -> None:
+        """Mouse or pen drag: selects text straight away (with the highlighter on, it marks instead)."""
+        if self.tool:
+            self.on_pan_start(e)
+            return
+        self._pen_drag = True
+        await self._start_selection(e.control.data, e.local_position.x, e.local_position.y)
+
+    async def on_pen_move(self, e) -> None:
+        """Mouse or pen drag: extend the selection (or the highlighter stroke)."""
+        if self.tool:
+            await self.on_pan_update(e)
+            return
+        await self._extend_selection(e.control.data, e.local_position.x, e.local_position.y)
+
+    async def on_pen_end(self, e) -> None:
+        """Mouse or pen let go: show the toolbar for the selected text."""
+        if self.tool:
+            await self.on_pan_end(e)
+            return
+        self._pen_drag = False
+        if self.card_mode == "drag" and self.sel:
+            self._drag_to = None
+            await self.open_selection(*self.sel)
+
+    async def on_double_tap(self, e) -> None:
+        """Double-click or double-tap a word: select it and show the toolbar."""
+        if self.tool or not e.local_position:
+            return
+        n = self._word_near(e.control.data, e.local_position.x, e.local_position.y)
+        if n is not None:
+            self._anchor, self.sel_unit = n, "word"
+            await self.open_selection(n, n)
 
     async def on_word_card(self, e) -> None:
         """Right-click on a page: open the word card for the word there."""
@@ -933,29 +1017,73 @@ class FocusMode:
         return self._card_box(rows + self._mark_rows(a, b, k))
 
     def _selection_card(self, a: int, b: int) -> ft.Control:
-        """The card for selected words: how many, read aloud, the text, Select (word, sentence, paragraph),
-        moving the start and end by a word, and highlight and note."""
+        """The toolbar for selected words (or a highlight): Copy, the colours, Note, Read, Meaning (one word),
+        Remove (a highlight), More (select sentence or paragraph, move the start or end) and Close. Slim, at
+        the bottom, so the text stays in view."""
         app, t = self.app, self.app.t
+        k = self._exact(a, b)
+        h = self.highlights[k] if k is not None else None
         text = hl.text_of(self.words, a, b)
-        nudge = lambda icon, tip, end, step: ft.IconButton(  # noqa: E731
-            icon, tooltip=tip, on_click=lambda e: app.page.run_task(self.nudge, end, step))
-        rows: list[ft.Control] = [
-            ft.Row([ft.Text(t("Selected: {n} words", n=b - a + 1), size=app.fs(16), weight=ft.FontWeight.BOLD,
-                            expand=True),
-                    ft.IconButton(ft.Icons.VOLUME_UP, tooltip=t("Read the selection"), visible=app._speech_allowed(),
-                                  on_click=lambda e: app.say_word(text)),
-                    ft.IconButton(ft.Icons.CLOSE, tooltip=t("Close"), on_click=self.close_card)]),
-            ft.Text(f"“{text}”", size=app.fs(13), italic=True, max_lines=5,
-                    overflow=ft.TextOverflow.ELLIPSIS, color=ft.Colors.ON_SURFACE_VARIANT),
-            self._unit_row(),
-            ft.Row([app.text(t("Start"), 13),
-                    nudge(ft.Icons.CHEVRON_LEFT, t("One word earlier"), 0, -1),
-                    nudge(ft.Icons.CHEVRON_RIGHT, t("One word later"), 0, 1), ft.Container(width=16),
-                    app.text(t("End"), 13),
-                    nudge(ft.Icons.CHEVRON_LEFT, t("One word earlier"), 1, -1),
-                    nudge(ft.Icons.CHEVRON_RIGHT, t("One word later"), 1, 1)], spacing=0),
-        ]
-        return self._card_box(rows + self._mark_rows(a, b, self._exact(a, b)))
+
+        def btn(icon, label, handler, visible=True, tip=None):
+            """A compact text button with an icon for the toolbar."""
+            return ft.TextButton(label, icon=icon, on_click=handler, visible=visible, tooltip=tip,
+                                 style=ft.ButtonStyle(padding=ft.Padding.symmetric(horizontal=8)))
+
+        dots = [ft.Container(width=26, height=26, border_radius=13, bgcolor=SWATCHES[name], data=name,
+                             tooltip=f"{t(name.capitalize())} ({n})",
+                             border=ft.Border.all(3, ft.Colors.PRIMARY) if h and h.colour == name else None,
+                             on_click=lambda e: app.page.run_task(self.mark, a, b, e.control.data))
+                for n, name in enumerate(SWATCHES, 1)]
+        label = t("Highlight") if h else (t("1 word") if a == b else t("{n} words", n=b - a + 1))
+        bar = ft.Container(ft.Row([
+            app.text(label, 13, weight=ft.FontWeight.BOLD),
+            btn(ft.Icons.CONTENT_COPY, t("Copy"), lambda e: app.page.run_task(self.copy, a, b), tip="Ctrl+C"),
+            *dots,
+            btn(ft.Icons.STICKY_NOTE_2_OUTLINED, t("Note"), lambda e: app.page.run_task(self.open_note, a, b),
+                tip=t("Add or edit a note (N)")),
+            btn(ft.Icons.VOLUME_UP, t("Read"), lambda e: app.say_word(text), visible=app._speech_allowed()),
+            btn(ft.Icons.SMART_TOY_OUTLINED, t("Summarise"), lambda e: app.page.run_task(self.summarise_selection, a, b),
+                visible=self._ai_on() and b - a >= 15, tip=t("AI summary of the selection")),
+            btn(ft.Icons.MENU_BOOK_OUTLINED, t("Meaning"), lambda e: app.page.run_task(
+                self.open_card, self.words[a][0], a), visible=a == b),
+            btn(ft.Icons.DELETE_OUTLINE, t("Remove"), lambda e: app.page.run_task(self.unmark, a, b),
+                visible=h is not None, tip=t("Remove the highlight (Delete)")),
+            ft.IconButton(ft.Icons.MORE_HORIZ, tooltip=t("More: select the sentence or paragraph, adjust"),
+                          on_click=self.on_more, selected=self._more, style=self._toggle_style()),
+            ft.IconButton(ft.Icons.CLOSE, tooltip=t("Close (Esc)"), on_click=self.close_card),
+        ], spacing=4, tight=True, wrap=True, alignment=ft.MainAxisAlignment.CENTER,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            bgcolor=ft.Colors.SURFACE_CONTAINER_HIGH, border_radius=28,
+            padding=ft.Padding.symmetric(horizontal=14, vertical=4),
+            shadow=ft.BoxShadow(blur_radius=12, color="#40000000"))
+        parts: list[ft.Control] = []
+        if self._more:
+            nudge = lambda icon, tip, end, step: ft.IconButton(  # noqa: E731
+                icon, tooltip=tip, on_click=lambda e: app.page.run_task(self.nudge, end, step))
+            parts.append(ft.Container(ft.Column([
+                self._unit_row(),
+                ft.Row([app.text(t("Start"), 13),
+                        nudge(ft.Icons.CHEVRON_LEFT, t("One word earlier"), 0, -1),
+                        nudge(ft.Icons.CHEVRON_RIGHT, t("One word later"), 0, 1), ft.Container(width=12),
+                        app.text(t("End"), 13),
+                        nudge(ft.Icons.CHEVRON_LEFT, t("One word earlier"), 1, -1),
+                        nudge(ft.Icons.CHEVRON_RIGHT, t("One word later"), 1, 1)], spacing=0),
+            ], spacing=4, tight=True), bgcolor=ft.Colors.SURFACE_CONTAINER_HIGH, border_radius=16, padding=12,
+                shadow=ft.BoxShadow(blur_radius=12, color="#40000000")))
+        parts.append(bar)
+        return ft.Column(parts, spacing=8, tight=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
+
+    async def on_more(self, e) -> None:
+        """•••: show or hide Select (word, sentence, paragraph) and moving the start and end."""
+        self._more = not self._more
+        if self.sel:
+            await self.open_selection(*self.sel)
+
+    async def copy(self, a: int, b: int) -> None:
+        """Copy words a..b to the clipboard."""
+        await self.app.clipboard.set(hl.text_of(self.words, a, b))
+        self._toast(self.app.t("Copied."))
 
     async def nudge(self, end: int, step: int) -> None:
         """Move the start (``end`` 0) or the end (1) of the selection by one word."""
@@ -1057,7 +1185,8 @@ class FocusMode:
         self._refresh_notes()
 
     async def mark(self, a: int, b: int, colour: str) -> None:
-        """A colour on a card: highlight words a..b, or recolour their highlight."""
+        """A colour: highlight words a..b (or recolour their highlight), close the toolbar, and offer Undo."""
+        before = list(self.highlights)
         k = self._exact(a, b)
         if k is None:
             self.highlights = hl.add(self.highlights, a, b, colour, self.words)
@@ -1065,10 +1194,31 @@ class FocusMode:
             self.highlights = hl.recolour(self.highlights, k, colour)
         self.colour = colour
         await self._changed()
-        if self.card_mode == "word":
-            await self.open_card(self.card_word[0], self._anchor)
-        else:
-            await self.open_selection(a, b)
+        await self.close_card()
+        self._offer_undo(self.app.t("Highlighted in {colour}", colour=self.app.t(colour.capitalize()).lower()), before)
+
+    def _offer_undo(self, message: str, before: list) -> None:
+        """A short message with Undo, which puts the highlights back as they were."""
+
+        async def undo(e):
+            """Put the highlights back as they were before the change."""
+            pages = self._pages_of(self.sel)
+            self.highlights = before
+            await self._changed()
+            for p in sorted(pages | {w[0] for h in before for w in self.words[h.start:h.end + 1][:1]}
+                            | {self.current}):
+                await self.redraw(p)
+
+        self._toast(message, undo)
+
+    def _toast(self, message: str, undo=None) -> None:
+        """A short message floating above the toolbar's place (so the toolbar stays usable), with Undo when
+        ``undo`` is given."""
+        app = self.app
+        app.page.show_dialog(ft.SnackBar(ft.Text(message, size=app.fs(14)), action=app.t("Undo") if undo else None,
+                                         on_action=undo, duration=ft.Duration(seconds=6 if undo else 2),
+                                         behavior=ft.SnackBarBehavior.FLOATING,
+                                         margin=ft.Margin.only(left=24, right=24, bottom=96)))
 
     async def save_note(self, a: int, b: int, note: str, colour: str) -> None:
         """Save the note on words a..b (they are highlighted in ``colour`` when they were not yet)."""
@@ -1082,21 +1232,263 @@ class FocusMode:
         await self.close_card()
 
     async def unmark(self, a: int, b: int) -> None:
-        """Remove the highlight on words a..b (with its note)."""
+        """Remove the highlight on words a..b (with its note), with Undo."""
+        before = list(self.highlights)
         self.highlights = hl.erase(self.highlights, a, b, self.words)
         await self._changed()
         await self.close_card()
+        self._offer_undo(self.app.t("Highlight removed"), before)
+
+    # ------------------------------------------------------------------ AI summary (only when AI is on)
+    def _ai_on(self) -> bool:
+        """Whether AI summaries can be made: AI-assisted mode, the privacy notice accepted, and a key."""
+        s = self.app.ai_settings
+        return s.mode == "ai_assisted" and s.consent_given and self.app.assistant.has_key
+
+    def _ai_button(self) -> ft.IconButton:
+        """The robot button (the icon of the AI settings tab): the summary panel, or greyed out while AI is off."""
+        t = self.app.t
+        on = self._ai_on()
+        self.ai_toggle = ft.IconButton(ft.Icons.SMART_TOY_OUTLINED, on_click=self.on_ai_button,
+                                       tooltip=t("AI summary") if on else t("AI summary (AI is off)"),
+                                       icon_color=None if on else "#9E9E9E", style=self._toggle_style())
+        return self.ai_toggle
+
+    async def on_ai_button(self, e) -> None:
+        """The robot button: open or close the summary panel, or explain how to switch AI on."""
+        if not self._ai_on():
+            self._ai_off_dialog()
+            return
+        if self.sel:
+            self._last_sel = self.sel
+        self._open_side("ai" if self._side_mode != "ai" else None)
+
+    def _ai_off_dialog(self) -> None:
+        """AI is off: say what AI summaries need, with a way to the AI settings."""
+        app, t = self.app, self.app.t
+
+        async def open_settings(e):
+            """Leave focus mode and show the AI settings tab."""
+            app.page.pop_dialog()
+            await self.close()
+            app.tabs.selected_index = app.ai_tab_index
+            app.page.update()
+
+        app.page.show_dialog(ft.AlertDialog(
+            title=ft.Row([ft.Icon(ft.Icons.SMART_TOY_OUTLINED, color="#9E9E9E"),
+                          ft.Text(t("AI summaries are off"), size=app.fs(18))], spacing=10),
+            content=ft.Text(t("To get a summary of a page, section or selection, switch on AI-assisted mode in AI "
+                              "settings. Nothing is sent to an AI provider until you do."), size=app.fs(14),
+                            width=380),
+            actions=[ft.TextButton(t("Not now"), on_click=lambda e: app.page.pop_dialog()),
+                     ft.FilledButton(t("Open AI settings"), icon=ft.Icons.SETTINGS, on_click=open_settings)]))
+
+    def _heading_starts(self) -> list[int]:
+        """The first word of every heading in the converted document (from its bookmarks), for "this section"."""
+        import pymupdf
+
+        try:
+            with pymupdf.open(stream=self.app.converted_pdf, filetype="pdf") as d:
+                toc = d.get_toc()
+        except Exception:
+            return []
+        starts = []
+        for _, title, page in toc:
+            target = [w.lower() for w in title.split()[:3]]
+            if not target:
+                continue
+            for n, (p, text, _) in enumerate(self.words):
+                if p == page - 1 and [x[1].lower() for x in self.words[n:n + len(target)]] == target:
+                    starts.append(n)
+                    break
+        return sorted(set(starts))
+
+    def _scope_span(self, scope: str) -> Optional[tuple[int, int]]:
+        """The words the summary is of: the current page, the section around it, the selection, or everything."""
+        if not self.words:
+            return None
+        on_page = [n for n, w in enumerate(self.words) if w[0] == self.current]
+        if scope == "document":
+            return 0, len(self.words) - 1
+        if scope == "selection":
+            return self.sel or self._last_sel
+        if scope == "section":
+            here = on_page[0] if on_page else 0
+            start = max([s for s in self._toc_starts if s <= here], default=0)
+            end = min([s for s in self._toc_starts if s > here], default=len(self.words)) - 1
+            return start, end
+        return (on_page[0], on_page[-1]) if on_page else None
+
+    def _ai_panel(self) -> ft.Control:
+        """The summary panel: what to summarise, length, plain language, what will be sent, and the summary."""
+        app, t = self.app, self.app.t
+        ui = app.ui
+        chips = [ft.Chip(label=ft.Text(t(label)), data=key, selected=self._ai_scope == key,
+                         on_select=self.on_ai_scope,
+                         disabled=key == "selection" and not (self.sel or self._last_sel))
+                 for key, label in (("page", "This page"), ("section", "This section"),
+                                    ("selection", "Selection"), ("document", "Whole document"))]
+        rows: list[ft.Control] = [
+            ft.Row([ft.Icon(ft.Icons.SMART_TOY_OUTLINED, color=ft.Colors.PRIMARY),
+                    ft.Text(t("AI summary"), size=app.fs(16), weight=ft.FontWeight.BOLD, expand=True),
+                    ft.IconButton(ft.Icons.CLOSE, tooltip=t("Close"), on_click=lambda e: self._open_side(None))]),
+            app.text(t("Summarise"), 12, color=ft.Colors.ON_SURFACE_VARIANT),
+            ft.Row(chips, wrap=True, spacing=6),
+            ft.Row([app.text(t("Length"), 12, color=ft.Colors.ON_SURFACE_VARIANT),
+                    ft.SegmentedButton(segments=[ft.Segment("short", label=ft.Text(t("Short"))),
+                                                 ft.Segment("detailed", label=ft.Text(t("Detailed")))],
+                                       selected=["detailed" if ui.get("ai_summary_detailed") else "short"],
+                                       on_change=self.on_ai_length)], spacing=10),
+            ft.Switch(label=t("Plain language (short sentences, easy words)"),
+                      value=bool(ui.get("ai_summary_plain", True)), on_change=self.on_ai_plain,
+                      label_text_style=ft.TextStyle(size=app.fs(13))),
+        ]
+        span = self._scope_span(self._ai_scope)
+        words = (span[1] - span[0] + 1) if span else 0
+        provider = PROVIDERS.get(app.ai_settings.provider)
+        where = f"{provider.label if provider else app.ai_settings.provider}"
+        model = app.ai_settings.model or (provider.default_model if provider else "")
+        rows.append(ft.Container(ft.Row([
+            ft.Icon(ft.Icons.CLOUD_UPLOAD_OUTLINED, size=18, color="#8A5A00"),
+            ft.Text(t("About {n} words will be sent to {provider} ({model}). Every request is recorded in the "
+                      "privacy log.", n=words, provider=where, model=model), size=app.fs(12), expand=True,
+                    color="#4A3A10")], vertical_alignment=ft.CrossAxisAlignment.START),
+            bgcolor="#FFF3D6", border_radius=8, padding=10))
+        busy = ft.Row([ft.ProgressRing(width=18, height=18, stroke_width=2), app.text(t("Summarising..."), 13)],
+                      visible=self._ai_busy)
+        rows += [ft.FilledButton(t("Summarise"), icon=ft.Icons.SMART_TOY_OUTLINED, on_click=self.run_summary,
+                                 disabled=self._ai_busy or not words), busy]
+        if self._ai_error:
+            rows.append(ft.Text(self._ai_error, size=app.fs(13), color=ft.Colors.ERROR))
+        if self._ai_result:
+            summary, a, b = self._ai_result
+            rows += [ft.Divider(height=10), self._ai_warning()]
+            if summary.title:
+                rows.append(ft.Text(summary.title, size=app.fs(15), weight=ft.FontWeight.BOLD, selectable=True))
+            rows += [ft.Row([ft.Text("•", size=app.fs(15)), ft.Text(p, size=app.fs(14), expand=True,
+                                                                        selectable=True)],
+                            vertical_alignment=ft.CrossAxisAlignment.START) for p in summary.points]
+            text = self._summary_text(summary)
+            rows.append(ft.Row([
+                ft.TextButton(t("Copy"), icon=ft.Icons.CONTENT_COPY,
+                              on_click=lambda e: app.page.run_task(self._copy_text, text)),
+                ft.TextButton(t("Read aloud"), icon=ft.Icons.VOLUME_UP, visible=app._speech_allowed(),
+                              on_click=lambda e: app.say_word(text)),
+                ft.TextButton(t("Save as note"), icon=ft.Icons.STICKY_NOTE_2_OUTLINED,
+                              on_click=lambda e: app.page.run_task(self.save_summary_note))], spacing=0, wrap=True))
+        return ft.Column(rows, spacing=10, scroll=ft.ScrollMode.AUTO, expand=True)
+
+    def _ai_warning(self) -> ft.Control:
+        """The notice on every summary that AI can make mistakes: amber card with an accent bar and an icon."""
+        app, t = self.app, self.app.t
+        return ft.Container(ft.Row([
+            ft.Container(width=4, height=40, bgcolor="#E0A100", border_radius=2),
+            ft.Icon(ft.Icons.WARNING_AMBER_ROUNDED, color="#B77900", size=22),
+            ft.Column([ft.Text(t("Made by AI"), size=app.fs(13), weight=ft.FontWeight.BOLD, color="#5C4200"),
+                       ft.Text(t("AI can make mistakes. Check the summary against the text before you use it."),
+                               size=app.fs(12), color="#5C4200")], spacing=2, tight=True, expand=True),
+        ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            bgcolor="#FFF4D6", border=ft.Border.all(1, "#F1D48A"), border_radius=10,
+            padding=ft.Padding.only(left=0, right=12, top=10, bottom=10), clip_behavior=ft.ClipBehavior.HARD_EDGE)
+
+    @staticmethod
+    def _summary_text(summary) -> str:
+        """A summary as plain text (title, then one point per line)."""
+        lines = [summary.title] if summary.title else []
+        return "\n".join(lines + [f"- {p}" for p in summary.points])
+
+    def on_ai_scope(self, e) -> None:
+        """A scope chip: summarise this page, this section, the selection or the whole document."""
+        self._ai_scope = e.control.data
+        self._open_side("ai")
+
+    def on_ai_length(self, e) -> None:
+        """Short or Detailed (remembered)."""
+        self._save("ai_summary_detailed", "detailed" in (e.control.selected or []))
+
+    def on_ai_plain(self, e) -> None:
+        """Plain language on or off (remembered)."""
+        self._save("ai_summary_plain", bool(e.control.value))
+
+    async def summarise_selection(self, a: int, b: int) -> None:
+        """"Summarise" on the selection toolbar: open the summary panel for the selection."""
+        self._last_sel = (a, b)
+        self._ai_scope = "selection"
+        await self.close_card()
+        self._open_side("ai")
+
+    async def run_summary(self, e=None) -> None:
+        """Send the chosen text for a summary (in a thread) and show it."""
+        from ..ai.assistant import ConsentRequired
+        from ..ai.providers import AIError
+
+        app, t = self.app, self.app.t
+        span = self._scope_span(self._ai_scope)
+        if not span:
+            return
+        a, b = span
+        language = app.session.document.language if app.session else "en"
+        self._ai_busy, self._ai_error = True, ""
+        self._open_side("ai")
+        try:
+            summary = await app.in_thread(app.assistant.summarise, hl.text_of(self.words, a, b), language,
+                                          bool(app.ui.get("ai_summary_detailed")),
+                                          bool(app.ui.get("ai_summary_plain", True)))
+            self._ai_result = (summary, a, b)
+        except ConsentRequired:
+            self._ai_error = t("AI is off. Choose 'AI-assisted' in AI settings to use it.")
+        except AIError as ex:
+            self._ai_error = t.message(str(ex))
+        except Exception as ex:  # a network problem: say so, the document is unchanged
+            self._ai_error = t("The summary could not be made:") + " " + type(ex).__name__
+        finally:
+            self._ai_busy = False
+        if self._side_mode == "ai":
+            self._open_side("ai")
+        app.refresh_ai_log()
+
+    async def _copy_text(self, text: str) -> None:
+        """Copy some text (the summary) to the clipboard."""
+        await self.app.clipboard.set(text)
+        self._toast(self.app.t("Copied."))
+
+    async def save_summary_note(self) -> None:
+        """Keep the summary as a note on the first sentence of the part summarised (it shows in the notes list)."""
+        if not self._ai_result:
+            return
+        summary, a, _ = self._ai_result
+        s0, s1 = hl.span_at(self._sentences, a)
+        note = self.app.t("AI summary (check it against the text):") + "\n" + self._summary_text(summary)
+        k = self._exact(s0, s1)
+        if k is None:
+            self.highlights = hl.add(self.highlights, s0, s1, "blue", self.words, note)
+        else:
+            self.highlights = hl.set_note(self.highlights, k, note)
+        await self._changed()
+        for p in self._pages_of((s0, s1)):
+            await self.redraw(p)
+        self._toast(self.app.t("Saved as a note."))
 
     # ------------------------------------------------------------------ notes and highlights panel
     def on_notes_panel(self, e) -> None:
         """The notes button: show or hide the list of highlights and notes beside the pages."""
-        open_ = self.side.content is None
-        self.notes_toggle.selected = open_
-        self.side.width = min(360.0, max(260.0, self._avail()[0] * 0.35)) if open_ else 0
-        self.side.content = self._notes_panel() if open_ else None
-        self.side.padding = 12 if open_ else 0
+        self._open_side("notes" if self._side_mode != "notes" else None)
+
+    @property
+    def _side_mode(self) -> Optional[str]:
+        """What the side panel shows now: "notes", "ai", or None when it is folded away."""
+        return self.side.data if self.side.content is not None else None
+
+    def _open_side(self, mode: Optional[str]) -> None:
+        """Show the notes list or the AI summary beside the pages (or neither)."""
+        self.notes_toggle.selected = mode == "notes"
+        self.ai_toggle.selected = mode == "ai"
+        self.side.data = mode
+        self.side.width = min(380.0, max(260.0, self._avail()[0] * 0.35)) if mode else 0
+        self.side.content = (self._notes_panel() if mode == "notes" else self._ai_panel()) if mode else None
+        self.side.padding = 12 if mode else 0
         self.app.page.update()
-        if open_:
+        if mode == "notes":
             self._refresh_notes()
 
     def _notes_panel(self) -> ft.Control:
@@ -1130,7 +1522,7 @@ class FocusMode:
 
     def _refresh_notes(self) -> None:
         """Fill the notes list with the highlights that pass the filters."""
-        if self.side.content is None:
+        if self._side_mode != "notes":
             return
         app, t = self.app, self.app.t
         items = []

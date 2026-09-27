@@ -291,3 +291,43 @@ def test_gemini_request_has_no_thinking_and_reports_usage(monkeypatch):
     cfg = sent["body"]["generationConfig"]
     assert cfg["thinkingConfig"] == {"thinkingBudget": 0} and cfg["maxOutputTokens"] == 150
     assert sent["body"]["systemInstruction"]["parts"][0]["text"] == "sys"
+
+
+def test_ai_summary_is_masked_cached_logged_and_split_when_long(isolated_home, monkeypatch):
+    from dyslexia_converter.ai import assistant as a
+
+    answer = {"t": "Title", "b": ["Point one.", "Point two."]}
+    ai = make_assistant(isolated_home, answer, monkeypatch)
+    text = "Contact me at someone@example.org. Big Data changes science. " * 3
+    s = ai.summarise(text, language="nl", detailed=True, plain=True)
+    assert s.title == "Title" and s.points == ["Point one.", "Point two."]
+    assert FakeProvider.calls == 1
+    assert "someone@example.org" not in FakeProvider.last_prompt and "[email]" in FakeProvider.last_prompt
+    assert FakeProvider.last_prompt.startswith("Language: nl\nLength: detailed (6 to 10 points)\nStyle: plain\n")
+    assert FakeProvider.last_prompt.endswith("in 6 to 10 points. Write the title and points in Dutch.")
+    assert ai.log.entries()[-1].task == "summary"
+    ai.summarise(text, language="nl", detailed=True, plain=True)  # the same text again: from the cache
+    assert FakeProvider.calls == 1
+
+    long_text = ("A sentence of the document with several words in it. " * 500).strip()  # 5000 words
+    assert len(a._summary_parts(long_text)) == 2
+    ai.summarise(long_text, language="en")  # two parts, then one summary of their points
+    assert FakeProvider.calls == 4
+
+
+def test_ai_summary_refused_without_consent(isolated_home, monkeypatch):
+    import pytest
+
+    from dyslexia_converter.ai.assistant import ConsentRequired
+
+    ai = make_assistant(isolated_home, {"t": "", "b": []}, monkeypatch, consent=False)
+    with pytest.raises(ConsentRequired):
+        ai.summarise("Some text.")
+    assert FakeProvider.calls == 0
+
+
+def test_ai_summary_keeps_the_chosen_length(isolated_home, monkeypatch):
+    many = {"t": "T", "b": [f"Point {i}." for i in range(11)]}  # a model that ignores "3 to 5 points"
+    a = make_assistant(isolated_home, many, monkeypatch)
+    assert len(a.summarise("Some text to summarise.", "en").points) == 5
+    assert len(a.summarise("Some text to summarise.", "en", detailed=True).points) == 10

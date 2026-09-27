@@ -38,8 +38,9 @@ class KeyStore:
         """Where keys are kept, for showing to the user."""
         return "system keychain" if self._keyring else "private file on this device"
 
-    def get(self, provider: str) -> Optional[str]:
-        """The key for a provider, or None."""
+    def get(self, provider: str, env: bool = True) -> Optional[str]:
+        """The key stored under ``provider`` (a provider name or a named key's id), or None. With ``env``, a
+        provider name also finds the key in its environment variable (such as MISTRAL_API_KEY)."""
         if self._keyring:
             try:
                 import keyring
@@ -54,6 +55,11 @@ class KeyStore:
                 return v
         except (OSError, ValueError):
             pass
+        return (os.environ.get(ENV_VARS.get(provider, "")) or None) if env else None
+
+    @staticmethod
+    def env_key(provider: str) -> Optional[str]:
+        """The key in the provider's environment variable (used as is, never stored), or None."""
         return os.environ.get(ENV_VARS.get(provider, "")) or None
 
     def set(self, provider: str, key: str) -> None:
@@ -105,6 +111,7 @@ class KeyStore:
 # ----------------------------------------------------------------------------- redaction
 
 _KEY_PATTERNS = [re.compile(r"sk-ant-[A-Za-z0-9_\-]{8,}"), re.compile(r"AIza[0-9A-Za-z_\-]{20,}"),
+                 re.compile(r"mstrl_[A-Za-z0-9_\-]{8,}"),
                  re.compile(r"(?i)(x-api-key|x-goog-api-key|authorization)[\"']?\s*[:=]\s*[\"']?[^\s\"',}]+")]
 
 

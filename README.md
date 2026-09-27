@@ -11,9 +11,9 @@ Your original PDF is only ever read, never modified.
 Everything works **locally and without AI**. AI is an optional extra that you turn on with your own
 API key. When it's on, it only sees small snippets that the local rules couldn't decide.
 
-## Download for Windows (version 1.9)
+## Download for Windows (version 1.10)
 
-Get `DyslexiaConverter-1.9.0-setup.exe` (installer) or `DyslexiaConverter-1.9.0-windows.zip` (unzip and
+Get `DyslexiaConverter-1.10.0-setup.exe` (installer) or `DyslexiaConverter-1.10.0-windows.zip` (unzip and
 double-click `DyslexiaConverter.exe`) from the repository's **Releases** page. Text recognition (Tesseract)
 is included; nothing else needs to be installed. How the Windows build is made: [windows/README.md](windows/README.md).
 
@@ -60,7 +60,8 @@ python -m dyslexia_converter chapter.pdf --pages 3-18 --move-citations -f printa
 | Document map | Clickable headings in the app, PDF bookmarks, and a Contents page. Headings in DOCX exports show up in Word's Navigation pane. |
 | Read aloud | The *Read aloud* button next to Original / Both / Converted opens the read-aloud controls (tap it again to fold them away). *Read aloud* reads the converted document from the page you are looking at, with the voices already on your computer (it works offline; nothing leaves the device). The sentence being read is highlighted, the word being said is boxed, and the pages turn along. One button reads, pauses and continues (a play triangle or pause bars show which); with *tap to read* switched on, click anywhere on the converted page to start reading there (to skip parts you do not need). Speed and voice can be set; the voice follows the document's language. On Windows 10/11 every voice installed in Windows Settings > Time & language > Speech can be used, so documents in Dutch, German, French and other languages are read in their own language; the app says so when a document's language has no voice yet. Desktop app only. |
 | Focus mode | *Focus mode* shows the converted document in the whole window, like a PDF reader, so it can be read on a tablet or touch screen without another app. The top bar can be hidden for reading without distractions (Esc or the small button brings it back; on Windows the window goes full screen). Everything else folds out from the bar and away again: the read-aloud controls, the reading settings (font, size, spacing, alignment, bold word starts) and the **View** options: page colour (white, cream, blue, green, grey or dark), **Scroll** through all pages or read **Pages** one at a time (swipe, arrow keys or the side arrows turn the page), **Fit width**, and **Rotate** a quarter turn (for a tablet with screen rotation locked). Zoom with + and − or pinch with two fingers. A **reading ruler** keeps the line you are on clear and fades the rest; tap a line or use the arrow keys to move it, and it follows the voice when reading aloud. |
-| Word card and selecting text | Press and hold a word (or right-click it) to open its card: the word in syllables, a button that says it, and what it means. English meanings come from a dictionary inside the app (Open English WordNet), so nothing leaves the device; it also finds the base word (*ran* → *run*, *theories* → *theory*). For other languages the card shows the syllables and offers *Look up online* (Wiktionary, opened in your browser only when you ask). To select more, keep holding and drag: the selection grows word by word, in blue with a handle at each end. The card then shows the selected text with **Select: Word / Sentence / Paragraph** (one tap selects the whole sentence or paragraph around the word held), **Start ◀ ▶ / End ◀ ▶** to move either end by a word, a button that reads the selection aloud, and the highlight colours. |
+| Selecting and copying text | With a mouse or pen, drag over the text to select it, like in any PDF reader; double-click a word to select just that word. With a finger, dragging scrolls: press and hold a word, then drag. A slim toolbar appears at the bottom: **Copy**, the four highlight colours, **Note**, **Read** (reads the selection aloud), **Meaning** (for one word) and **•••**, which selects the whole sentence or paragraph and moves the start or end by a word. One tap on a colour highlights and closes the toolbar, with **Undo** in case of a mistake. Tap a highlight to change its colour, add a note, copy it, read it or **Remove** it. Click anywhere else, or press Esc, to clear the selection. Keys: Ctrl+C copies, 1-4 pick a colour, N adds a note, Delete removes a highlight. |
+| Word card | Press and hold a word (or right-click it) to open its card: the word in syllables, a button that says it, and what it means. English meanings come from a dictionary inside the app (Open English WordNet), so nothing leaves the device; it also finds the base word (*ran* → *run*, *theories* → *theory*). For other languages the card shows the syllables and offers *Look up online* (Wiktionary, opened in your browser only when you ask). |
 | Highlights and notes | A highlighter marks words in yellow, green, blue or pink with a finger, pen or mouse (drag over the words, or tap one word); the eraser removes marks. **Add note** on a card opens the note editor: the words quoted, the colour, and your note, typed or spoken (on Windows the microphone starts Windows voice typing). A note sign in the margin shows where a note is; tap it to read the note, have it read aloud, or edit it. The **notes list** beside the pages shows every highlight and note in reading order, filtered by colour or to those with notes; tap one to go to it, and *Export notes as a list* saves them as a Word document (page, colour, the words quoted and your note) for writing or revising. Highlights and notes are kept on this device per document and stay on the same words when the layout changes. When a document has highlights, the Export menu offers *Include my highlights (PDF)*: the PDF and printable PDF then carry them as ordinary highlight marks, and each note as the highlight's comment, which any PDF reader shows and can remove. |
 | Preview | Original, converted, or both side by side, with page navigation. In *Both*, turning a page on one side turns the other side along to the matching content. Changing a setting re-renders the preview without re-reading the PDF. |
 | Export | One *Export* button (also in focus mode) opens a menu: PDF, printable PDF (no tints or backgrounds, black text), DOCX, EPUB, plain text and Markdown. PDFs are A4, keep selectable Unicode text and embed font subsets, and are *tagged*: screen readers and read-aloud tools (such as Acrobat's Read Out Loud) follow the headings and paragraphs in order, read formulas and figures from their description, and skip page numbers. The EPUB is a reflowable book for e-readers, tablets and phones: the reading app can change font, size and colours, notes and citations are links, and it passes epubcheck. Headings stay with the text that follows them, and paragraphs avoid widow and orphan lines. |
@@ -80,12 +81,23 @@ help every reader. No single font is best for everyone.
 Open *AI settings* in the app and pick **AI-assisted**. The app shows a notice saying that snippets
 will be sent to your provider using your key, and nothing is sent until you confirm it. Then:
 
-* Pick a provider: **Mistral AI** (the default; its free "Experiment" plan gives you a key at
-  console.mistral.ai, and `mistral-small-latest` is preselected), **Anthropic** (paid API) or
-  **Google Gemini**. Choose a model, then enter your key. The key can also be supplied through the
-  `MISTRAL_API_KEY`, `ANTHROPIC_API_KEY` or `GEMINI_API_KEY` environment variable. Keys go into the OS keychain when `keyring` is installed.
-  Otherwise they're saved in a private file on your device. Keys never go into settings, logs,
-  error messages or exports.
+* **API keys.** Under *API keys*, add a key with a name you choose (for example "Uni key"), its provider
+  and the key itself: **Mistral AI** (its free "Experiment" plan gives you a key at console.mistral.ai;
+  `mistral-small-latest` is preselected), **Anthropic** (paid API) or **Google Gemini**. You can save several
+  keys; the one marked *In use* is used for AI requests, and clicking another switches to it. Each key has
+  a **Test** button and a **×** to remove it. *Test connection* checks a key before you add it: it sends one
+  tiny request with the word "test" (never document text) and shows whether the key and model work and how
+  fast the answer came, or why not (key rejected, rate limit, no internet). Only the last four characters of
+  a key are ever shown. A key can also come from the `MISTRAL_API_KEY`, `ANTHROPIC_API_KEY` or
+  `GEMINI_API_KEY` environment variable; it's then listed and can be tested, but it's never stored. Keys go
+  into the OS keychain when `keyring` is installed, otherwise into a private file on your device. They never
+  go into settings, logs, error messages or exports.
+* **Summaries in Focus mode, only on request.** With AI on, the robot button in Focus mode summarises this
+  page, this section, your selection or the whole document, short (3-5 points) or detailed (6-10), in plain
+  language if you like, in the document's language. Before sending, it says how many words go to which
+  provider. Every summary is marked *Made by AI* with a warning that AI can make mistakes; it sits beside
+  the text and never replaces it. You can copy it, read it aloud or save it as a note. While AI is off the
+  button is greyed out and explains how to switch AI on.
 * The AI is only asked narrow questions: "is this parenthesis a citation?" and "is this word an OCR
   error?". It can't rewrite text: answers that aren't a single-word fix are thrown away. AI word
   suggestions always go to your review list.

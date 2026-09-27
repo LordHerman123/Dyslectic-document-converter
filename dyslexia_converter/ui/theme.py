@@ -33,6 +33,8 @@ LIGHT = {
     "chip_ai": "#F2E3C4",
     "status_local": "#4F7A4B",  # green lock: nothing leaves the device
     "status_ai": "#A0782E",
+    "good": "#2E7D32",          # a check that worked
+    "bad": "#B3261E",           # a check that failed
     "frame": "#33000000",
 }
 
@@ -63,6 +65,8 @@ DARK = {
     "chip_ai": "#5A4620",
     "status_local": "#A9C9A0",
     "status_ai": "#E2C48A",
+    "good": "#8BC98E",
+    "bad": "#F2B8B5",
     "frame": "#44FFFFFF",
 }
 

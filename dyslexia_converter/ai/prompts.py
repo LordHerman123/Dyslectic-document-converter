@@ -101,3 +101,48 @@ def citation_prompt(snippets: list[str]) -> str:
 def ocr_prompt(items: list[tuple[str, str]]) -> str:
     """items: (suggested word, snippet with the OCR word marked)."""
     return "\n".join(f"{i}: suggested: {sug} | {snip}" for i, (sug, snip) in enumerate(items))
+
+
+SUMMARY = Task(
+    name="summary",
+    system=(
+        "You help people with dyslexia read academic documents. You summarise a part of a document that the "
+        "reader chose, so they can see the main points before or after reading it. The summary is shown next "
+        "to the original text, never instead of it.\n\n"
+        "Rules:\n"
+        "- Use only what the text says. Do not add facts, opinions or advice.\n"
+        "- Write in the language given on the first line (the document's language).\n"
+        "- 'Length: short' means 3 to 5 points; 'Length: detailed' means 6 to 10 points.\n"
+        "- 'Style: plain' means short sentences (at most 15 words) and everyday words; explain a needed term "
+        "in a few words. 'Style: normal' keeps the terms of the text.\n"
+        "- Keep who says what: 'Anderson argues...', not as if it were a fact.\n"
+        "- Give a short title for the part summarised.\n"
+        'Answer with JSON: {"t": "title", "b": ["point", "point", ...]}.\n\n'
+        "Example\n"
+        "Language: en\nLength: short (3 to 5 points, no more)\nStyle: plain\nText:\n"
+        "Photosynthesis is the process by which green plants convert light energy into chemical energy. Using "
+        "chlorophyll, they absorb sunlight and combine carbon dioxide and water into glucose, releasing oxygen "
+        "as a by-product. Smith (2019) notes that the rate depends on light intensity and temperature.\n"
+        'Answer: {"t": "How plants make food", "b": ["Plants use light to make their own food (sugar).", '
+        '"The green substance chlorophyll takes in the sunlight.", "They use carbon dioxide and water, and give '
+        'off oxygen.", "Smith (2019) says light and temperature change how fast this goes."]}'
+    ),
+    schema={"type": "object", "additionalProperties": False, "required": ["t", "b"],
+            "properties": {"t": {"type": "string"}, "b": {"type": "array", "items": {"type": "string"}}}},
+    answer_hint='Answer with JSON only: {"t": "title", "b": ["point", ...]}',
+    tokens_per_item=700,
+)
+
+
+LANGUAGE_NAMES = {"en": "English", "nl": "Dutch", "fr": "French", "de": "German", "es": "Spanish",
+                  "it": "Italian"}  # named in full at the end of a summary request: a bare code is easily missed
+
+
+def summary_prompt(text: str, language: str, detailed: bool, plain: bool) -> str:
+    """The request for one summary: the options, then the text."""
+    # the number of points is spelled out here too, and again after the text: some models skip the rule
+    points = "6 to 10 points" if detailed else "3 to 5 points, no more"
+    return (f"Language: {language}\nLength: {'detailed' if detailed else 'short'} ({points})\n"
+            f"Style: {'plain' if plain else 'normal'}\nText:\n{text}\n\n"
+            f"Cover the whole text in {points}. Write the title and points in "
+            f"{LANGUAGE_NAMES.get(language, language)}.")
