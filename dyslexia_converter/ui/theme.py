@@ -76,12 +76,14 @@ HC_DARK = {**DARK, "bg": "#000000", "surface": "#000000", "surface_low": "#00000
 
 
 def palette(dark: bool, high_contrast: bool = False) -> dict[str, str]:
+    """The app's colours: light or dark, normal or high contrast."""
     if high_contrast:
         return HC_DARK if dark else HC_LIGHT
     return DARK if dark else LIGHT
 
 
 def make_theme(pal: dict[str, str], font_family: str) -> ft.Theme:
+    """A Flet theme from the colours and the app font."""
     scheme = ft.ColorScheme(
         primary=pal["primary"], on_primary=pal["on_primary"],
         primary_container=pal["primary_container"], on_primary_container=pal["on_primary_container"],

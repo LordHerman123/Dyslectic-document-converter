@@ -11,9 +11,9 @@ Your original PDF is only ever read, never modified.
 Everything works **locally and without AI**. AI is an optional extra that you turn on with your own
 API key. When it's on, it only sees small snippets that the local rules couldn't decide.
 
-## Download for Windows (version 1.6)
+## Download for Windows (version 1.8)
 
-Get `DyslexiaConverter-1.7.1-setup.exe` (installer) or `DyslexiaConverter-1.7.1-windows.zip` (unzip and
+Get `DyslexiaConverter-1.8.0-setup.exe` (installer) or `DyslexiaConverter-1.8.0-windows.zip` (unzip and
 double-click `DyslexiaConverter.exe`) from the repository's **Releases** page. Text recognition (Tesseract)
 is included; nothing else needs to be installed. How the Windows build is made: [windows/README.md](windows/README.md).
 
@@ -59,7 +59,9 @@ python -m dyslexia_converter chapter.pdf --pages 3-18 --move-citations -f printa
 | Footnotes | Optional: footnotes move to a Notes section at the end, with `[Note n]` markers in the text. Page notes such as affiliations and licences are kept too. |
 | Document map | Clickable headings in the app, PDF bookmarks, and a Contents page. Headings in DOCX exports show up in Word's Navigation pane. |
 | Read aloud | The *Read aloud* button next to Original / Both / Converted opens the read-aloud controls (tap it again to fold them away). *Read aloud* reads the converted document from the page you are looking at, with the voices already on your computer (it works offline; nothing leaves the device). The sentence being read is highlighted, the word being said is boxed, and the pages turn along. One button reads, pauses and continues (a play triangle or pause bars show which); with *tap to read* switched on, click anywhere on the converted page to start reading there (to skip parts you do not need). Speed and voice can be set; the voice follows the document's language. On Windows 10/11 every voice installed in Windows Settings > Time & language > Speech can be used, so documents in Dutch, German, French and other languages are read in their own language; the app says so when a document's language has no voice yet. Desktop app only. |
-| Focus mode | *Focus mode* shows the converted document in the whole window as one scrolling column of pages, like a PDF reader, so it can be read on a tablet or touch screen without another app. Zoom with + and −. The read-aloud controls and the reading settings (font, size, spacing, alignment, bold word starts) fold out from buttons in the top bar and fold away again once set. A highlighter marks words in yellow, green, blue or pink with a finger, pen or mouse (drag over the words, or tap one word); the eraser removes marks. Highlights are kept on this device per document and stay on the same words when the layout changes. When a document has highlights, the Export menu offers *Include my highlights (PDF)*: the PDF and printable PDF then carry them as ordinary highlight marks, which any PDF reader shows and can remove. |
+| Focus mode | *Focus mode* shows the converted document in the whole window, like a PDF reader, so it can be read on a tablet or touch screen without another app. The top bar can be hidden for reading without distractions (Esc or the small button brings it back; on Windows the window goes full screen). Everything else folds out from the bar and away again: the read-aloud controls, the reading settings (font, size, spacing, alignment, bold word starts) and the **View** options: page colour (white, cream, blue, green, grey or dark), **Scroll** through all pages or read **Pages** one at a time (swipe, arrow keys or the side arrows turn the page), **Fit width**, and **Rotate** a quarter turn (for a tablet with screen rotation locked). Zoom with + and − or pinch with two fingers. A **reading ruler** keeps the line you are on clear and fades the rest; tap a line or use the arrow keys to move it, and it follows the voice when reading aloud. |
+| Word card | Press and hold a word (or right-click it) to open its card: the word in syllables, a button that says it, and what it means. English meanings come from a dictionary inside the app (Open English WordNet), so nothing leaves the device; it also finds the base word (*ran* → *run*, *theories* → *theory*). For other languages the card shows the syllables and offers *Look up online* (Wiktionary, opened in your browser only when you ask). The card also highlights the word and adds a note. |
+| Highlights and notes | A highlighter marks words in yellow, green, blue or pink with a finger, pen or mouse (drag over the words, or tap one word); the eraser removes marks. A highlight can carry a **note**: open the word card on it, or tap the small note sign. Highlights and notes are kept on this device per document and stay on the same words when the layout changes. When a document has highlights, the Export menu offers *Include my highlights (PDF)*: the PDF and printable PDF then carry them as ordinary highlight marks, and each note as the highlight's comment, which any PDF reader shows and can remove. |
 | Preview | Original, converted, or both side by side, with page navigation. In *Both*, turning a page on one side turns the other side along to the matching content. Changing a setting re-renders the preview without re-reading the PDF. |
 | Export | One *Export* button (also in focus mode) opens a menu: PDF, printable PDF (no tints or backgrounds, black text), DOCX, EPUB, plain text and Markdown. PDFs are A4, keep selectable Unicode text and embed font subsets, and are *tagged*: screen readers and read-aloud tools (such as Acrobat's Read Out Loud) follow the headings and paragraphs in order, read formulas and figures from their description, and skip page numbers. The EPUB is a reflowable book for e-readers, tablets and phones: the reading app can change font, size and colours, notes and citations are links, and it passes epubcheck. Headings stay with the text that follows them, and paragraphs avoid widow and orphan lines. |
 | Settings | Presets: Standard, Spacious, High Readability, Compact print and My Settings. Settings are saved between sessions and can be reset to the defaults. |
@@ -139,7 +141,8 @@ dyslexia_converter/
   ai/                   optional: providers, prompts (few-shot), privacy masking, request log,
                         consent, cache, key storage, redaction
   speech.py             reading aloud: sentences with their place on the page, speech thread
-  highlights.py         highlighter marks in focus mode, kept per document
+  highlights.py         highlighter marks and notes in focus mode, kept per document
+  dictionary.py         word card: offline English meanings, syllables, online look-up link
   pipeline.py           load() once, then compose/export as often as settings change
   cli.py                command line
   ui/app.py             Flet app (desktop / web / Android)
@@ -154,6 +157,28 @@ The processing pipeline is the one from the specification:
 → layout/compose → preview → PDF/DOCX/EPUB/TXT/MD`. The stages are separate modules. The UI only calls
 `pipeline.load()`, `Session.export()` and a few session methods, so a different front end, such as a
 native Android app, can reuse the core.
+
+## For developers
+
+Every module, class and function has a docstring that says what it does and why. Start with
+`pipeline.py` (the core's front door) and `ui/app.py` (the window). Some pointers:
+
+* **Flow of a document.** `pipeline.load()` reads the PDF (`extract/pdf_reader.read_pdf`, with OCR through
+  `extract/ocr.py` for scanned pages) and detects its structure (`structure/detector.StructureDetector`)
+  into a `model.Document`. `Session.export()` composes it for the settings (`render/compose.compose`) and
+  hands the result to a writer in `render/`. The source text is never changed: OCR corrections and the
+  user's edits are kept separately and applied when composing.
+* **Adding a layout setting.** Add a field to `settings.FormatSettings` (and to the presets if needed),
+  use it in `render/compose.py` or a writer, and add a control in `ConverterApp.build_convert_tab`
+  (`self.slider`, `self.switch` or `self.dropdown` connect it to the setting).
+* **Adding an app text.** Wrap it in `t("...")`; `tests/test_i18n.py` fails until
+  `ui/translations.py` has it in every app language.
+* **Adding an export format.** Write a `build_...(result, settings)` function in `render/`, add it to
+  `Session.export()` and to `EXPORTS` in `ui/app.py`.
+* **Focus mode.** `ui/focus.py` shows the converted PDF as page pictures (`render/preview.render_highlight`
+  draws highlights, the reading ruler, the word being read and the page colour on them). Highlights
+  and notes are in `highlights.py`, the word card's dictionary in `dictionary.py`.
+* **Seeing the app while developing.** `flet run --web main.py` opens it in the browser.
 
 ## Tests
 
@@ -183,3 +208,7 @@ See [docs/ANDROID.md](docs/ANDROID.md).
 * **PyMuPDF is AGPL-3.0** (a commercial licence is available from Artifex). That's fine for personal use
   and for open-source distribution under the AGPL. Publishing a closed-source app, for example on the Play
   Store, needs either AGPL compliance or a commercial PyMuPDF licence.
+* The English dictionary is derived from Open English WordNet 2022 (CC BY 4.0) and Princeton WordNet
+  (WordNet licence); see `dyslexia_converter/assets/dictionary/`. It is rebuilt with
+  `python tools/build_dictionary.py wordnet2022.zip`. Syllables use the hyphenation patterns of pyphen
+  (LGPL/GPL/MPL).

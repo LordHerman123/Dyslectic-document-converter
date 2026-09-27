@@ -96,12 +96,6 @@ T: dict[str, dict[str, str]] = {
         'de': 'Rosa',
         'es': 'Rosa',
         'it': 'Rosa'},
-    'Tip: click on the converted page to start reading there.': {
-        'nl': 'Tip: klik op de omgezette pagina om daar te beginnen met voorlezen.',
-        'fr': 'Astuce : cliquez sur la page convertie pour commencer la lecture à cet endroit.',
-        'de': 'Tipp: Klicken Sie auf die umgewandelte Seite, um dort mit dem Vorlesen zu beginnen.',
-        'es': 'Consejo: haz clic en la página convertida para empezar a leer desde allí.',
-        'it': 'Suggerimento: fai clic sulla pagina convertita per iniziare a leggere da lì.'},
     'No {language} voice is installed on this computer, so another voice reads the text. You can add one in Windows Settings > Time & language > Speech > Add voices, then restart the app.': {
         'nl': 'Er is geen stem voor het {language} geïnstalleerd op deze computer, dus een andere stem leest de tekst. Je kunt er een toevoegen via Windows-instellingen > Tijd en taal > Spraak > Stemmen toevoegen, en daarna de app opnieuw starten.',
         'fr': "Aucune voix en {language} n'est installée sur cet ordinateur ; une autre voix lit donc le texte. Vous pouvez en ajouter une dans Paramètres Windows > Heure et langue > Voix > Ajouter des voix, puis redémarrer l'appli.",
@@ -206,12 +200,6 @@ T: dict[str, dict[str, str]] = {
         'de': 'Auf diesen Seiten gibt es keinen Text zum Vorlesen.',
         'es': 'No hay texto para leer en estas páginas.',
         'it': "Non c'è testo da leggere in queste pagine."},
-    'Reads the converted document aloud with the voices on this computer, from the page you are looking at. Nothing leaves this device.': {
-        'nl': 'Leest het omgezette document voor met de stemmen op deze computer, vanaf de pagina die je bekijkt. Er verlaat niets dit apparaat.',
-        'fr': 'Lit le document converti à voix haute avec les voix de cet ordinateur, à partir de la page affichée. Rien ne quitte cet appareil.',
-        'de': 'Liest das umgewandelte Dokument mit den Stimmen dieses Computers vor, ab der angezeigten Seite. Nichts verlässt dieses Gerät.',
-        'es': 'Lee en voz alta el documento convertido con las voces de este ordenador, desde la página que estás viendo. Nada sale de este dispositivo.',
-        'it': 'Legge ad alta voce il documento convertito con le voci di questo computer, dalla pagina che stai guardando. Nulla lascia questo dispositivo.'},
     # ---------------------------------------------------------------- AI privacy log and preview
     'Answer received': {
         'nl': 'Ontvangen antwoord',
@@ -1297,6 +1285,36 @@ T: dict[str, dict[str, str]] = {
                                                  "es": "Comprobando el texto OCR con el diccionario",
                                                  "it": "Controllo del testo OCR con il dizionario"},
     "Done": {"nl": "Klaar", "fr": "Terminé", "de": "Fertig", "es": "Listo", "it": "Fatto"},
+    # focus mode: view options, reading ruler, word card and notes (1.8)
+    'Add note': {'nl': 'Notitie toevoegen', 'fr': 'Ajouter une note', 'de': 'Notiz hinzufügen', 'es': 'Añadir nota', 'it': 'Aggiungi nota'},
+    'Close': {'nl': 'Sluiten', 'fr': 'Fermer', 'de': 'Schließen', 'es': 'Cerrar', 'it': 'Chiudi'},
+    'Fit width': {'nl': 'Passend in breedte', 'fr': 'Ajuster à la largeur', 'de': 'An Breite anpassen', 'es': 'Ajustar al ancho', 'it': 'Adatta alla larghezza'},
+    'Hide the bars (Esc brings them back)': {'nl': 'De balken verbergen (Esc haalt ze terug)', 'fr': 'Masquer les barres (Échap les fait revenir)', 'de': 'Die Leisten ausblenden (Esc holt sie zurück)', 'es': 'Ocultar las barras (Esc las muestra de nuevo)', 'it': 'Nascondi le barre (Esc le riporta)'},
+    'Highlight': {'nl': 'Markeren', 'fr': 'Surligner', 'de': 'Markieren', 'es': 'Resaltar', 'it': 'Evidenzia'},
+    'Look up online': {'nl': 'Online opzoeken', 'fr': 'Chercher en ligne', 'de': 'Online nachschlagen', 'es': 'Buscar en línea', 'it': 'Cerca online'},
+    'Make the pages as wide as the window': {'nl': "De pagina's zo breed als het venster maken", 'fr': 'Rendre les pages aussi larges que la fenêtre', 'de': 'Die Seiten so breit wie das Fenster machen', 'es': 'Hacer las páginas tan anchas como la ventana', 'it': 'Rendi le pagine larghe quanto la finestra'},
+    'Note': {'nl': 'Notitie', 'fr': 'Note', 'de': 'Notiz', 'es': 'Nota', 'it': 'Nota'},
+    'Opens Wiktionary in your browser': {'nl': 'Opent WikiWoordenboek in je browser', 'fr': 'Ouvre le Wiktionnaire dans votre navigateur', 'de': 'Öffnet Wiktionary in Ihrem Browser', 'es': 'Abre Wikcionario en su navegador', 'it': 'Apre il Wikizionario nel browser'},
+    'Page colour': {'nl': 'Paginakleur', 'fr': 'Couleur de page', 'de': 'Seitenfarbe', 'es': 'Color de página', 'it': 'Colore della pagina'},
+    'Pages': {'nl': "Pagina's", 'fr': 'Pages', 'de': 'Seiten', 'es': 'Páginas', 'it': 'Pagine'},
+    'Reading ruler (move it with the arrow keys or by tapping a line)': {'nl': 'Leesliniaal (verplaats met de pijltjestoetsen of door op een regel te tikken)', 'fr': 'Règle de lecture (déplacez-la avec les flèches ou en touchant une ligne)', 'de': 'Leselineal (mit den Pfeiltasten oder durch Tippen auf eine Zeile bewegen)', 'es': 'Regla de lectura (muévala con las flechas o tocando una línea)', 'it': 'Righello di lettura (spostalo con le frecce o toccando una riga)'},
+    'Remove highlight': {'nl': 'Markering verwijderen', 'fr': 'Supprimer le surlignage', 'de': 'Markierung entfernen', 'es': 'Quitar el resaltado', 'it': 'Rimuovi evidenziazione'},
+    'Rotate': {'nl': 'Draaien', 'fr': 'Pivoter', 'de': 'Drehen', 'es': 'Girar', 'it': 'Ruota'},
+    'Save note': {'nl': 'Notitie opslaan', 'fr': 'Enregistrer la note', 'de': 'Notiz speichern', 'es': 'Guardar nota', 'it': 'Salva nota'},
+    'Say the word': {'nl': 'Het woord uitspreken', 'fr': 'Prononcer le mot', 'de': 'Das Wort aussprechen', 'es': 'Pronunciar la palabra', 'it': 'Pronuncia la parola'},
+    'Scroll': {'nl': 'Scrollen', 'fr': 'Défiler', 'de': 'Scrollen', 'es': 'Desplazar', 'it': 'Scorri'},
+    'Show the bars': {'nl': 'De balken tonen', 'fr': 'Afficher les barres', 'de': 'Die Leisten zeigen', 'es': 'Mostrar las barras', 'it': 'Mostra le barre'},
+    'There is no dictionary on this device for {language} yet.': {'nl': 'Er is nog geen woordenboek voor {language} op dit apparaat.', 'fr': "Il n'y a pas encore de dictionnaire pour {language} sur cet appareil.", 'de': 'Für {language} gibt es auf diesem Gerät noch kein Wörterbuch.', 'es': 'Aún no hay diccionario de {language} en este dispositivo.', 'it': "Su questo dispositivo non c'è ancora un dizionario per {language}."},
+    'This word is not in the dictionary on this device.': {'nl': 'Dit woord staat niet in het woordenboek op dit apparaat.', 'fr': "Ce mot n'est pas dans le dictionnaire de cet appareil.", 'de': 'Dieses Wort steht nicht im Wörterbuch auf diesem Gerät.', 'es': 'Esta palabra no está en el diccionario de este dispositivo.', 'it': 'Questa parola non è nel dizionario di questo dispositivo.'},
+    'Turn the reading view a quarter turn': {'nl': 'De leesweergave een kwartslag draaien', 'fr': "Faire pivoter la vue de lecture d'un quart de tour", 'de': 'Die Leseansicht um eine Vierteldrehung drehen', 'es': 'Girar la vista de lectura un cuarto de vuelta', 'it': 'Ruota la vista di lettura di un quarto di giro'},
+    'View: page colour, pages, rotation': {'nl': "Weergave: paginakleur, pagina's, draaien", 'fr': 'Affichage : couleur de page, pages, rotation', 'de': 'Ansicht: Seitenfarbe, Seiten, Drehung', 'es': 'Vista: color de página, páginas, giro', 'it': 'Vista: colore della pagina, pagine, rotazione'},
+    '{source} - on this device': {'nl': '{source} - op dit apparaat', 'fr': '{source} - sur cet appareil', 'de': '{source} - auf diesem Gerät', 'es': '{source} - en este dispositivo', 'it': '{source} - su questo dispositivo'},
+    'Grey': {'nl': 'Grijs', 'fr': 'Gris', 'de': 'Grau', 'es': 'Gris', 'it': 'Grigio'},
+    'Dark': {'nl': 'Donker', 'fr': 'Sombre', 'de': 'Dunkel', 'es': 'Oscuro', 'it': 'Scuro'},
+    'noun': {'nl': 'zelfstandig naamwoord', 'fr': 'nom', 'de': 'Substantiv', 'es': 'sustantivo', 'it': 'sostantivo'},
+    'verb': {'nl': 'werkwoord', 'fr': 'verbe', 'de': 'Verb', 'es': 'verbo', 'it': 'verbo'},
+    'adjective': {'nl': 'bijvoeglijk naamwoord', 'fr': 'adjectif', 'de': 'Adjektiv', 'es': 'adjetivo', 'it': 'aggettivo'},
+    'adverb': {'nl': 'bijwoord', 'fr': 'adverbe', 'de': 'Adverb', 'es': 'adverbio', 'it': 'avverbio'},
 }
 
 # messages from the processing core, matched in i18n.MESSAGE_PATTERNS; {0}, {1}... are the parts found

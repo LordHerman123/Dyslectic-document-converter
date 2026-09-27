@@ -18,6 +18,9 @@ EXT = {"pdf": ".pdf", "printable_pdf": ".pdf", "docx": ".docx", "epub": ".epub",
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Command line: convert a PDF with a preset and optional overrides, and write the result (returns the exit
+    code).
+    """
     ap = argparse.ArgumentParser(prog="dyslexia-converter",
                                  description="Convert PDFs into a cleaner, more readable layout (no AI needed).")
     ap.add_argument("input", help="PDF file to convert (it is never modified)")
@@ -77,6 +80,7 @@ def main(argv: list[str] | None = None) -> int:
         pages = (int(a), int(b or a))
 
     def progress(msg: str, frac: float) -> None:
+        """Show progress on one line of the terminal."""
         print(f"\r{msg:<60}", end="", file=sys.stderr, flush=True)
 
     session = pipeline.load(src, s, progress=progress, use_ocr=not args.no_ocr, pages=pages)

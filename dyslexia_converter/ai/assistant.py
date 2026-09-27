@@ -41,14 +41,15 @@ CHUNK = 30  # items per request: the fixed instructions and examples are shared 
 
 
 class ConsentRequired(Exception):
+    """AI was asked for while it is off or the user has not agreed to the privacy notice yet."""
     pass
 
 
 @dataclass
 class UsageEntry:
+    """What one AI task used: how many items, whether it came from the cache, and the tokens."""
     task: str
     items: int
-    chars_sent: int
     cached: bool
     input_tokens: int = 0
     output_tokens: int = 0
@@ -65,15 +66,21 @@ class Request:
 
     @property
     def system(self) -> str:
+        """The fixed instructions of the task (the same for every request, so providers can cache them)."""
         return self.task.system
 
     @property
     def max_tokens(self) -> int:
+        """The answer length to allow: a little for the frame plus a fixed amount per snippet."""
         return 64 + self.task.tokens_per_item * len(self.keys)
 
 
 class AICache:
+    """AI answers kept on this device, keyed by task, provider, model and snippet, so the same text is never sent
+    twice.
+    """
     def __init__(self, path: Optional[Path] = None):
+        """Load the cache file (an empty cache when it is missing or damaged)."""
         self.path = path or (app_data_dir() / "ai_cache.json")
         try:
             self.data: dict = json.loads(self.path.read_text(encoding="utf-8"))
@@ -82,20 +89,25 @@ class AICache:
 
     @staticmethod
     def key(*parts: str) -> str:
+        """A hash of the parts: the cache never stores the document text itself as a key."""
         return hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()
 
     def get(self, key: str):
+        """The stored answer for a key, or None."""
         return self.data.get(key)
 
     def put(self, key: str, value) -> None:
+        """Store one answer."""
         self.data[key] = value
         self._save()
 
     def put_many(self, values: dict) -> None:
+        """Store several answers at once (one write)."""
         self.data.update(values)
         self._save()
 
     def _save(self) -> None:
+        """Write the cache file (failing to write is ignored: it is only a cache)."""
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             self.path.write_text(json.dumps(self.data), encoding="utf-8")
@@ -103,6 +115,7 @@ class AICache:
             pass
 
     def clear(self) -> None:
+        """Forget every stored answer and delete the file."""
         self.data = {}
         try:
             self.path.unlink()
@@ -111,8 +124,16 @@ class AICache:
 
 
 class AIAssistant:
+    """Sends small, masked snippets of the document to the user's AI provider, only when AI-assisted mode is on and
+    the user agreed.
+
+    It builds compact requests (few-shot prompts, several snippets per request), reuses cached answers, records
+    every request in the privacy log, and applies the answers with safety checks (the AI may only fix a word, not
+    rewrite text).
+    """
     def __init__(self, settings: AISettings, keystore: Optional[KeyStore] = None, cache: Optional[AICache] = None,
                  log: Optional[RequestLog] = None):
+        """``settings``: mode, provider, model and tasks; the key store, cache and log can be replaced for tests."""
         self.settings = settings
         self.keystore = keystore or KeyStore()
         self.cache = cache or AICache()
@@ -122,13 +143,16 @@ class AIAssistant:
     # ------------------------------------------------------------------ state
     @property
     def has_key(self) -> bool:
+        """Whether an API key is stored for the chosen provider."""
         return bool(self.keystore.get(self.settings.provider))
 
     @property
     def active(self) -> bool:
+        """Whether AI can be used now (AI-assisted mode and a key)."""
         return self.settings.mode == "ai_assisted" and self.has_key
 
     def _provider(self):
+        """The provider client to send with; raises when AI is off, consent is missing or there is no key."""
         if self.settings.mode != "ai_assisted":
             raise ConsentRequired("AI is switched off (Local-only mode).")
         if not self.settings.consent_given:
@@ -139,6 +163,7 @@ class AIAssistant:
         return make_provider(self.settings.provider, key, self.settings.model or None), key
 
     def _item_key(self, task: str, snippet: str) -> str:
+        """Cache key of one snippet for one task with the current provider and model."""
         return AICache.key(task, self.settings.provider, self.settings.model, snippet)
 
     # --------------------------------------------------------------- planning
@@ -186,6 +211,7 @@ class AIAssistant:
 
     # ---------------------------------------------------------------- sending
     def send(self, request: Request) -> Reply:
+        """Send one request, log exactly what was sent and received (also when it fails), and return the reply."""
         provider, key = self._provider()
         entry = LogEntry(request.task.name, self.settings.provider, provider.model, len(request.keys),
                          request.system, request.prompt)
@@ -204,7 +230,7 @@ class AIAssistant:
         entry.input_tokens, entry.output_tokens = reply.input_tokens, reply.output_tokens
         entry.cached_tokens = reply.cached_tokens
         self.log.add(entry)
-        self.usage.append(UsageEntry(request.task.name, len(request.keys), entry.chars, False,
+        self.usage.append(UsageEntry(request.task.name, len(request.keys), False,
                                      reply.input_tokens, reply.output_tokens))
         return reply
 
@@ -214,7 +240,7 @@ class AIAssistant:
         """Decide for each candidate whether it is a citation. Returns candidate key -> is_citation."""
         requests, decisions = self.plan_citations(candidates)
         if decisions:
-            self.usage.append(UsageEntry("citations", len(decisions), 0, True))
+            self.usage.append(UsageEntry("citations", len(decisions), True))
         for n, req in enumerate(requests):
             if progress:
                 progress("Asking AI about uncertain citations", n / max(1, len(requests)))
@@ -235,7 +261,7 @@ class AIAssistant:
         """
         requests, known = self.plan_ocr(items)
         if known:
-            self.usage.append(UsageEntry("ocr", len(known), 0, True))
+            self.usage.append(UsageEntry("ocr", len(known), True))
         for i, verdict in known.items():
             _apply_ocr(items[i][0], verdict)
         for n, req in enumerate(requests):
@@ -254,6 +280,9 @@ class AIAssistant:
 
 
 def _apply_ocr(c: Correction, verdict: dict) -> None:
+    """Apply the AI's verdict on one OCR correction: lower its confidence if it is not an error, or use the AI's word
+    when it is only a small change from the OCR text.
+    """
     word = str(verdict.get("w", "")).strip()
     if not verdict.get("err"):
         c.confidence = min(c.confidence, 0.3)

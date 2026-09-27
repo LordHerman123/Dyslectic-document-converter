@@ -29,7 +29,7 @@ HERE = ROOT / "windows"
 APP_NAME = "DyslexiaConverter"
 # Tesseract language data shipped with the app (the app's document languages + orientation detection)
 LANGUAGES = ["eng", "nld", "deu", "fra", "spa", "ita", "por", "osd"]
-PYINSTALLER_EXTRA = ["--collect-data=spellchecker", "--collect-data=docx", "--collect-data=reportlab",
+PYINSTALLER_EXTRA = ["--collect-data=spellchecker", "--collect-data=pyphen", "--collect-data=docx", "--collect-data=reportlab",
                      "--collect-submodules=dyslexia_converter", "--hidden-import=pytesseract",
                      "--collect-submodules=pyttsx3", "--collect-submodules=comtypes",
                      "--hidden-import=win32com.client", "--hidden-import=pythoncom", "--hidden-import=pywintypes",
@@ -38,17 +38,20 @@ TESSDATA_URL = "https://github.com/tesseract-ocr/tessdata/raw/main/{lang}.traine
 
 
 def version() -> str:
+    """The app version, read from the package without importing it."""
     ns: dict = {}
     exec((ROOT / "dyslexia_converter" / "__init__.py").read_text(encoding="utf-8"), ns)
     return ns["__version__"]
 
 
 def run(cmd: list[str]) -> None:
+    """Run a command in the repository folder, showing it; stops the build when it fails."""
     print("+", " ".join(cmd), flush=True)
     subprocess.run(cmd, check=True, cwd=ROOT)
 
 
 def find_installed_tesseract() -> Path | None:
+    """The folder of an installed Tesseract to bundle, or None."""
     candidates = []
     for var in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"):
         base = os.environ.get(var)
@@ -120,6 +123,7 @@ def add_tesseract(app: Path, source: Path, offline: bool) -> None:
 
 
 def add_docs(app: Path, with_tesseract: bool) -> None:
+    """Put the licences, third-party notices and the read-me in the app folder."""
     licenses = app / "LICENSES"
     licenses.mkdir(exist_ok=True)
     for f in (ROOT / "dyslexia_converter" / "assets" / "fonts").glob("LICENSE-*"):
@@ -134,6 +138,7 @@ def add_docs(app: Path, with_tesseract: bool) -> None:
 
 
 def make_zip(app: Path, dist: Path) -> Path:
+    """Zip the app folder for download."""
     out = dist / f"{APP_NAME}-{version()}-windows.zip"
     if out.exists():
         out.unlink()
@@ -145,6 +150,7 @@ def make_zip(app: Path, dist: Path) -> Path:
 
 
 def main() -> None:
+    """Build the Windows app with PyInstaller (optionally with Tesseract and its language data) and zip it."""
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--tesseract-dir", type=Path, help="folder containing tesseract.exe (default: installed copy)")
     ap.add_argument("--no-tesseract", action="store_true", help="build without bundling Tesseract")

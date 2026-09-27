@@ -72,11 +72,13 @@ class Session:
         doc.corrections = fresh + [c for c in doc.corrections if c.source == "user"]
 
     def set_correction(self, correction_id: str, status: str) -> None:
+        """Set the status of one correction ("accepted", "rejected", ...) by its id."""
         for c in self.document.corrections:
             if c.id == correction_id:
                 c.status = status
 
     def revert_all_corrections(self) -> None:
+        """Reject every correction: the text is shown as OCR read it."""
         for c in self.document.corrections:
             c.status = "rejected"
 
@@ -87,6 +89,9 @@ class Session:
                 if c.status == "pending" and not any(c.overlaps(u) for u in user)]
 
     def replaced_by_user(self, c: Correction) -> bool:
+        """Whether a correction is covered by the user's own edit of the same text (then it is not shown for
+        review).
+        """
         return c.source != "user" and any(c.overlaps(u) for u in self.document.corrections
                                            if u.source == "user" and u.applied)
 
@@ -228,9 +233,11 @@ class Session:
 
     # ------------------------------------------------------------------ render
     def compose(self, settings: FormatSettings) -> ComposeResult:
+        """The document laid out for the settings (items ready for any output format)."""
         return compose(self.document, settings, self.ai_citation_decisions)
 
     def export(self, fmt: str, settings: FormatSettings) -> bytes:
+        """The document in an output format: "pdf", "printable_pdf", "docx", "epub", "txt" or "md" (bytes)."""
         from .render import docx_writer, epub_writer, pdf_writer, text_writer
 
         result = self.compose(settings)
@@ -253,6 +260,7 @@ class Session:
 
 
 def _first_title(result: ComposeResult) -> str:
+    """The text of the first title item, or ""."""
     for it in result.items:
         if it.kind == "title":
             return it.text
@@ -260,6 +268,7 @@ def _first_title(result: ComposeResult) -> str:
 
 
 def _languages(doc: Document, settings: FormatSettings) -> list[str]:
+    """The OCR/spelling languages: the one the user chose, or the detected one."""
     if settings.ocr_language != "auto":
         return [settings.ocr_language]
     return [doc.language]
@@ -274,6 +283,7 @@ CACHE_ENTRIES = 30
 
 
 def ocr_cache_dir() -> Path:
+    """The folder where OCR results are kept, so a scanned document is not read again when reopened."""
     from .settings import app_data_dir
 
     d = app_data_dir() / "ocr_cache"
@@ -294,6 +304,9 @@ def clear_ocr_cache() -> int:
 
 
 def _cache_key(path: str, langs: list[str], engine, options: dict) -> str:
+    """The cache key of a document: its content, the languages, the OCR engine, the options and the reader's version
+    (a change in any of them reads the document again).
+    """
     import hashlib
 
     h = hashlib.sha256()
@@ -316,6 +329,7 @@ def _extraction_fingerprint() -> str:
 
 
 def _cache_load(key: str):
+    """The saved reading of a document, or None (a damaged file counts as missing)."""
     import pickle
 
     f = ocr_cache_dir() / f"{key}.pkl"
@@ -329,6 +343,7 @@ def _cache_load(key: str):
 
 
 def _cache_store(key: str, raw) -> None:
+    """Save the reading of a document (via a temporary file; failing to save is ignored)."""
     import pickle
 
     d = ocr_cache_dir()
@@ -375,6 +390,7 @@ def _page_list(pages: list[int]) -> str:
 
 
 def _text_layer_sample(path: str, max_pages: int = 6) -> str:
+    """Text of the first pages' text layer (for guessing the language before OCR)."""
     import pymupdf
 
     try:

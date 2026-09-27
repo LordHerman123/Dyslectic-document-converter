@@ -13,6 +13,9 @@ from typing import Optional
 
 
 class BlockKind(str, Enum):
+    """What a block of the document is: title, heading, paragraph, list item, figure, table, footnote, reference,
+    page furniture...
+    """
     TITLE = "title"
     AUTHORS = "authors"
     HEADING = "heading"
@@ -50,6 +53,9 @@ class StyleRange:
 
 @dataclass
 class ImageData:
+    """A picture (PNG or JPEG bytes) with its size in pixels, what it is (figure, equation, ...), its text where
+    known (for screen readers and text exports) and, for formulas, how it sits on the text line.
+    """
     data: bytes
     ext: str  # "png" or "jpeg"
     width: int  # pixels
@@ -63,6 +69,9 @@ class ImageData:
 
 @dataclass
 class TableData:
+    """A table as rows of cell texts, with a picture of the original region to fall back on when the table could not
+    be read reliably.
+    """
     rows: list[list[str]]
     # Rendered picture of the table region. Used when the table cannot be
     # reconstructed reliably, so contents are never corrupted.
@@ -74,6 +83,7 @@ class TableData:
 
 @dataclass
 class OcrWordConfidence:
+    """How sure OCR was about the word at text[start:end] (0-100)."""
     start: int
     end: int
     confidence: float  # 0..100 as reported by the OCR engine
@@ -81,6 +91,9 @@ class OcrWordConfidence:
 
 @dataclass
 class Block:
+    """One block of the structured document (a paragraph, heading, figure, table...) with its text, styles, page and
+    place on the page. The original text is never changed; corrections are kept separately.
+    """
     id: str
     kind: BlockKind
     text: str = ""
@@ -117,9 +130,11 @@ class Correction:
 
     @property
     def applied(self) -> bool:
+        """Whether the correction is used in the output (applied automatically or accepted by the user)."""
         return self.status in ("auto", "accepted")
 
     def overlaps(self, other: "Correction") -> bool:
+        """Whether two corrections touch the same text of the same block."""
         return self.block_id == other.block_id and self.start < other.end and other.start < self.end
 
 
@@ -132,6 +147,9 @@ def effective_corrections(corrections: list[Correction]) -> list[Correction]:
 
 @dataclass
 class PageInfo:
+    """Facts about one page of the source: size (points), kind (text, scanned or mixed), whether OCR was used, and
+    for book scans which half of a spread it is and how much it was straightened.
+    """
     number: int
     width: float
     height: float
@@ -145,6 +163,9 @@ class PageInfo:
 
 @dataclass
 class Document:
+    """The structured document: pages, blocks in reading order, OCR corrections, inline formula pictures, title,
+    author, bookmarks, language and warnings for the user.
+    """
     source_path: str
     pages: list[PageInfo] = field(default_factory=list)
     blocks: list[Block] = field(default_factory=list)
@@ -159,10 +180,12 @@ class Document:
 
     @property
     def ocr_used(self) -> bool:
+        """Whether any page was read with OCR."""
         return any(p.ocr_used for p in self.pages)
 
     @property
     def pdf_type(self) -> str:
+        """"text" (all pages have selectable text), "scanned" (all pages are pictures) or "mixed"."""
         kinds = {p.kind for p in self.pages}
         if kinds == {"text"}:
             return "text"
@@ -171,6 +194,7 @@ class Document:
         return "mixed"
 
     def block(self, block_id: str) -> Optional[Block]:
+        """The block with this id, or None."""
         for b in self.blocks:
             if b.id == block_id:
                 return b
@@ -181,10 +205,12 @@ class Document:
         return apply_corrections(block.text, self.corrections_for(block.id))
 
     def corrections_for(self, block_id: str) -> list[Correction]:
+        """The corrections proposed for one block."""
         return [c for c in self.corrections if c.block_id == block_id]
 
 
 def apply_corrections(text: str, corrections: list[Correction]) -> str:
+    """The text with the applied corrections put in (only where the original text still matches)."""
     out = text
     for c in sorted(effective_corrections(corrections), key=lambda c: c.start, reverse=True):
         if out[c.start:c.end] == c.original:
@@ -200,6 +226,7 @@ def map_styles(styles: list[StyleRange], text: str, corrections: list[Correction
         return styles
 
     def shift(pos: int) -> int:
+        """Where position ``pos`` of the original text ends up after the corrections."""
         delta = 0
         for c in applied:
             if c.end <= pos:

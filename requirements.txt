@@ -8,6 +8,7 @@ pillow>=10
 numpy>=1.24
 pytesseract>=0.3.10
 httpx>=0.27
+pyphen>=0.14   # syllables for the word card (hyphenation patterns, many languages)
 # App UI
 flet>=1.0,<2
 pyttsx3>=2.90   # reading aloud with the computer's own voices

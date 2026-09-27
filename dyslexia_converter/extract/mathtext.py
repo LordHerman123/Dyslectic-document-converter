@@ -29,6 +29,7 @@ def base_font(name: str) -> str:
 
 
 def is_math_font(name: str) -> bool:
+    """Whether a font is a maths font (TeX, Cambria Math, symbol fonts...)."""
     return bool(MATH_FONT_RE.match(base_font(name).replace(" ", "")))
 
 
@@ -84,4 +85,5 @@ def math_char(font: str, ch: str) -> str:
 
 
 def math_text(font: str, text: str) -> str:
+    """Text in a maths font turned into the Unicode characters it shows."""
     return "".join(math_char(font, c) for c in text)

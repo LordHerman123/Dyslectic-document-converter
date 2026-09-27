@@ -56,19 +56,23 @@ def _caption_start(text: str) -> bool:
 @dataclass
 
 class _Para:
+    """Lines being gathered into one paragraph during structure detection."""
     lines: list[RawLine] = field(default_factory=list)
 
     @property
     def text(self) -> str:
+        """The paragraph's text (lines joined with spaces, before hyphen repair)."""
         return " ".join(l.text for l in self.lines)
 
     @property
     def bbox(self):
+        """The rectangle around all its lines."""
         return (min(l.x0 for l in self.lines), min(l.y0 for l in self.lines),
                 max(l.x1 for l in self.lines), max(l.y1 for l in self.lines))
 
     @property
     def size(self) -> float:
+        """The font size of most of its text."""
         c = Counter()
         for l in self.lines:
             c[l.size] += len(l.text)
@@ -76,21 +80,25 @@ class _Para:
 
     @property
     def bold(self) -> bool:
+        """Whether most of its text is bold."""
         n = sum(len(l.text) for l in self.lines)
         return sum(len(l.text) for l in self.lines if l.bold) > 0.6 * n
 
     @property
     def page(self) -> int:
+        """The page it starts on."""
         return self.lines[0].page
 
 
 # ----------------------------------------------------------------------------- helpers
 
 def _norm_furniture(text: str) -> str:
+    """A header/footer line with numbers replaced, so "Page 3" and "Page 4" count as the same."""
     return re.sub(r"\d+", "#", text.strip().lower())
 
 
 def body_font_size(lines: list[RawLine]) -> float:
+    """The font size of most of the text (the body text), rounded to half points."""
     c = Counter()
     for l in lines:
         c[round(l.size * 2) / 2] += len(l.text)
@@ -98,6 +106,7 @@ def body_font_size(lines: list[RawLine]) -> float:
 
 
 def _is_upper_heading(text: str) -> bool:
+    """Whether a short line is all capitals (often a heading in older documents and scans)."""
     letters = [ch for ch in text if ch.isalpha()]
     return len(letters) >= 4 and all(ch.isupper() for ch in letters) and len(text.split()) <= 10
 
@@ -105,6 +114,13 @@ def _is_upper_heading(text: str) -> bool:
 # ----------------------------------------------------------------------------- detector
 
 class StructureDetector:
+    """Turns the lines read from a PDF into a :class:`Document` of typed blocks.
+
+    It finds page furniture (running headers, footers, page numbers), footnotes, paragraphs (joining lines and
+    repairing hyphenation), list items, captions, headings with their levels (from font size, boldness, numbering
+    and the PDF's bookmarks), the title and authors, and the reference list. Everything is rule-based; no AI is
+    used.
+    """
     def __init__(self, dehyphenate: Optional[Callable[[str, str], bool]] = None,
                  rejoin: Optional[Callable[[str, str], bool]] = None):
         """``dehyphenate(left, right)`` decides whether ``left-`` + ``right``
@@ -115,11 +131,13 @@ class StructureDetector:
         self._counter = 0
 
     def _id(self) -> str:
+        """A new block id (b1, b2, ...)."""
         self._counter += 1
         return f"b{self._counter}"
 
     # --------------------------------------------------------------------- main
     def detect(self, raw: RawDocument, source_path: str = "") -> Document:
+        """Build the structured document from what was read (``source_path`` is kept for reference)."""
         doc = Document(source_path=source_path, pages=[p.info for p in raw.pages],
                        title=raw.title, author=raw.author, toc=raw.toc, warnings=list(raw.warnings))
         all_lines = [l for p in raw.pages for l in p.lines]
@@ -165,6 +183,9 @@ class StructureDetector:
 
     # --------------------------------------------------------------- furniture
     def _find_furniture(self, raw: RawDocument) -> set[int]:
+        """Lines near the top or bottom that repeat on many pages (headers, footers, page numbers): their ids, to
+        leave them out.
+        """
         n = len(raw.pages)
         counts: Counter = Counter()
         candidates = []
@@ -192,6 +213,7 @@ class StructureDetector:
 
     # --------------------------------------------------------------- footnotes
     def _find_footnotes(self, page: RawPage, lines: list[RawLine], body_size: float) -> list[RawLine]:
+        """The footnote lines at the bottom of a page: smaller than the body text with no body text below them."""
         if not lines:
             return []
         h = page.info.height
@@ -200,6 +222,7 @@ class StructureDetector:
             return []
         def below_body(l: RawLine) -> bool:
             # no normal-size text further down in the same column
+            """Whether no normal-size text follows further down in the same column."""
             return not any(n.y0 > l.y0 + 1 and min(n.x1, l.x1) - max(n.x0, l.x0) > 5 for n in normal)
 
         zone = [l for l in lines if l.size < body_size * 0.92 and l.y0 > h * 0.55 and below_body(l)]
@@ -241,6 +264,7 @@ class StructureDetector:
         return zone
 
     def _footnote_blocks(self, lines: list[RawLine], body_size: float) -> list[Block]:
+        """Group footnote lines into one block per note (a new note starts with its number)."""
         if not lines:
             return []
         ordered = reading_order(lines)
@@ -266,6 +290,9 @@ class StructureDetector:
 
     # ------------------------------------------------------------- paragraphs
     def _build_blocks(self, ordered: list[Item], body_size: float, page: RawPage) -> list[Block]:
+        """Blocks of one page from its items in reading order: lines become paragraphs; figures, tables and
+        formulas become their own blocks.
+        """
         blocks: list[Block] = []
         paras: list[_Para] = []
         lines_seq = [it for it in ordered if isinstance(it, RawLine)]
@@ -274,6 +301,7 @@ class StructureDetector:
         typical_gap = statistics.median(gaps) if gaps else body_size * 0.25
 
         def flush():
+            """Turn the paragraphs gathered so far into blocks."""
             for p in paras:
                 blocks.append(self._para_block(p, body_size))
             paras.clear()
@@ -296,6 +324,9 @@ class StructureDetector:
         return blocks
 
     def _continues(self, para: _Para, c: RawLine, nxt: Optional[RawLine], typical_gap: float) -> bool:
+        """Whether line ``c`` continues paragraph ``para`` (same size and style, normal line gap, not a new list
+        item or heading); ``nxt`` is the line after.
+        """
         p = para.lines[-1]
         size = max(p.size, c.size)
         if (c.source == "ocr" and c.text[:1].islower() and not p.text.rstrip().endswith(TERMINAL)
@@ -351,6 +382,9 @@ class StructureDetector:
         return True
 
     def _join_lines(self, lines: list[RawLine]) -> tuple[str, list[StyleRange], list[OcrWordConfidence]]:
+        """Join a paragraph's lines into one text, repairing words hyphenated at line ends (and junk hyphens from
+        OCR), with the style ranges and OCR confidences moved along.
+        """
         text = ""
         styles: list[StyleRange] = []
         conf: list[OcrWordConfidence] = []
@@ -403,6 +437,7 @@ class StructureDetector:
         return None
 
     def _para_block(self, p: _Para, body_size: float) -> Block:
+        """A block for a paragraph: a caption, list item or plain paragraph (headings are decided later)."""
         text, styles, conf = self._join_lines(p.lines)
         kind = BlockKind.PARAGRAPH
         if _caption_start(text):
@@ -422,6 +457,9 @@ class StructureDetector:
 
     @staticmethod
     def _heading_like(p: _Para, text: str, body_size: float) -> bool:
+        """Whether a short paragraph looks like a heading (bold or larger, one or two lines, no closing
+        punctuation).
+        """
         return len(p.lines) <= 2 and len(text) < 120 and (p.bold or p.size > body_size * 1.1) \
             and not text.rstrip().endswith((".", ",", ";"))
 
@@ -480,6 +518,9 @@ class StructureDetector:
 
     # --------------------------------------------------------------- headings
     def _classify_headings(self, blocks: list[Block], body: dict) -> None:
+        """Decide which paragraphs are headings and give them levels (by size, boldness, font, numbering and
+        capitals).
+        """
         font_chars: Counter = Counter()
         for b in blocks:
             if b.kind == BlockKind.PARAGRAPH and getattr(b, "_font", ""):
@@ -552,6 +593,9 @@ class StructureDetector:
                     h.level = max(h.level, 3)
 
     def _apply_toc(self, blocks: list[Block], toc: list[tuple[int, str, int]]) -> None:
+        """Use the PDF's own bookmarks: the block that best matches each bookmark title becomes a heading of that
+        level.
+        """
         if not toc:
             return
         for level, title, page in toc:
@@ -571,6 +615,7 @@ class StructureDetector:
 
     # -------------------------------------------------------- title / authors
     def _detect_title_authors(self, blocks: list[Block], body_size: float, heights: dict[int, float]) -> None:
+        """Find the document title (the largest text high on the first page) and the author line under it."""
         page0 = min((b.page for b in blocks), default=0)
         # book scans: the title page is often the right-hand page of the first spread
         first_page = [b for b in blocks if b.page in (page0, page0 + 1) and b.kind in (BlockKind.HEADING, BlockKind.PARAGRAPH)]
@@ -635,6 +680,7 @@ class StructureDetector:
 
     # ------------------------------------------------------------- references
     def _mark_references(self, blocks: list[Block]) -> None:
+        """Mark the paragraphs under a References/Bibliography heading as reference entries."""
         ref_level: Optional[int] = None
         for b in blocks:
             if b.kind in (BlockKind.HEADING, BlockKind.TITLE):
@@ -739,6 +785,7 @@ class StructureDetector:
 
 
 def _is_equation(b: Block) -> bool:
+    """Whether a block is a display formula kept as a picture."""
     return b.kind == BlockKind.IMAGE and b.image is not None and b.image.kind == "equation"
 
 
@@ -755,6 +802,7 @@ def _looks_garbled(text: str) -> bool:
 
 
 def _title_case(text: str) -> bool:
+    """Whether text is in Title Case (most longer words capitalised): a sign of a heading."""
     words = re.findall(r"[A-Za-z\u00C0-\u024F][\w'\u2019-]*", text)
     if not 2 <= len(words) <= 12 or not text.lstrip("\"'\u201c\u2018(")[:1].isupper():
         return False
@@ -784,10 +832,12 @@ def _trailing(out: list[Block]) -> int:
 
 
 def _bbox(lines: list[RawLine]):
+    """The rectangle around some lines."""
     return (min(l.x0 for l in lines), min(l.y0 for l in lines), max(l.x1 for l in lines), max(l.y1 for l in lines))
 
 
 def _slice_styles(styles: list[StyleRange], start: int, end: int) -> list[StyleRange]:
+    """The style ranges that fall within text[start:end], moved to count from ``start``."""
     out = []
     for s in styles:
         a, b = max(s.start, start), min(s.end, end)

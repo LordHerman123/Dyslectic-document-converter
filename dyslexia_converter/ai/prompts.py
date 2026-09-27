@@ -21,6 +21,9 @@ M0, M1 = MARK_OPEN, MARK_CLOSE
 
 @dataclass(frozen=True)
 class Task:
+    """An AI task: its fixed instructions with examples (few-shot), the JSON schema of the answer, the answer format
+    for providers that cannot enforce a schema, and the answer size per snippet.
+    """
     name: str
     system: str
     schema: dict
@@ -91,6 +94,7 @@ OCR = Task(
 
 
 def citation_prompt(snippets: list[str]) -> str:
+    """The snippets of one request, numbered from 0, one per line."""
     return "\n".join(f"{i}: {s}" for i, s in enumerate(snippets))
 
 

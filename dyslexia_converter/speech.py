@@ -30,6 +30,7 @@ MAX_WORDS = 60  # a very long sentence is spoken in parts, so pausing and highli
 
 @dataclass
 class Word:
+    """A word to be read aloud, with the page and rectangle(s) where it is (for highlighting it while it is said)."""
     text: str  # as spoken (a word hyphenated over two lines is one word)
     page: int
     rects: list[Rect]  # on the page, in PDF points (two for a hyphenated word)
@@ -38,14 +39,17 @@ class Word:
 
 @dataclass
 class Sentence:
+    """A sentence (or other reading unit) of words, read aloud in one go by the speech engine."""
     words: list[Word] = field(default_factory=list)
 
     @property
     def text(self) -> str:
+        """The sentence as the speech engine gets it (words joined with spaces)."""
         return " ".join(w.text for w in self.words)
 
     @property
     def page(self) -> int:
+        """The page the sentence starts on."""
         return self.words[0].page if self.words else 0
 
     def word_at(self, location: int) -> int:
@@ -61,10 +65,14 @@ class Sentence:
 
 
 def _is_page_number(word: str, y0: float, page_h: float) -> bool:
+    """Whether a word is the page number at the foot of a page (it is not read out)."""
     return y0 > page_h * 0.92 and bool(re.fullmatch(r"\d{1,4}", word))
 
 
 def _ends_sentence(word: str, nxt: Optional[str]) -> bool:
+    """Whether a sentence ends after ``word`` (``nxt`` is the next word): full stops of abbreviations and initials do
+    not end one.
+    """
     if not re.search(r"[.!?…][\"'”’)\]]*$", word):
         return word.endswith(":") and nxt is not None and nxt[:1].isupper()
     low = word.lower()
@@ -178,6 +186,9 @@ class SapiEngine:
     DEFAULT_WPM = 180  # SAPI rate 0
 
     def __init__(self, output_wav: Optional[str] = None):
+        """Connect to SAPI's voice; ``output_wav`` writes the speech to a WAV file instead of the speakers (for
+        tests).
+        """
         import win32com.client
 
         self._events = 0
@@ -185,7 +196,9 @@ class SapiEngine:
         sink = self._word
 
         class _Events:
+            """Receives SAPI's events on the speaking thread."""
             def OnWord(self, stream_number, stream_position, character_position, length):  # noqa: N802
+                """SAPI starts a word: pass its position in the text on."""
                 sink(int(character_position), int(length), event=True)
 
         self.mode = "events"
@@ -206,6 +219,7 @@ class SapiEngine:
         self._stopped = False
 
     def getProperty(self, key: str):
+        """pyttsx3-style: the installed SAPI voices with their languages (``key`` = "voices")."""
         if key != "voices":
             return None
         out = []
@@ -224,6 +238,7 @@ class SapiEngine:
         return out
 
     def setProperty(self, key: str, value) -> None:
+        """pyttsx3-style: set the speed (words per minute) or the voice (its id)."""
         if key == "rate":  # words per minute -> SAPI's -10..10 (10 = three times as fast)
             import math
 
@@ -237,10 +252,12 @@ class SapiEngine:
                     break
 
     def connect(self, name: str, cb) -> None:
+        """pyttsx3-style: the callback for each word ("started-word")."""
         if name == "started-word":
             self._cb = cb
 
     def say(self, text: str) -> None:
+        """pyttsx3-style: the text to speak on the next :meth:`runAndWait`."""
         self._text = text
 
     def _word(self, pos: int, length: int, event: bool = False) -> None:
@@ -252,6 +269,7 @@ class SapiEngine:
             self._cb(None, pos, length)
 
     def runAndWait(self) -> None:
+        """Speak the text and wait until done or stopped, reporting words as SAPI reaches them."""
         import pythoncom
 
         if self._stopped:
@@ -272,6 +290,7 @@ class SapiEngine:
                 return
 
     def stop(self) -> None:
+        """Stop speaking (from another thread)."""
         self._stopped = True  # the speaking thread sees this within POLL_MS and stops the voice
 
     def diagnostics(self) -> dict:
@@ -286,6 +305,7 @@ class SapiEngine:
         return info
 
     def close(self) -> None:
+        """Close the WAV file when writing to one."""
         if self._stream is not None:
             self._stream.Close()
             self._stream = None
@@ -310,6 +330,7 @@ class WinRtEngine:
     DEFAULT_WPM = 170  # speaking rate 1.0
 
     def __init__(self, play: bool = True):
+        """Use Windows' modern speech; ``play`` False only synthesises (tests, where there are no speakers)."""
         from winrt.windows.media.speechsynthesis import SpeechSynthesizer
 
         self._cls = SpeechSynthesizer
@@ -323,12 +344,14 @@ class WinRtEngine:
         self.last_words: list[tuple[float, int, int]] = []  # (seconds, position, length) of the last text
 
     def getProperty(self, key: str):
+        """pyttsx3-style: every installed modern voice with its language (``key`` = "voices")."""
         if key != "voices":
             return None
         return [_VoiceInfo(v.id, f"{v.display_name} ({v.language})", _lang_code(v.language))
                 for v in self._cls.all_voices]
 
     def setProperty(self, key: str, value) -> None:
+        """pyttsx3-style: set the speed (words per minute) or the voice (its id)."""
         if key == "rate":
             self._synth.options.speaking_rate = max(0.5, min(6.0, float(value) / self.DEFAULT_WPM))
         elif key == "voice":
@@ -338,13 +361,16 @@ class WinRtEngine:
                     break
 
     def connect(self, name: str, cb) -> None:
+        """pyttsx3-style: the callback for each word ("started-word")."""
         if name == "started-word":
             self._cb = cb
 
     def say(self, text: str) -> None:
+        """pyttsx3-style: the text to speak on the next :meth:`runAndWait`."""
         self._text = text
 
     async def _synthesize(self, text: str) -> tuple[bytes, list[tuple[float, int, int]]]:
+        """The spoken text as WAV bytes, and when each word starts: (seconds, position in the text, length)."""
         from winrt.windows.media.core import SpeechCue
         from winrt.windows.storage.streams import DataReader
 
@@ -370,6 +396,9 @@ class WinRtEngine:
         return bytes(buf), words
 
     def runAndWait(self) -> None:
+        """Synthesise the text, then play it and report each word at its time (or report them at once without
+        playing).
+        """
         import asyncio
 
         if self._stopped:
@@ -385,6 +414,7 @@ class WinRtEngine:
         self._play_and_follow()
 
     def _play_and_follow(self) -> None:
+        """Play the WAV and call the word callback as each word's time comes; stops the sound when stopped."""
         import os
         import tempfile
         import winsound
@@ -417,6 +447,7 @@ class WinRtEngine:
                 pass
 
     def stop(self) -> None:
+        """Stop speaking (from another thread)."""
         self._stopped = True
 
 
@@ -434,6 +465,7 @@ def _wav_seconds(data: bytes) -> float:
 
 @dataclass
 class _VoiceInfo:
+    """A voice as pyttsx3 describes it: id, name and languages."""
     id: str
     name: str
     languages: list
@@ -450,6 +482,9 @@ class Speaker:
     WAIT_FOR_WORDS = 0.35  # seconds to wait for the engine to report words before pacing the highlight
 
     def __init__(self, engine_factory: Optional[Callable[[], object]] = None):
+        """``engine_factory`` makes the speech engine (tests pass a fake); by default the best one for the
+        platform.
+        """
         self._factory = engine_factory
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
@@ -459,6 +494,7 @@ class Speaker:
         self.last_error = ""  # why speaking failed, for the user
 
     def _make(self):
+        """A speech engine: on Windows the modern voices (exact word timings), else SAPI, else pyttsx3."""
         if self._factory is not None:
             return self._factory()
         if sys.platform == "win32":
@@ -480,6 +516,7 @@ class Speaker:
 
     # ---------------------------------------------------------------- facts
     def available(self) -> bool:
+        """Whether this device can speak at all (checked once; the voices are remembered)."""
         if self._available is None:
             _com_init()
             try:
@@ -535,6 +572,7 @@ class Speaker:
 
     @property
     def speaking(self) -> bool:
+        """Whether a sentence is being read right now."""
         return self._thread is not None and self._thread.is_alive()
 
     # ---------------------------------------------------------------- control
@@ -542,12 +580,22 @@ class Speaker:
               on_word: Callable[[int, int], None] = lambda s, w: None,
               on_sentence: Callable[[int], None] = lambda s: None,
               on_done: Callable[[bool], None] = lambda finished: None) -> None:
+        """Read ``sentences`` from number ``index`` in a background thread.
+
+        ``speed`` is relative to normal (1.0); ``voice`` is a voice id. The callbacks are called from the
+        speech thread: ``on_word(sentence, word)`` as each word is said, ``on_sentence(sentence)`` at the
+        start of each sentence and ``on_done(finished)`` at the end (False when stopped or failed;
+        ``last_error`` says why).
+        """
         self.stop()
         self._stop = threading.Event()
         stop = self._stop
         self.last_error = ""
 
         def run():
+            """The speech thread: speak sentence by sentence, reporting words (paced by an estimate when the
+            engine reports none).
+            """
             finished = False
             com = _com_init()
             try:
@@ -566,6 +614,7 @@ class Speaker:
                 pace = {"cps": self.BASE_RATE * max(0.4, min(2.5, speed)) * 6.0 / 60.0}
 
                 def word_cb(name, location, length):
+                    """The engine says a word: report which word of the current sentence it is."""
                     if not stop.is_set():
                         real["seen"] = True
                         s = current["s"]
@@ -625,6 +674,7 @@ class Speaker:
         self._thread.start()
 
     def stop(self) -> None:
+        """Stop reading and wait (briefly) for the speech thread to end."""
         self._stop.set()
         eng = self._engine
         if eng is not None:

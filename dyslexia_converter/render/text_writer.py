@@ -15,10 +15,12 @@ def _unpack(text: str) -> str:
 
 
 def _plain(item: RItem) -> str:
+    """An item's text with formula pictures written as their text."""
     return _unpack("".join(r.text for r in item.runs)).strip()
 
 
 def build_text(result: ComposeResult) -> str:
+    """The composed document as plain text (formulas as their text, figures as a short note)."""
     global _images
     _images = result.inline_images
     out: list[str] = []
@@ -41,7 +43,8 @@ def build_text(result: ComposeResult) -> str:
     return "\n\n".join(x for x in out if x) + "\n"
 
 
-def _md_runs(item: RItem, bionic: bool = True) -> str:
+def _md_runs(item: RItem) -> str:
+    """An item's text as Markdown (bold, italic, indices)."""
     parts = []
     for r in item.runs:
         t = _unpack(r.text).replace("*", "\\*").replace("_", "\\_")
@@ -62,6 +65,7 @@ def _md_runs(item: RItem, bionic: bool = True) -> str:
 
 
 def build_markdown(result: ComposeResult) -> str:
+    """The composed document as Markdown: headings, lists, tables, notes and formulas as their text."""
     global _images
     _images = result.inline_images
     out: list[str] = []

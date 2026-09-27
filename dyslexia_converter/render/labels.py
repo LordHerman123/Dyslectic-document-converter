@@ -149,5 +149,8 @@ LABELS: dict[str, dict[str, str]] = {
 
 
 def label(lang: str, key: str, **values) -> str:
+    """A word the converter adds to the document (Contents, Notes, ...) in the document's language, with values
+    filled in.
+    """
     text = LABELS.get(lang, LABELS["en"]).get(key) or LABELS["en"][key]
     return text.format(**values) if values else text

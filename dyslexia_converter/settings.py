@@ -18,6 +18,11 @@ class FormatSettings:
     # Defaults follow the look of the reference conversions the user liked:
     # Verdana-like sans at 13 pt, 1.6 line spacing, generous paragraph gaps,
     # a ~15 cm left-aligned column on a cream page panel.
+    """Every layout setting of the converted document (font, sizes, spacing, colours, page, what to include).
+
+    The defaults are the Standard preset. Settings are saved as JSON; unknown keys in an older or newer file are
+    ignored (see :meth:`from_dict`).
+    """
     font: str = "DejaVu Sans"
     font_size: float = 13.0  # pt
     line_spacing: float = 1.6  # multiple of font size
@@ -64,12 +69,14 @@ class FormatSettings:
     page_numbers: bool = True
 
     def copy(self, **changes) -> "FormatSettings":
+        """A copy with some settings changed."""
         data = asdict(self)
         data.update(changes)
         return FormatSettings(**data)
 
     @classmethod
     def from_dict(cls, data: dict) -> "FormatSettings":
+        """Settings from saved JSON, ignoring keys this version does not know."""
         known = {f.name for f in fields(cls)}
         return cls(**{k: v for k, v in data.items() if k in known})
 
@@ -115,6 +122,9 @@ PRESET_DISCLAIMER = (
 
 @dataclass
 class AISettings:
+    """The optional AI settings: mode (local-only or AI-assisted), provider, model, whether the user consented, and
+    what AI may be used for. The API key is never stored here (see :mod:`.ai.keystore`).
+    """
     mode: str = "local_only"  # local_only / ai_assisted
     provider: str = "mistral"  # mistral / anthropic / gemini
     model: str = ""
@@ -124,6 +134,7 @@ class AISettings:
 
     @classmethod
     def from_dict(cls, data: dict) -> "AISettings":
+        """AI settings from saved JSON, ignoring keys this version does not know."""
         known = {f.name for f in fields(cls)}
         return cls(**{k: v for k, v in data.items() if k in known})
 
@@ -151,55 +162,67 @@ class SettingsStore:
 
     @property
     def path(self) -> Path:
+        """The settings file."""
         return self.directory / "settings.json"
 
     def _read(self) -> dict:
+        """Everything saved (empty when the file is missing or damaged)."""
         try:
             return json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return {}
 
     def _write(self, data: dict) -> None:
+        """Save everything, via a temporary file so a crash never leaves a half-written file."""
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
         tmp.replace(self.path)
 
     def load_format(self) -> FormatSettings:
+        """The saved "My Settings" layout (the defaults when none is saved)."""
         data = self._read().get("format")
         return FormatSettings.from_dict(data) if data else FormatSettings()
 
     def save_format(self, settings: FormatSettings) -> None:
+        """Save the layout settings as "My Settings"."""
         data = self._read()
         data["format"] = asdict(settings)
         self._write(data)
 
     def has_saved_format(self) -> bool:
+        """Whether the user saved "My Settings"."""
         return "format" in self._read()
 
     def load_ai(self) -> AISettings:
+        """The saved AI settings (AI off when none are saved)."""
         data = self._read().get("ai")
         return AISettings.from_dict(data) if data else AISettings()
 
     def save_ai(self, settings: AISettings) -> None:
+        """Save the AI settings."""
         data = self._read()
         data["ai"] = asdict(settings)  # never contains the API key
         self._write(data)
 
     def load_ui(self) -> dict:
+        """The app preferences (language, text size, dark mode, read aloud, focus mode...)."""
         return self._read().get("ui", {})
 
     def save_ui(self, ui: dict) -> None:
+        """Save the app preferences."""
         data = self._read()
         data["ui"] = ui
         self._write(data)
 
     def reset_format(self) -> FormatSettings:
+        """Forget "My Settings" and return the defaults."""
         data = self._read()
         data.pop("format", None)
         self._write(data)
         return FormatSettings()
 
     def preset(self, name: str) -> FormatSettings:
+        """The settings of a preset by name ("My Settings" is the user's saved layout)."""
         if name == "My Settings":
             return self.load_format()
         return PRESETS.get(name, FormatSettings()).copy()

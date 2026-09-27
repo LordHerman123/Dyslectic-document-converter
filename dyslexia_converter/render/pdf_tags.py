@@ -10,13 +10,15 @@ order, plus the document language and the "this PDF is tagged" flag. Inline form
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 import pymupdf
 
 
 @dataclass
 class _Elem:
+    """A structure element of the tagged PDF (heading, paragraph, figure...) with its alt text and the marked content
+    on the pages that belongs to it.
+    """
     kind: str  # structure type: H1..H6, P, Figure, Formula, Table, Caption, Note, BlockQuote, TOC
     alt: str = ""
     kids: list[tuple[int, int]] = field(default_factory=list)  # (page index, MCID)
@@ -26,10 +28,12 @@ class Tagger:
     """Collects the structure elements and the marked content drawn for each of them."""
 
     def __init__(self):
+        """Start with no elements."""
         self.elems: list[_Elem] = []
         self._next: dict[int, int] = {}
 
     def new(self, kind: str, alt: str = "") -> int:
+        """A new structure element; returns its number."""
         self.elems.append(_Elem(kind, alt))
         return len(self.elems) - 1
 
@@ -40,6 +44,7 @@ class Tagger:
             e.kids = []
 
     def mark(self, elem: int, page: int) -> int:
+        """A new marked-content id on ``page`` for element ``elem`` (ids count per page)."""
         mcid = self._next.get(page, 0)
         self._next[page] = mcid + 1
         self.elems[elem].kids.append((page, mcid))
@@ -59,6 +64,7 @@ def tagged_draw_on(orig):
         return orig  # already wrapped (module imported twice)
 
     def drawOn(self, canvas, x, y, _sW=0):
+        """Draw the flowable inside a marked-content sequence of its element (or plainly when it is not tagged)."""
         t = getattr(self, "_pdf_tag", None)
         tagger = getattr(canvas, "_tagger", None)
         if t is None or tagger is None:
@@ -81,14 +87,19 @@ def pdf_text(s: str) -> str:
 
 
 def begin_artifact(canvas) -> None:
+    """Start content that is decoration (page tint, page numbers): screen readers skip it."""
     canvas._code.append("/Artifact BMC")
 
 
 def end_artifact(canvas) -> None:
+    """End the decoration started with :func:`begin_artifact`."""
     canvas._code.append("EMC")
 
 
 def begin_actual_text(canvas, text: str) -> None:
+    """Start content that is read as ``text`` (a formula picture is read as its text); close with
+    :func:`end_artifact`.
+    """
     canvas._code.append(f"/Span <</ActualText {pdf_text(text)}>> BDC")
 
 

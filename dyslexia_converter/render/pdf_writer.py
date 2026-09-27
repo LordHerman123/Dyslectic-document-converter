@@ -51,6 +51,7 @@ _registered: dict[str, str] = {}
 
 
 def register_font(family: str, bold: bool, italic: bool) -> str:
+    """Register a font file with ReportLab once and return the name to draw with."""
     path = font_path(family, bold, italic)
     name = _registered.get(path)
     if name is None:
@@ -76,6 +77,9 @@ def _glyphs(font_name: str) -> frozenset:
 
 @dataclass
 class PStyle:
+    """How one kind of paragraph looks in the PDF: font, size, line height, colour, alignment, spacing, indents, and
+    optional background, border and padding (for boxed sections).
+    """
     family: str
     size: float
     leading: float
@@ -102,6 +106,9 @@ class PStyle:
 
 @dataclass
 class _Piece:
+    """A piece of a word laid out for drawing: text in one font and size, raised or lowered for indices, or a small
+    formula picture.
+    """
     text: str
     font: str
     size: float
@@ -113,8 +120,19 @@ class _Piece:
 
 
 class RichParagraph(Flowable):
+    """A paragraph drawn by this app instead of ReportLab's Paragraph.
+
+    It supports what dyslexia-friendly layout needs and Paragraph lacks: letter and word spacing, bold word
+    starts, inline formula pictures, indices stacked over each other, fallback fonts for missing characters, list
+    markers, backgrounds/borders, and tagging for screen readers. Paragraphs split across pages keep their lines
+    (``_lines``) and know whether they are the first/last part.
+    """
     def __init__(self, runs: list[Run], style: PStyle, marker: str = "", outline: Optional[tuple[int, str]] = None,
                  keep_with_next: bool = False, _lines=None, _first=True, _last=True):
+        """``runs``: the text with its styles; ``marker``: a list bullet or number; ``outline``: (level, title)
+        for headings that go into the PDF's bookmarks; the underscore arguments are used when a paragraph is
+        split over pages.
+        """
         super().__init__()
         self.runs = runs
         self.style = style
@@ -130,25 +148,32 @@ class RichParagraph(Flowable):
         self._math = {(b, i): register_font(MATH_FAMILY, b, i) for b in (False, True) for i in (False, True)}
 
     def __repr__(self) -> str:
+        """Short description for debugging."""
         text = "".join(r.text for r in self.runs)
         return f"<RichParagraph {text[:60]!r} lines={len(self._lines or [])} first={self._first}>"
 
     def identity(self, maxLen=None) -> str:
+        """Used by ReportLab in error messages."""
         return repr(self)
 
     # ----------------------------------------------------------- measurement
     @property
     def pad_top(self) -> float:
+        """Padding above the text (only on the first part of a split paragraph)."""
         s = self.style
         return (s.padding if s.pad_top is None else s.pad_top) if self._first else 0.0
 
     @property
     def pad_bottom(self) -> float:
+        """Padding below the text (only on the last part of a split paragraph)."""
         s = self.style
         return (s.padding if s.pad_bottom is None else s.pad_bottom) if self._last else 0.0
 
     def _pieces_for(self, text: str, bold: bool, italic: bool, sup: bool, sub: bool = False,
                     math: bool = False) -> list[_Piece]:
+        """Lay out a piece of text in the right font(s): characters missing from the main font use a fallback
+        font; indices are smaller and raised or lowered; formulas use a serif.
+        """
         s = self.style
         # formulas use a Times-style serif (as in the paper); it looks smaller than a sans at the same size
         base = s.size * (1.06 if math else 1.0)
@@ -188,6 +213,7 @@ class RichParagraph(Flowable):
         return out
 
     def _words(self) -> list[list[_Piece]]:
+        """The paragraph as words, each a list of pieces (spaces separate words; a word can mix styles)."""
         words: list[list[_Piece]] = []
         cur: list[_Piece] = []
         for r in self.runs:
@@ -207,12 +233,14 @@ class RichParagraph(Flowable):
         return words
 
     def _space_width(self) -> float:
+        """Width of the space between words, with the user's extra letter and word spacing."""
         s = self.style
         f = self._fonts[(s.bold, s.italic)]
         return pdfmetrics.stringWidth(" ", f, s.size) + s.char_space + s.word_extra
 
     @property
     def marker_width(self) -> float:
+        """Room kept left of the text for the list marker."""
         s = self.style
         if not self.marker:
             return s.marker_width
@@ -220,11 +248,13 @@ class RichParagraph(Flowable):
         return max(s.marker_width, mw)
 
     def _text_width(self, avail: float) -> float:
+        """Width available for the text in a column ``avail`` wide (indents, marker and padding taken off)."""
         s = self.style
         return max(20.0, avail - s.left_indent - s.right_indent - self.marker_width
                    - 2 * (s.padding if s.background or s.border else 0))
 
     def _break_lines(self, width: float) -> list[list[list[_Piece]]]:
+        """Break the words into lines no wider than ``width`` (very long words are split by characters)."""
         space = self._space_width()
         lines: list[list[list[_Piece]]] = []
         line: list[list[_Piece]] = []
@@ -249,6 +279,7 @@ class RichParagraph(Flowable):
         return lines or [[]]
 
     def _split_long(self, word: list[_Piece], width: float) -> list[list[_Piece]]:
+        """Split a word longer than a line (a URL, a long formula) into chunks that fit."""
         chunks: list[list[_Piece]] = []
         cur: list[_Piece] = []
         cur_w = 0.0
@@ -288,6 +319,7 @@ class RichParagraph(Flowable):
         return h
 
     def wrap(self, availWidth, availHeight):
+        """ReportLab: how tall the paragraph is in a column ``availWidth`` wide."""
         self._avail = availWidth
         if self._lines is None or self._lines_width != availWidth:
             if self._lines is None or self._lines_width is not None:
@@ -299,12 +331,15 @@ class RichParagraph(Flowable):
         return availWidth, self.height
 
     def getSpaceBefore(self):
+        """ReportLab: space above (only before the first part of a split paragraph)."""
         return self.style.space_before if self._first else 0
 
     def getSpaceAfter(self):
+        """ReportLab: space below (only after the last part of a split paragraph)."""
         return self.style.space_after if self._last else 0
 
     def split(self, availWidth, availHeight):
+        """ReportLab: the lines that fit in ``availHeight`` and the rest, as two paragraphs."""
         self.wrap(availWidth, availHeight)
         if self.height <= availHeight + 1e-6:
             return [self]
@@ -332,6 +367,7 @@ class RichParagraph(Flowable):
 
     # --------------------------------------------------------------- drawing
     def draw(self):
+        """ReportLab: draw the background, border, marker and lines of text."""
         c = self.canv
         s = self.style
         boxed = s.background or s.border
@@ -416,9 +452,11 @@ class RichParagraph(Flowable):
 
 
 def _copy_tag_on_split(cls) -> None:
+    """Make a ReportLab flowable class keep its screen-reader tag on both parts when it is split over pages."""
     orig = cls.split
 
     def split(self, *args, **kw):
+        """The original split, with the tag copied to every part."""
         parts = orig(self, *args, **kw)
         t = getattr(self, "_pdf_tag", None)
         if t is not None:
@@ -441,6 +479,7 @@ INLINE_FORMULA_BOOST = 1.15
 
 
 class _RenderState(threading.local):
+    """Per-thread data for the PDF being built (the inline formula pictures)."""
     images: dict = {}
 
 
@@ -464,19 +503,26 @@ class _SourceMark(Flowable):
     """Takes no room: tells the document which page of the original the content that follows comes from."""
 
     def __init__(self, page: Optional[int]):
+        """``page``: the page of the original the following content comes from."""
         super().__init__()
         self.page = page
 
     def wrap(self, avail_w, avail_h):
+        """Takes no room."""
         return 0, 0
 
     def draw(self):
+        """Draws nothing."""
         pass
 
 
 class _Doc(BaseDocTemplate):
+    """The document template: keeps track of which original pages each converted page shows, collects headings for
+    the contents page, and tags the content for screen readers.
+    """
     def handle_documentBegin(self):
         # every build pass starts afresh: page of the converted PDF -> pages of the original shown on it
+        """Start of a build pass (ReportLab builds more than once for the contents page): reset the bookkeeping."""
         self.page_map: dict[int, set[int]] = {}
         self._source: Optional[int] = None
         self.tagger.reset()
@@ -484,6 +530,9 @@ class _Doc(BaseDocTemplate):
         super().handle_documentBegin()
 
     def afterFlowable(self, flowable):
+        """After each piece of content: note the original page it came from, and send headings to the contents
+        page.
+        """
         if isinstance(flowable, _SourceMark):
             self._source = flowable.page
             return
@@ -497,6 +546,7 @@ class _Doc(BaseDocTemplate):
 
 
 def _styles(s: FormatSettings, printable: bool) -> dict[str, PStyle]:
+    """The paragraph styles for the user's settings (``printable``: black text without tints or boxes)."""
     ink = s.ink_saving or printable
     color = colors.black if ink else colors.HexColor(s.text_color)
     lead = s.font_size * s.line_spacing
@@ -546,6 +596,7 @@ def _styles(s: FormatSettings, printable: bool) -> dict[str, PStyle]:
 
 
 def _image_flowable(item: RItem, col_w: float, max_h: float) -> Optional[Flowable]:
+    """A figure as a picture in the column, a little larger than in the original but never taller than ``max_h``."""
     img = item.image
     if img is None:
         return None
@@ -574,6 +625,9 @@ def _equation_flowable(item: RItem, s: FormatSettings, col_w: float) -> Optional
 
 
 def _table_flowable(item: RItem, s: FormatSettings, col_w: float, max_h: float, printable: bool) -> tuple[Flowable, str]:
+    """A table in the column, or its picture from the original when the table could not be read reliably (or the user
+    chose pictures). Returns the flowable and a note for the user, if any.
+    """
     tab = item.table
     rows = tab.rows if tab else []
     n_cols = max((len(r) for r in rows), default=0)
@@ -582,6 +636,7 @@ def _table_flowable(item: RItem, s: FormatSettings, col_w: float, max_h: float, 
     bold = register_font(s.font, True, False)
 
     def picture(note: str) -> tuple[Flowable, str]:
+        """The table's picture from the original, with ``note`` for the user."""
         if tab is not None and tab.fallback_image is not None:
             fake = RItem("image", image=tab.fallback_image, natural_width=item.natural_width)
             return _image_flowable(fake, col_w, max_h), note
@@ -594,9 +649,11 @@ def _table_flowable(item: RItem, s: FormatSettings, col_w: float, max_h: float, 
     pad = 10  # cell padding left + right
 
     def is_bold(ri: int, ci: int) -> bool:
+        """Whether a cell is a header cell or was bold in the original."""
         return ri < header_rows or (ri, ci) in bold_cells
 
     def longest_word(i: int, size: float) -> float:
+        """Width of the longest word in column ``i`` at font ``size`` (a column is never narrower)."""
         return max((pdfmetrics.stringWidth(w, bold if is_bold(ri, i) else reg, size)
                     for ri, r in enumerate(rows) if i < len(r) for w in r[i].split()), default=0) + pad
 
@@ -619,6 +676,7 @@ def _table_flowable(item: RItem, s: FormatSettings, col_w: float, max_h: float, 
     strong = ParagraphStyle("strong", parent=cell, fontName=bold)
 
     def esc(t: str) -> str:
+        """Escape text for ReportLab's markup."""
         return t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
     data = [[Paragraph(esc(r[i]) if i < len(r) else "", strong if is_bold(ri, i) else cell) for i in range(n_cols)]
@@ -665,6 +723,7 @@ def build_pdf(result: ComposeResult, s: FormatSettings, title: str = "", author:
     pad = 6
 
     def on_page(canv, doc):
+        """Drawn on every page: the page tint and the page number (marked as decoration, not read out)."""
         pdf_tags.begin_artifact(canv)  # page tint and page number: not read out
         canv.saveState()
         if tint is not None:

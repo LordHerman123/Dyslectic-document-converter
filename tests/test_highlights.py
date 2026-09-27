@@ -109,3 +109,84 @@ def test_highlights_go_into_the_exported_pdf():
     assert green[1] > green[0] and green[1] > green[2]
     plain = pymupdf.open(stream=hl.apply_to_pdf(pdf, []), filetype="pdf")
     assert not list(plain[0].annots())
+
+
+def _words(n=12):
+    return [(0, f"w{i}", [(10.0 + 30 * (i % 6), 10.0 + 20 * (i // 6), 35.0 + 30 * (i % 6), 22.0 + 20 * (i // 6))])
+            for i in range(n)]
+
+
+def test_notes_stay_with_their_words():
+    from dyslexia_converter import highlights as hl
+
+    words = _words()
+    hs = hl.add([], 2, 5, "yellow", words, "important")
+    assert hl.at(hs, 3, words) == 0 and hl.at(hs, 7, words) is None
+    hs = hl.recolour(hs, 0, "blue")
+    assert hs[0].colour == "blue" and hs[0].note == "important"
+    part = hl.erase(hs, 2, 2, words)  # a note stays with the part that is left
+    assert [(h.start, h.end, h.note) for h in part] == [(3, 5, "important")]
+    bigger = hl.add(hs, 1, 8, "pink", words)  # covering a noted highlight keeps its note
+    assert bigger[0].note == "important"
+    hs = hl.set_note(hs, 0, "  ")
+    assert hs[0].note == ""
+    assert hl.note_marks(hl.add([], 2, 5, "yellow", words, "n"), words, 0) == [(185.0, 10.0)]  # top right of the band
+
+
+def test_lines_on_page():
+    from dyslexia_converter import highlights as hl
+
+    assert hl.lines_on_page(_words(), 0) == [(10.0, 22.0), (30.0, 42.0)]
+    assert hl.lines_on_page(_words(), 1) == []
+
+
+def test_notes_become_pdf_comments():
+    import pymupdf
+
+    from dyslexia_converter import highlights as hl
+    from dyslexia_converter.speech import reading_units
+
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((72, 100), "The quick brown fox jumps over the lazy dog.", fontsize=12)
+    pdf = doc.tobytes()
+    words = hl.document_words(reading_units(pdf))
+    out = hl.apply_to_pdf(pdf, hl.add([], 1, 2, "yellow", words, "Remember this"))
+    out_doc = pymupdf.open(stream=out, filetype="pdf")
+    out_page = out_doc[0]
+    annots = list(out_page.annots())
+    assert annots[0].info["content"] == "Remember this"
+
+
+def test_store_keeps_notes(tmp_path):
+    from dyslexia_converter import highlights as hl
+
+    store = hl.HighlightStore(tmp_path / "h.json")
+    store.save("k", [hl.Highlight(1, 2, "green", "a b", "my note")])
+    assert store.load("k")[0].note == "my note"
+
+
+def test_page_tints_ruler_and_note_signs():
+    import io
+
+    import pymupdf
+    from PIL import Image
+
+    from dyslexia_converter.render import preview
+
+    doc = pymupdf.open()
+    doc.new_page().insert_text((72, 100), "Some text on a line.", fontsize=12)
+    pdf = doc.tobytes()
+
+    def pixel(**kw):
+        png = preview.render_highlight(pdf, 0, 300, [], [], **kw)
+        return Image.open(io.BytesIO(png)).convert("RGB").getpixel((5, 5))
+
+    assert pixel() == (255, 255, 255)
+    assert pixel(tint="cream") == preview.TINTS["cream"]
+    assert max(pixel(tint="dark")) < 60
+    ink = preview.render_highlight(pdf, 0, 300, [], [], ruler=(200.0, 212.0))  # text away from the ruler
+    plain = preview.render_highlight(pdf, 0, 300, [], [])
+    darkest = lambda png: Image.open(io.BytesIO(png)).convert("L").crop((30, 40, 150, 56)).getextrema()[0]  # noqa
+    assert darkest(ink) > darkest(plain) + 60  # is faded
+    assert preview.render_highlight(pdf, 0, 300, [], [], notes=[(100.0, 90.0)], picked=[(72, 90, 120, 102)])

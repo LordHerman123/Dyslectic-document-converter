@@ -30,6 +30,9 @@ NUMERIC_RE = re.compile(r"\[(\d{1,4}(?:\s*[-–]\s*\d{1,4})?(?:\s*[,;]\s*\d{1,4}
 
 @dataclass
 class Citation:
+    """A citation found in the text ("(Smith, 2019)", "[3]", a superscript number): where it is, what kind, the items
+    it cites and how sure the rules are.
+    """
     start: int
     end: int
     text: str
@@ -39,10 +42,12 @@ class Citation:
 
     @property
     def key(self) -> str:
+        """An identifier of the citation for caching the AI's verdict on it."""
         return f"{self.kind}:{self.text}"
 
 
 def _expand_numbers(spec: str) -> list[int]:
+    """The numbers in a citation like "3, 5-7" (small ranges only)."""
     nums: list[int] = []
     for part in re.split(r"\s*[,;]\s*", spec):
         m = re.match(r"(\d+)\s*[-–]\s*(\d+)", part)
@@ -58,10 +63,16 @@ def _expand_numbers(spec: str) -> list[int]:
 
 
 def find_citations(text: str, n_references: int = 0, superscripts: list[tuple[int, int]] = ()) -> list[Citation]:
+    """The citations in a text, not overlapping each other.
+
+    ``n_references`` (the length of the reference list) helps judge numeric ones; ``superscripts`` are the ranges
+    set as superscript in the original.
+    """
     out: list[Citation] = []
     taken: list[tuple[int, int]] = []
 
     def free(s: int, e: int) -> bool:
+        """Whether text[s:e] is not part of a citation already found."""
         return all(e <= a or s >= b for a, b in taken)
 
     for m in AUTHOR_DATE_RE.finditer(text):
