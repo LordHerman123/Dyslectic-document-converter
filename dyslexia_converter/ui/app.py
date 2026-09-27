@@ -18,7 +18,7 @@ from ..ai.assistant import PRIVACY_NOTICE, AIAssistant, ConsentRequired
 from ..ai import keys
 from ..ai.keystore import ENV_VARS, KeyStore, install_log_redaction, redact
 from ..ai.providers import PROVIDERS, AIError
-from .. import DONATE_URL, PROJECT_URL, RELEASES_URL, __version__
+from .. import DONATE_URL, PROJECT_URL, __version__
 from ..extract.ocr import default_engine, find_tesseract
 from ..fonts import FONT_CHOICES, get_family
 from ..render import preview
@@ -1229,35 +1229,152 @@ class ConverterApp:
 
     # ---------------------------------------------------------------- help tab
     def build_help_tab(self) -> ft.Control:
-        """The Help tab: how the app works, what it never changes, privacy, and where to get the newest version."""
-        t = self.t
+        """The Help tab: the four steps, then one fold-out section per part of the app (what it does, in short
+        sentences), the keyboard shortcuts, what never changes, and where to get the newest version.
+        """
+        t, pal = self.t, self.pal
+        steps = [t("Open a PDF."), t("Choose a preset and adjust it; the preview updates."),
+                 t("Read it in Focus mode, or have it read aloud."), t("Export it to the format you need.")]
+        start = ft.Container(ft.Column([
+            self.text(t("Start here"), 18, weight=ft.FontWeight.BOLD),
+            *[ft.Row([ft.Container(self.text(str(n), 13, weight=ft.FontWeight.BOLD, color=pal["on_primary"]),
+                                   bgcolor=pal["primary"], border_radius=12, width=24, height=24,
+                                   alignment=ft.Alignment.CENTER),
+                      self.text(step, 15, expand=True)], spacing=10)
+              for n, step in enumerate(steps, 1)],
+            self.text(t("Open a section below to see what else the app can do."), 13, color=pal["muted"]),
+        ], spacing=8), bgcolor=pal["surface_low"], border=ft.Border.all(1, pal["outline_variant"]),
+            border_radius=12, padding=16)
+
+        sections = [
+            (ft.Icons.TUNE, t("Convert a PDF"), t("Presets, fonts, spacing, structure and page layout"), t("The Convert tab turns a PDF into a calmer layout: a clear font, more space between lines, words and letters, and a clean page without clutter. The words themselves stay exactly the same."), [
+                (t("Open PDF:"), t("choose a file. Its text is read on this device; scanned pages are read with "
+                                   "OCR.")),
+                (t("Preset:"), t("start from a preset, then change the font, size, spacing, margins and page "
+                                 "colour. Keep your choice with 'Save as My Settings'.")),
+                (t("Bold start of words:"), t("bolds the first part of each word. It only changes how words "
+                                              "look.")),
+                (t("Structure:"), t("hide running headers and page numbers, move footnotes to the end, turn "
+                                    "author-year citations into numbers, and rebuild tables.")),
+                (t("Pages to convert:"), t("convert only part of a long PDF.")),
+                (t("Document language:"), t("found automatically. If the guess is wrong, choose the language at "
+                                            "the top of the Convert tab.")),
+                (t("Original, Converted, Both:"), t("compare the pages side by side; both sides stay on the same "
+                                                    "page.")),
+            ]),
+            (ft.Icons.DOWNLOAD, t("Export"), t("PDF, printable PDF, Word, EPUB, text or Markdown"), t("Save the converted document in the way that suits how you read: on a screen, on paper, or on an e-reader. You can also keep editing it in Word."), [
+                (t("Export button:"), t("PDF for the screen, Printable PDF for A4 paper, Word (DOCX), EPUB for "
+                                        "e-readers, plain text and Markdown.")),
+                (t("Your highlights:"), t("when a document has highlights, 'Include my highlights (PDF)' in the "
+                                          "Export menu puts them in the PDF, with your notes as comments.")),
+                (t("Your original:"), t("the PDF you opened is never changed.")),
+            ]),
+            (ft.Icons.DOCUMENT_SCANNER_OUTLINED, t("Scanned documents"), t("Text recognition and checking "
+                                                                             "uncertain words"), t("Scanned pages are pictures of text. The app reads them with text recognition (OCR) on this device, so they can be converted like any other PDF. It shows you the words it was not sure about."), [
+                (t("Clean-up:"), t("scans are straightened, dark borders are removed, and two-page book scans "
+                                   "can be split into single pages.")),
+                (t("OCR review tab:"), t("check the words the app was unsure about: accept, reject, or type the "
+                                         "right text. Every change can be undone.")),
+                (t("My dictionary:"), t("add names and technical terms so they are not seen as mistakes.")),
+                (t("Saved:"), t("a scan is read only once; the result is kept on this device.")),
+            ]),
+            (ft.Icons.ACCOUNT_TREE_OUTLINED, t("Document map"), t("Jump to any heading"), t("Long documents are easier to follow when you can see how they are built. The map lists the headings, so you always know where you are."), [
+                (t("Headings:"), t("every heading found in the document. Select one to show it in the "
+                                   "preview.")),
+                (t("Contents page:"), t("switch on 'Contents page (document map)' in the Convert tab to put one at the "
+                                        "start of the converted document.")),
+            ]),
+            (ft.Icons.VOLUME_UP_OUTLINED, t("Read aloud"), t("Hear the text, with each word highlighted"), t("Listening while you read makes long texts easier to take in. The app uses the voices installed on your computer, so the text is never sent online."), [
+                (t("Read aloud button:"), t("opens the play button, voice and speed. The sentence and the word "
+                                            "being read are highlighted.")),
+                (t("Tap to read (hand button):"), t("off when the app starts, so clicking the text selects it. "
+                                                    "Switch it on to start reading where you click.")),
+            ]),
+            (ft.Icons.FULLSCREEN, t("Focus mode"), t("A calm reading view of the converted pages"), t("Focus mode shows only the converted pages, in the whole window, without the settings around them. It is made for reading, and you can set it up the way that is most comfortable for you."), [
+                (t("Text size and zoom:"), t("make the pages larger or smaller, fit them to the window, or pinch "
+                                             "on a touch screen.")),
+                (t("View:"), t("a page colour (white, cream, blue, green, grey or dark), scrolling or one page at "
+                               "a time, and a quarter turn.")),
+                (t("Reading ruler:"), t("a band that marks the line you are reading; move it with the arrow "
+                                        "keys.")),
+                (t("Hide the bars:"), t("shows only the page. Press Esc to bring the bars back.")),
+            ]),
+            (ft.Icons.BORDER_COLOR_OUTLINED, t("Select, highlight and take notes"), t("In Focus mode"), t("Mark what matters while you read, and write down your thoughts next to it. Highlights and notes are saved for each document and can be exported."), [
+                (t("Select:"), t("drag over the text with a mouse or pen. With a finger, press and hold, then "
+                                 "drag. Double-click selects one word.")),
+                (t("Toolbar:"), t("copy, four highlight colours, note, read aloud, meaning (dictionary) and "
+                                  "remove. The ••• button selects the whole sentence or paragraph.")),
+                (t("Stop selecting:"), t("click anywhere else or press Esc.")),
+                (t("Undo:"), t("after you highlight or remove something, Undo appears at the bottom.")),
+                (t("Highlighter:"), t("switch it on to mark text just by dragging over it.")),
+                (t("Notes:"), t("type a note or speak it (Windows voice typing). The notes button lists all "
+                                "highlights and notes, and saves them as a Word document.")),
+            ]),
+            (ft.Icons.SMART_TOY_OUTLINED, t("AI (optional)"), t("Off unless you switch it on"), t("The app never needs AI. If you want, AI can help with the few things the app is unsure about, and make summaries. It uses your own API key, and you always see what is sent."), [
+                (t("Local-only:"), t("the default. Nothing from your document leaves this device.")),
+                (t("AI-assisted:"), t("AI checks uncertain citations and OCR words, and makes summaries in Focus "
+                                      "mode when you ask. Summaries are marked as made by AI.")),
+                (t("API keys:"), t("add a key with a name, test the connection, and remove it with the cross.")),
+                (t("Privacy log:"), t("every request is listed with the exact text that was sent.")),
+            ]),
+            (ft.Icons.SETTINGS_OUTLINED, t("Settings"), t("How the app itself looks"), t("Change how the app itself looks, so it is comfortable for your eyes."), [
+                (t("Appearance:"), t("app language, dark mode, high-contrast colours and app text size. These "
+                                     "only change the app, not your documents.")),
+            ]),
+        ]
+        shortcuts = [("Ctrl+C", t("Copy the selection")), ("1 - 4", t("Highlight the selection in a colour")),
+                     ("N", t("Write a note")), ("Delete", t("Remove the highlight")),
+                     ("Esc", t("Stop selecting, close the toolbar, or show the bars")),
+                     ((ft.Icons.ARROW_UPWARD, ft.Icons.ARROW_DOWNWARD), t("Move the reading ruler, or scroll")),
+                     ((ft.Icons.ARROW_BACK, ft.Icons.ARROW_FORWARD, "Page Up/Down · " + t("Space")),
+                      t("Previous or next page"))]
+
+        def key_label(k) -> ft.Control:
+            """A key's name, or arrow icons (the app's font has no arrow characters) and names."""
+            parts = k if isinstance(k, tuple) else (k,)
+            return ft.Row([self.text(x, 13, weight=ft.FontWeight.BOLD) if isinstance(x, str) else
+                           ft.Icon(x, size=16, color=pal["text"]) for x in parts], spacing=4, tight=True)
+
+        keys_table = ft.Column([
+            ft.Row([ft.Container(key_label(k), bgcolor=pal["surface_mid"],
+                                 border=ft.Border.all(1, pal["outline_variant"]), border_radius=6, width=215,
+                                 padding=ft.Padding.symmetric(vertical=4, horizontal=8)),
+                    self.text(v, 14, expand=True)], spacing=12)
+            for k, v in shortcuts], spacing=6)
+        sections.append((ft.Icons.KEYBOARD_OUTLINED, t("Keyboard shortcuts"), t("In Focus mode"),
+                         t("Keys that make Focus mode quicker to use with a keyboard."), keys_table))
+
+        def section(icon, title, summary, intro, body) -> ft.Control:
+            """One fold-out section: an icon, a title and one line; opened, a short introduction to the feature,
+            then short points (or a table)."""
+            if isinstance(body, list):
+                body = ft.Column([ft.Text(spans=[
+                    ft.TextSpan(lead + " ", ft.TextStyle(weight=ft.FontWeight.BOLD)), ft.TextSpan(rest)],
+                    size=self.fs(14)) for lead, rest in body], spacing=8)
+            body = ft.Column([self.text(intro, 15), body], spacing=12)
+            return ft.Container(ft.ExpansionTile(
+                title=self.text(title, 16, weight=ft.FontWeight.BOLD), subtitle=self.text(summary, 13),
+                leading=ft.Icon(icon, color=pal["primary"]),
+                controls=[ft.Container(body, padding=ft.Padding.only(left=56, right=16, bottom=14))],
+                expanded_alignment=ft.Alignment.CENTER_LEFT,
+                expanded_cross_axis_alignment=ft.CrossAxisAlignment.START),
+                bgcolor=pal["surface"], border=ft.Border.all(1, pal["outline_variant"]), border_radius=12)
+
         return ft.Container(ft.Column([
-            self.text(t("How it works"), 18, weight=ft.FontWeight.BOLD),
-            self.text(t("1. Open a PDF. Text is extracted locally; scanned pages are read with OCR.\n"
-                        "2. Headings, lists, tables, figures, footnotes and references are detected with "
-                        "simple rules - no AI needed.\n"
-                        "3. Adjust the settings; the preview updates.\n"
-                        "4. Export to PDF, printable PDF, Word, EPUB, text or Markdown."), 14),
+            start,
+            *[section(*s) for s in sections],
             self.text(t("What never changes"), 16, weight=ft.FontWeight.BOLD),
             self.text(t("The author's words. The converter does not summarise, paraphrase, simplify or remove "
                         "text. Your original PDF is never modified or overwritten."), 14),
             self.text(t("With AI-assisted mode on, Focus mode can make a summary on request. It is shown next to "
                         "the text, marked as made by AI, and never replaces the author's words."), 14),
-            self.text(t("Document language"), 16, weight=ft.FontWeight.BOLD),
-            self.text(t("The language of each PDF is detected automatically from its text. If the guess is "
-                        "wrong, choose the language at the top of the Convert tab."), 14),
             self.text(t("About the presets and fonts"), 16, weight=ft.FontWeight.BOLD),
             self.text(t(PRESET_DISCLAIMER) + " " + t("No single font is best for every reader with dyslexia."), 14),
-            self.text(t("App language, dark mode and text size are in the Settings tab."), 14),
             self.text(t("Updates and source code"), 16, weight=ft.FontWeight.BOLD),
             self.text(t("You are using version {version}. The newest version, what changed in it, and the "
                         "source code are on GitHub.", version=__version__), 14),
-            ft.Row([
-                ft.FilledButton(t("Get the newest version"), icon=ft.Icons.SYSTEM_UPDATE_ALT, url=RELEASES_URL,
-                                tooltip=t("Opens the download page in your web browser")),
-                ft.OutlinedButton(t("Project on GitHub"), icon=ft.Icons.OPEN_IN_NEW, url=PROJECT_URL,
-                                  tooltip=t("Opens GitHub in your web browser")),
-            ], wrap=True),
+            ft.Row([ft.OutlinedButton(t("Project on GitHub"), icon=ft.Icons.OPEN_IN_NEW, url=PROJECT_URL,
+                                      tooltip=t("Opens GitHub in your web browser"))], wrap=True),
             self.text(PROJECT_URL, 12, selectable=True, color=ft.Colors.ON_SURFACE_VARIANT),
             self.end_space(),
         ], scroll=ft.ScrollMode.AUTO, spacing=10, expand=True), padding=16, expand=True)
