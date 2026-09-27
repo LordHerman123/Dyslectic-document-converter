@@ -81,3 +81,31 @@ def test_document_key_depends_on_content_only(tmp_path):
     b.write_bytes(b"%PDF same")
     c.write_bytes(b"%PDF other")
     assert hl.document_key(a) == hl.document_key(b) != hl.document_key(c)
+
+
+def test_highlights_go_into_the_exported_pdf():
+    import pymupdf
+
+    from dyslexia_converter import highlights as hl
+    from dyslexia_converter.speech import reading_units
+
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((72, 100), "The quick brown fox jumps over the lazy dog.", fontsize=12)
+    page.insert_text((72, 130), "A second line of text to read.", fontsize=12)
+    pdf = doc.tobytes()
+    words = hl.document_words(reading_units(pdf))
+    marks = hl.add([], 1, 3, "green", words)  # quick brown fox
+    out = hl.apply_to_pdf(pdf, marks)
+    out_doc = pymupdf.open(stream=out, filetype="pdf")
+    out_page = out_doc[0]
+    annots = list(out_page.annots())
+    assert len(annots) == 1 and annots[0].type[1] == "Highlight"
+    r = annots[0].rect
+    covered = [t for x0, y0, x1, y1, t, *_ in out_page.get_text("words")
+               if min(x1, r.x1) - max(x0, r.x0) > 2 and min(y1, r.y1) - max(y0, r.y0) > 2]
+    assert covered == ["quick", "brown", "fox"]
+    green = annots[0].colors["stroke"]
+    assert green[1] > green[0] and green[1] > green[2]
+    plain = pymupdf.open(stream=hl.apply_to_pdf(pdf, []), filetype="pdf")
+    assert not list(plain[0].annots())

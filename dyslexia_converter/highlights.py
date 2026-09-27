@@ -144,6 +144,30 @@ def erase(highlights: list[Highlight], a: int, b: int,
     return out
 
 
+def apply_to_pdf(pdf: bytes, highlights: list[Highlight], skip_pages: frozenset = frozenset()) -> bytes:
+    """The PDF with the highlights added as highlight annotations: every PDF reader shows them in colour,
+    and they can be removed or changed there. ``skip_pages`` must be the pages left out when the
+    highlights were made (the contents pages), so the words are counted the same way."""
+    import pymupdf
+
+    from .speech import reading_units
+
+    words = document_words(reading_units(pdf, skip_pages=skip_pages))
+    doc = pymupdf.open(stream=bytes(pdf), filetype="pdf")
+    try:
+        for pno in range(doc.page_count):
+            page = doc[pno]  # kept while its annotations are made
+            for rect, (r, g, b, a) in page_marks(highlights, words, pno):
+                # the see-through marker colour as it looks over white paper (highlights multiply)
+                colour = tuple(1 - a / 255 * (1 - c / 255) for c in (r, g, b))
+                annot = page.add_highlight_annot(pymupdf.Rect(rect))
+                annot.set_colors(stroke=colour)
+                annot.update()
+        return doc.tobytes(garbage=0, deflate=True)
+    finally:
+        doc.close()
+
+
 # ------------------------------------------------------------------------------------------ storage
 
 def document_key(path: str | Path) -> str:

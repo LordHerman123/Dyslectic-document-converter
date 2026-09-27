@@ -42,8 +42,6 @@ class FocusMode:
         self.current = 0
         self.words: list = []
         self.highlights: list[hl.Highlight] = []
-        self.store = hl.HighlightStore()
-        self.doc_key: Optional[str] = None
         self._render_task: Optional[asyncio.Task] = None
         self._reading_page: Optional[int] = None
         self._drag: Optional[tuple[int, int, int]] = None  # page, first word, last word
@@ -57,12 +55,8 @@ class FocusMode:
             return
         self.active = True
         self.current = app.conv_page
-        if app.source_path:
-            try:
-                self.doc_key = await app.in_thread(hl.document_key, app.source_path)
-            except OSError:
-                self.doc_key = None
-        self.highlights = self.store.load(self.doc_key) if self.doc_key else []
+        self.highlights = app.doc_highlights()
+        del app.hl_items[1:]  # forget the menu of an earlier focus mode
 
         self.page_label = app.text("", 14)
         self.read_toggle = ft.IconButton(ft.Icons.VOLUME_UP, tooltip=t("Read aloud"), on_click=self.on_read_panel,
@@ -83,6 +77,7 @@ class FocusMode:
             self.read_toggle, self.settings_toggle, self.mark_toggle, self.swatches,
             ft.Container(expand=True),
             self.page_label,
+            app.build_export_menu(compact=True),
             ft.IconButton(ft.Icons.ZOOM_OUT, tooltip=t("Smaller"), on_click=lambda e: self._zoom_by(-0.1)),
             ft.IconButton(ft.Icons.ZOOM_IN, tooltip=t("Larger"), on_click=lambda e: self._zoom_by(0.1)),
         ], spacing=2, vertical_alignment=ft.CrossAxisAlignment.CENTER),
@@ -365,8 +360,9 @@ class FocusMode:
             self.highlights = hl.erase(self.highlights, a, b, self.words)
         else:
             self.highlights = hl.add(self.highlights, a, b, self.colour, self.words)
-        if self.doc_key:
-            self.store.save(self.doc_key, self.highlights)
+        if self.app.doc_key:
+            self.app.hl_store.save(self.app.doc_key, self.highlights)
+        self.app.update_highlight_option()
         await self.redraw(page)
 
     # ------------------------------------------------------------------ fold-out panels
