@@ -13,7 +13,7 @@ from typing import Callable, Optional
 
 import flet as ft
 
-from .. import pipeline, speech
+from .. import highlights, pipeline, speech
 from ..ai.assistant import PRIVACY_NOTICE, AIAssistant, ConsentRequired
 from ..ai.keystore import KeyStore, install_log_redaction, redact
 from ..ai.providers import PROVIDERS, AIError
@@ -34,6 +34,9 @@ RELOAD_KEYS = {"split_spreads", "scan_text_source", "ocr_language"}
 
 EXPORTS = [("pdf", "PDF", "pdf"), ("printable_pdf", "Printable PDF", "pdf"), ("docx", "Word (DOCX)", "docx"),
            ("epub", "EPUB (e-reader)", "epub"), ("txt", "Plain text", "txt"), ("md", "Markdown", "md")]
+EXPORT_ICONS = {"pdf": ft.Icons.PICTURE_AS_PDF_OUTLINED, "printable_pdf": ft.Icons.PRINT_OUTLINED,
+                "docx": ft.Icons.DESCRIPTION_OUTLINED, "epub": ft.Icons.MENU_BOOK_OUTLINED,
+                "txt": ft.Icons.NOTES, "md": ft.Icons.CODE}
 # document languages (codes used by the core) and their English names (translated in the UI)
 DOC_LANGUAGES = [("en", "English"), ("nl", "Dutch"), ("de", "German"), ("fr", "French"), ("es", "Spanish"),
                  ("it", "Italian"), ("pt", "Portuguese")]
@@ -68,6 +71,9 @@ class ConverterApp:
         self.conv_count = 0
         self.view_mode = "side"
         self.speaker = speech.Speaker()
+        self.hl_store = highlights.HighlightStore()
+        self.doc_key: Optional[str] = None
+        self.hl_items: list = []  # ("Include my highlights" divider, menu item) of each export menu
         self.focus = FocusMode(self)
         self._read_units: Optional[list] = None  # sentences of the converted PDF, made when reading starts
         self._read_pos: Optional[int] = None  # sentence being read (kept when paused)
@@ -475,15 +481,11 @@ class ConverterApp:
                                                   border=ft.Border.all(1, self.pal["frame"]))],
                                     expand=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                                     visible=self.view_mode in ("conv", "side"))
-        export_buttons = [ft.OutlinedButton(t(label), icon=ft.Icons.DOWNLOAD, data=fmt, on_click=self.on_export,
-                                            tooltip=t("Save as {format}", format=t(label)))
-                          for fmt, label, _ in EXPORTS]
         self.build_read_bar()
         preview_col = ft.Column([
             self.build_toolbar(),
             self.read_panel,
             ft.Row([self.orig_panel, self.conv_panel], expand=True, vertical_alignment=ft.CrossAxisAlignment.START),
-            ft.Row([self.text(t("Export:"), 14, weight=ft.FontWeight.BOLD)] + export_buttons, wrap=True),
         ], expand=True)
 
         return settings_col, preview_col
@@ -1094,6 +1096,11 @@ class ConverterApp:
             self.notify(self.t("Could not read this PDF:") + " " + redact(str(ex)), error=True)
             return
         d = self.session.document
+        try:
+            self.doc_key = await self.in_thread(highlights.document_key, self.source_path)
+        except OSError:
+            self.doc_key = None
+        self.update_highlight_option()
         self.orig_count = preview.page_count(self.source_path)
         self.orig_page = (self._page_range() or (1, 1))[0] - 1
         self.conv_page = 0
@@ -1213,8 +1220,51 @@ class ConverterApp:
                                                 tooltip=t("Show or hide the read-aloud controls"))
         self.focus_btn = ft.OutlinedButton(t("Focus mode"), icon=ft.Icons.FULLSCREEN, on_click=self.on_focus,
                                            tooltip=t("Read the converted document in the whole window"))
-        return ft.Row([self.view_seg, self.read_toggle, ft.Container(expand=True), self.focus_btn],
+        self.hl_items = []
+        self.export_menu = self.build_export_menu()
+        return ft.Row([self.view_seg, self.read_toggle, ft.Container(expand=True), self.focus_btn, self.export_menu],
                       spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+
+    def build_export_menu(self, compact: bool = False) -> ft.PopupMenuButton:
+        """One "Export" button; the formats (and whether to include highlights) are in its menu."""
+        t = self.t
+        items = [ft.PopupMenuItem(t(label), icon=EXPORT_ICONS[fmt], data=fmt, on_click=self.on_export)
+                 for fmt, label, _ in EXPORTS]
+        has = bool(self.doc_highlights())
+        divider = ft.PopupMenuItem(visible=has)
+        hl_item = ft.PopupMenuItem(t("Include my highlights (PDF)"), checked=bool(self.ui.get("export_highlights", True)),
+                                   on_click=self.on_export_highlights, visible=has)
+        items[0:0] = [hl_item, divider]
+        self.hl_items.append((divider, hl_item))
+        if compact:
+            return ft.PopupMenuButton(icon=ft.Icons.DOWNLOAD, tooltip=t("Export"), items=items,
+                                      menu_position=ft.PopupMenuPosition.UNDER)
+        button = ft.Container(ft.Row([ft.Icon(ft.Icons.DOWNLOAD, size=18, color=ft.Colors.ON_PRIMARY),
+                                      ft.Text(t("Export"), color=ft.Colors.ON_PRIMARY, weight=ft.FontWeight.W_500),
+                                      ft.Icon(ft.Icons.ARROW_DROP_DOWN, size=20, color=ft.Colors.ON_PRIMARY)],
+                                     spacing=6, tight=True),
+                              bgcolor=ft.Colors.PRIMARY, border_radius=20,
+                              padding=ft.Padding.only(left=16, right=10, top=9, bottom=9))
+        return ft.PopupMenuButton(content=button, tooltip=t("Save the converted document"), items=items,
+                                  menu_position=ft.PopupMenuPosition.UNDER, padding=0)
+
+    def doc_highlights(self) -> list:
+        """The highlights made in focus mode for the open document."""
+        return self.hl_store.load(self.doc_key) if self.doc_key else []
+
+    def update_highlight_option(self) -> None:
+        """The "Include my highlights" menu option shows only when the document has highlights."""
+        has = bool(self.doc_highlights())
+        for divider, item in self.hl_items:
+            divider.visible = item.visible = has
+
+    async def on_export_highlights(self, e):
+        on = not bool(self.ui.get("export_highlights", True))
+        self.ui["export_highlights"] = on
+        self.store.save_ui(self.ui)
+        for _, item in self.hl_items:
+            item.checked = on
+        self.page.update()
 
     def _tap_tooltip(self) -> None:
         on = bool(self.ui.get("tap_to_read", True))
@@ -1283,11 +1333,15 @@ class ConverterApp:
 
     async def _units(self) -> list:
         if self._read_units is None:
-            pages = sorted(self._page_map())
-            skip = frozenset(range(pages[0])) if pages else frozenset()  # the contents page(s)
+            skip = self._contents_pages()
             self._read_units = await self.in_thread(lambda: speech.reading_units(self.converted_pdf,
                                                                                  skip_pages=skip))
         return self._read_units
+
+    def _contents_pages(self) -> frozenset:
+        """The contents page(s) at the start of the converted document (not read aloud, no highlights)."""
+        pages = sorted(self._page_map())
+        return frozenset(range(pages[0])) if pages else frozenset()
 
     async def on_page_tap(self, e):
         """Clicking on the converted page starts reading from the sentence clicked."""
@@ -1507,6 +1561,11 @@ class ConverterApp:
         self.busy(True, t("Preparing export..."))
         try:
             data = await self.in_thread(self.session.export, fmt, self.settings)
+            marks = self.doc_highlights() if fmt in ("pdf", "printable_pdf") and \
+                self.ui.get("export_highlights", True) else []
+            if marks:
+                skip = self._contents_pages()
+                data = await self.in_thread(highlights.apply_to_pdf, data, marks, skip)
         except Exception as ex:
             self.busy(False)
             self.notify(t("Export failed:") + " " + redact(str(ex)), error=True)
