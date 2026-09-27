@@ -81,12 +81,23 @@ help every reader. No single font is best for everyone.
 Open *AI settings* in the app and pick **AI-assisted**. The app shows a notice saying that snippets
 will be sent to your provider using your key, and nothing is sent until you confirm it. Then:
 
-* Pick a provider: **Mistral AI** (the default; its free "Experiment" plan gives you a key at
-  console.mistral.ai, and `mistral-small-latest` is preselected), **Anthropic** (paid API) or
-  **Google Gemini**. Choose a model, then enter your key. The key can also be supplied through the
-  `MISTRAL_API_KEY`, `ANTHROPIC_API_KEY` or `GEMINI_API_KEY` environment variable. Keys go into the OS keychain when `keyring` is installed.
-  Otherwise they're saved in a private file on your device. Keys never go into settings, logs,
-  error messages or exports.
+* **API keys.** Under *API keys*, add a key with a name you choose (for example "Uni key"), its provider
+  and the key itself: **Mistral AI** (its free "Experiment" plan gives you a key at console.mistral.ai;
+  `mistral-small-latest` is preselected), **Anthropic** (paid API) or **Google Gemini**. You can save several
+  keys; the one marked *In use* is used for AI requests, and clicking another switches to it. Each key has
+  a **Test** button and a **×** to remove it. *Test connection* checks a key before you add it: it sends one
+  tiny request with the word "test" (never document text) and shows whether the key and model work and how
+  fast the answer came, or why not (key rejected, rate limit, no internet). Only the last four characters of
+  a key are ever shown. A key can also come from the `MISTRAL_API_KEY`, `ANTHROPIC_API_KEY` or
+  `GEMINI_API_KEY` environment variable; it's then listed and can be tested, but it's never stored. Keys go
+  into the OS keychain when `keyring` is installed, otherwise into a private file on your device. They never
+  go into settings, logs, error messages or exports.
+* **Summaries in Focus mode, only on request.** With AI on, the robot button in Focus mode summarises this
+  page, this section, your selection or the whole document, short (3-5 points) or detailed (6-10), in plain
+  language if you like, in the document's language. Before sending, it says how many words go to which
+  provider. Every summary is marked *Made by AI* with a warning that AI can make mistakes; it sits beside
+  the text and never replaces it. You can copy it, read it aloud or save it as a note. While AI is off the
+  button is greyed out and explains how to switch AI on.
 * The AI is only asked narrow questions: "is this parenthesis a citation?" and "is this word an OCR
   error?". It can't rewrite text: answers that aren't a single-word fix are thrown away. AI word
   suggestions always go to your review list.

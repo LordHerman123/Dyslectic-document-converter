@@ -24,6 +24,7 @@ from rapidfuzz.distance import Levenshtein
 
 from ..model import Correction
 from ..settings import AISettings, app_data_dir
+from . import keys
 from .keystore import KeyStore, redact
 from .log import LogEntry, RequestLog
 from .privacy import mask, window
@@ -39,6 +40,7 @@ PRIVACY_NOTICE = (
 )
 CHUNK = 30  # items per request: the fixed instructions and examples are shared by more items
 SUMMARY_WORDS = 3000  # a longer text is summarised in parts, and the parts' points summarised once more
+SUMMARY_POINTS = {False: 5, True: 10}  # most points in a short / detailed summary
 
 
 class ConsentRequired(Exception):
@@ -144,8 +146,8 @@ class AIAssistant:
     # ------------------------------------------------------------------ state
     @property
     def has_key(self) -> bool:
-        """Whether an API key is stored for the chosen provider."""
-        return bool(self.keystore.get(self.settings.provider))
+        """Whether there is an API key to use (the key in use, or the provider's key from older versions)."""
+        return bool(keys.secret(self.settings, self.keystore))
 
     @property
     def active(self) -> bool:
@@ -158,7 +160,7 @@ class AIAssistant:
             raise ConsentRequired("AI is switched off (Local-only mode).")
         if not self.settings.consent_given:
             raise ConsentRequired(PRIVACY_NOTICE)
-        key = self.keystore.get(self.settings.provider)
+        key = keys.secret(self.settings, self.keystore)
         if not key:
             raise AIError("No API key entered. Add one in AI Settings.")
         return make_provider(self.settings.provider, key, self.settings.model or None), key
@@ -235,6 +237,14 @@ class AIAssistant:
                                      reply.input_tokens, reply.output_tokens))
         return reply
 
+    def check_key(self, provider: str, value: str, model: str = "") -> "keys.CheckResult":
+        """Check that a key works with one tiny request (no document text); the check is in the privacy log."""
+        result, used_model, answer = keys.check(provider, value, model)
+        self.log.add(LogEntry("check", provider, used_model, 0, keys.CHECK_SYSTEM, keys.CHECK_PROMPT, answer=answer,
+                              error=redact(result.message, value) if not result.ok else ""))
+        result.message = redact(result.message, value)
+        return result
+
     # ------------------------------------------------------------------ summaries
     def summary_words(self, text: str) -> int:
         """How many words a summary of ``text`` sends (to tell the user before sending)."""
@@ -275,7 +285,8 @@ class AIAssistant:
             self.cache.put(ck, hit)
         else:
             self.usage.append(UsageEntry("summary", 1, True))
-        return Summary(hit.get("t", ""), list(hit.get("b", [])))
+        # the length the user chose, even when a model gives more points than asked
+        return Summary(hit.get("t", ""), list(hit.get("b", []))[:SUMMARY_POINTS[detailed]])
 
     # ------------------------------------------------------------------ tasks
     def classify_citations(self, candidates: list[tuple[str, str, int, int]],
@@ -290,8 +301,8 @@ class AIAssistant:
             yes = {i for i in self.send(req).data.get("c", []) if isinstance(i, int)}
             values = {ck: i in yes for i, ck in enumerate(req.keys)}
             self.cache.put_many(values)
-            for i, keys in enumerate(req.items):
-                for key in keys:
+            for i, cands in enumerate(req.items):
+                for key in cands:
                     decisions[key] = values[req.keys[i]]
         return decisions
 

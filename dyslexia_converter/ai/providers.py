@@ -135,7 +135,8 @@ class GeminiProvider(AIProvider):
                            headers={"x-goog-api-key": self._key, "content-type": "application/json"})
         except httpx.HTTPError as e:
             raise AIError("Could not reach the Gemini API. Check your internet connection.") from e
-        if r.status_code in (401, 403):
+        # Google answers a wrong key with 400 API_KEY_INVALID
+        if r.status_code in (401, 403) or (r.status_code == 400 and "API_KEY_INVALID" in r.text):
             raise AIError("The API key was rejected by Google. Check the key in AI Settings.")
         if r.status_code == 429:
             raise AIError("Gemini rate limit / free-tier quota reached. Try again later.")

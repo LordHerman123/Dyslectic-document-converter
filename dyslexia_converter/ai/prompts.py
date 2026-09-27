@@ -119,7 +119,7 @@ SUMMARY = Task(
         "- Give a short title for the part summarised.\n"
         'Answer with JSON: {"t": "title", "b": ["point", "point", ...]}.\n\n'
         "Example\n"
-        "Language: en\nLength: short\nStyle: plain\nText:\n"
+        "Language: en\nLength: short (3 to 5 points, no more)\nStyle: plain\nText:\n"
         "Photosynthesis is the process by which green plants convert light energy into chemical energy. Using "
         "chlorophyll, they absorb sunlight and combine carbon dioxide and water into glucose, releasing oxygen "
         "as a by-product. Smith (2019) notes that the rate depends on light intensity and temperature.\n"
@@ -134,7 +134,15 @@ SUMMARY = Task(
 )
 
 
+LANGUAGE_NAMES = {"en": "English", "nl": "Dutch", "fr": "French", "de": "German", "es": "Spanish",
+                  "it": "Italian"}  # named in full at the end of a summary request: a bare code is easily missed
+
+
 def summary_prompt(text: str, language: str, detailed: bool, plain: bool) -> str:
     """The request for one summary: the options, then the text."""
-    return (f"Language: {language}\nLength: {'detailed' if detailed else 'short'}\n"
-            f"Style: {'plain' if plain else 'normal'}\nText:\n{text}")
+    # the number of points is spelled out here too, and again after the text: some models skip the rule
+    points = "6 to 10 points" if detailed else "3 to 5 points, no more"
+    return (f"Language: {language}\nLength: {'detailed' if detailed else 'short'} ({points})\n"
+            f"Style: {'plain' if plain else 'normal'}\nText:\n{text}\n\n"
+            f"Cover the whole text in {points}. Write the title and points in "
+            f"{LANGUAGE_NAMES.get(language, language)}.")

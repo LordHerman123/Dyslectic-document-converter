@@ -15,7 +15,8 @@ import flet as ft
 
 from .. import highlights, pipeline, speech
 from ..ai.assistant import PRIVACY_NOTICE, AIAssistant, ConsentRequired
-from ..ai.keystore import KeyStore, install_log_redaction, redact
+from ..ai import keys
+from ..ai.keystore import ENV_VARS, KeyStore, install_log_redaction, redact
 from ..ai.providers import PROVIDERS, AIError
 from .. import DONATE_URL, PROJECT_URL, RELEASES_URL, __version__
 from ..extract.ocr import default_engine, find_tesseract
@@ -71,7 +72,11 @@ class ConverterApp:
             self.ui["app_language"] = system_language()
         self.t = Translator(self.ui["app_language"])
         self.keystore = KeyStore()
+        if keys.migrate(self.ai_settings, self.keystore):  # a key saved by an older version gets a name
+            self.store.save_ai(self.ai_settings)
         self.assistant = AIAssistant(self.ai_settings, self.keystore)
+        self.key_checks: dict = {}  # key id -> the last connection check (a CheckResult, or "busy")
+        self._new_check = None  # (key, result) of the check of the key typed in "Add a key"
         self.custom_words = CustomWords()
         self.session: Optional[pipeline.Session] = None
         self.source_path: Optional[str] = None
@@ -722,13 +727,17 @@ class ConverterApp:
             ft.Radio(value="local_only", label=t("Local-only - no document content leaves this device")),
             ft.Radio(value="ai_assisted", label=t("AI-assisted - selected snippets may be sent to your AI provider")),
         ]))
-        self.ai_provider = ft.Dropdown(label=t("Provider"), value=a.provider, width=260, text_size=self.fs(14),
-                                       options=[ft.DropdownOption(key=k, text=v.label) for k, v in PROVIDERS.items()],
-                                       on_select=self.on_ai_provider)
         self.ai_model = ft.Dropdown(label=t("Model"), width=260, text_size=self.fs(14), on_select=self.on_ai_model)
-        self.ai_key = ft.TextField(label=t("API key"), password=True, can_reveal_password=True, width=380)
-        self.ai_key_status = self.text("", 13)
-        self.ai_note = self.text("", 13, italic=True)
+        self.key_list = ft.RadioGroup(value=a.active_key, on_change=self.on_use_key, content=ft.Column(spacing=8))
+        self.new_key_name = ft.TextField(label=t("Name"), hint_text=t("e.g. Uni key"), width=200,
+                                         text_size=self.fs(14))
+        self.new_key_provider = ft.Dropdown(
+            label=t("Provider"), value=a.provider, width=210, text_size=self.fs(14), on_select=self.on_new_key_provider,
+            options=[ft.DropdownOption(key=k, text=v.label) for k, v in PROVIDERS.items()])
+        self.new_key = ft.TextField(label=t("API key"), password=True, can_reveal_password=True, width=320,
+                                    text_size=self.fs(14), on_change=self.on_new_key_typed)
+        self.new_key_note = self.text("", 12, italic=True)
+        self.new_key_status = ft.Container()
         self.ai_usage = self.text(t("No AI requests made in this session."), 13)
         self.ai_log_summary = self.text("", 13)
         self.ai_log_list = ft.Column(spacing=0)
@@ -742,11 +751,12 @@ class ConverterApp:
             self.text(t("The converter works fully without AI. AI is only asked about items local rules are "
                         "unsure about, in small snippets, and answers are cached so nothing is sent twice."), 13),
             self.ai_mode,
-            ft.Row([self.ai_provider, self.ai_model], wrap=True),
-            self.ai_note,
-            ft.Row([self.ai_key, ft.FilledButton(t("Save key"), on_click=self.on_save_key),
-                    ft.OutlinedButton(t("Remove key"), on_click=self.on_remove_key)], wrap=True),
-            self.ai_key_status,
+            self.text(t("API keys"), 16, weight=ft.FontWeight.BOLD),
+            self.text(t("Keys are kept on this device ({where}), never in settings or logs. The key marked 'In use' is the "
+                        "one AI requests use; click another to switch.", where=t(self.keystore.backend)), 13),
+            self.key_list,
+            self._add_key_box(),
+            ft.Row([self.ai_model], wrap=True),
             self.text(t("Your AI provider may charge you for API usage."), 13, weight=ft.FontWeight.BOLD),
             self.text(t("Use AI for:"), 14), ft.Row([self.ai_cit, self.ai_ocr], wrap=True),
             ft.Row([ft.FilledButton(t("Ask AI about uncertain items now"), icon=ft.Icons.SMART_TOY,
@@ -786,7 +796,8 @@ class ConverterApp:
         """One privacy-log entry, expandable to show exactly what was sent and received."""
         import time
         t = self.t
-        task = {"citations": t("Citations"), "summary": t("Summary")}.get(e.task, t("OCR words"))
+        task = {"citations": t("Citations"), "summary": t("Summary"), "check": t("Connection check")}.get(
+            e.task, t("OCR words"))
         stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(e.when))
         title = f"{stamp} · {task} · {e.provider} / {e.model}"
         sub = t("{items} item(s), {chars} characters of document text, {tin} tokens in, {tout} tokens out",
@@ -836,15 +847,13 @@ class ConverterApp:
         self.page.update()
 
     def _refresh_ai_controls(self) -> None:
-        """Show the models, notes and key status of the chosen AI provider."""
+        """Show the saved keys, and the models of the provider of the key in use."""
         cls = PROVIDERS.get(self.ai_settings.provider)
         models = cls.models if cls else []
         self.ai_model.options = [ft.DropdownOption(key=m, text=m) for m in models]
         self.ai_model.value = self.ai_settings.model or (cls.default_model if cls else None)
-        self.ai_note.value = self.t(cls.note) if cls else ""
-        has = bool(self.keystore.get(self.ai_settings.provider))
-        self.ai_key_status.value = (self.t("A key is saved ({where}).", where=self.t(self.keystore.backend)) if has
-                                    else self.t("No key saved for this provider."))
+        self.ai_model.label = self.t("Model ({provider})", provider=cls.label) if cls else self.t("Model")
+        self._refresh_keys()
         if hasattr(self, "mode_chip"):
             self._update_mode_status()
 
@@ -864,14 +873,6 @@ class ConverterApp:
         self._refresh_ai_controls()
         self.page.update()
 
-    async def on_ai_provider(self, e):
-        """A different AI provider: forget the model chosen for the previous one."""
-        self.ai_settings.provider = e.control.value
-        self.ai_settings.model = ""
-        self.store.save_ai(self.ai_settings)
-        self._refresh_ai_controls()
-        self.page.update()
-
     async def on_ai_model(self, e):
         """Remember the model chosen."""
         self.ai_settings.model = e.control.value
@@ -883,24 +884,189 @@ class ConverterApp:
         self.ai_settings.use_for_ocr = bool(self.ai_ocr.value)
         self.store.save_ai(self.ai_settings)
 
-    async def on_save_key(self, e):
-        """Store the API key for the chosen provider on this device."""
-        key = (self.ai_key.value or "").strip()
-        if not key:
+    # ------------------------------------------------------------------ API keys
+    def _add_key_box(self) -> ft.Control:
+        """The "Add a key" form: a name, the provider and the key, with a connection check before adding."""
+        t = self.t
+        self._new_key_note()
+        return ft.Row([ft.Container(ft.Column([
+            self.text(t("Add a key"), 15, weight=ft.FontWeight.BOLD),
+            ft.Row([self.new_key_name, self.new_key_provider, self.new_key], wrap=True),
+            self.new_key_note,
+            ft.Row([ft.OutlinedButton(t("Test connection"), icon=ft.Icons.WIFI_TETHERING,
+                                      on_click=self.on_check_new_key),
+                    ft.FilledButton(t("Add key"), icon=ft.Icons.ADD, on_click=self.on_add_key),
+                    self.new_key_status], wrap=True, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            self.text(t("Test sends one tiny request with the word \"test\" - never document text - and checks that "
+                        "the key and model work. Tests are shown in the privacy log too."), 12,
+                      color=self.pal["muted"]),
+        ], spacing=10), bgcolor=self.pal["surface_low"], border=ft.Border.all(1, self.pal["outline_variant"]),
+            border_radius=12, padding=14, expand=True)])
+
+    def _new_key_note(self) -> None:
+        """The cost note of the provider chosen in "Add a key"."""
+        cls = PROVIDERS.get(self.new_key_provider.value)
+        self.new_key_note.value = self.t(cls.note) if cls else ""
+
+    def _active_key_id(self, entries: list) -> str:
+        """The key in use; without a choice, the provider's key from an environment variable if there is one."""
+        a = self.ai_settings
+        if a.active_key:
+            return a.active_key
+        return next((e.id for e in entries if e.from_env and e.provider == a.provider), "")
+
+    def _refresh_keys(self) -> None:
+        """Rebuild the list of saved keys (name, provider, last characters, check result, Test and remove)."""
+        entries = keys.entries(self.ai_settings, self.keystore)
+        active = self._active_key_id(entries)
+        self.key_list.value = active or None
+        self.key_list.content.controls = [self._key_row(e, e.id == active) for e in entries] or [
+            self.text(self.t("No keys yet. Add one below."), 13, color=self.pal["muted"])]
+
+    def _key_row(self, e: "keys.KeyEntry", in_use: bool) -> ft.Control:
+        """One saved key: pick it, see whether it works, test it, or remove it with the cross."""
+        t, pal = self.t, self.pal
+        cls = PROVIDERS[e.provider]
+        if e.from_env:
+            detail = t("{provider} · from the {var} environment variable", provider=cls.label,
+                       var=ENV_VARS[e.provider])
+        else:
+            end = keys.tail(keys.secret(self.ai_settings, self.keystore, e.id))
+            detail = t("{provider} · key ending in …{end}", provider=cls.label, end=end) if end else cls.label
+        name = [self.text(e.name, 15, weight=ft.FontWeight.BOLD)]
+        if in_use:
+            name.append(ft.Container(self.text(t("In use"), 11, color=pal["on_primary"]), bgcolor=pal["primary"],
+                                     border_radius=8, padding=ft.Padding.symmetric(vertical=2, horizontal=8)))
+        actions = [ft.OutlinedButton(t("Test"), icon=ft.Icons.WIFI_TETHERING, data=e.id,
+                                     on_click=self.on_check_key, disabled=self.key_checks.get(e.id) == "busy")]
+        if not e.from_env:  # an environment variable is changed outside the app
+            actions.append(ft.IconButton(ft.Icons.CLOSE, tooltip=t("Remove this key"), data=e.id,
+                                         icon_color=pal["muted"], on_click=self.on_remove_key))
+        return ft.Container(ft.Row([
+            ft.Radio(value=e.id, tooltip=t("Use this key")),
+            ft.Column([ft.Row(name, spacing=8, wrap=True),
+                       self.text(detail, 12, color=pal["muted"]),
+                       self._check_status(self.key_checks.get(e.id))], spacing=2, tight=True, expand=True),
+            *actions,
+        ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            bgcolor=pal["surface"], border=ft.Border.all(1, pal["primary"] if in_use else pal["outline_variant"]),
+            border_radius=12, padding=ft.Padding.only(left=4, top=8, right=8, bottom=8))
+
+    def _check_status(self, result, new: bool = False) -> ft.Control:
+        """A connection check's outcome: not tested, testing, connected (and how fast) or what went wrong."""
+        import time
+        t, pal = self.t, self.pal
+        if result == "busy":
+            icon = ft.ProgressRing(width=14, height=14, stroke_width=2)
+            text, colour = t("Testing..."), pal["muted"]
+        elif result is None:
+            if new:
+                return ft.Container()
+            icon = ft.Icon(ft.Icons.HELP_OUTLINE, color=pal["muted"], size=16)
+            text, colour = t("Not tested yet"), pal["muted"]
+        elif result.ok:
+            icon = ft.Icon(ft.Icons.CHECK_CIRCLE, color=pal["good"], size=16)
+            text = (t("Works: the key is valid and the AI answered.") if new else
+                    t("Connected · answered in {s} s · tested at {time}", s=f"{result.seconds:.1f}",
+                      time=time.strftime("%H:%M", time.localtime(result.when))))
+            colour = pal["good"]
+        else:
+            icon = ft.Icon(ft.Icons.ERROR, color=pal["bad"], size=16)
+            text, colour = t.message(result.message), pal["bad"]
+        return ft.Row([icon, self.text(text, 12, color=colour)], spacing=4, tight=True, wrap=True)
+
+    def _key_entry(self, kid: str):
+        """The listed key with this id, or None."""
+        return next((e for e in keys.entries(self.ai_settings, self.keystore) if e.id == kid), None)
+
+    async def on_use_key(self, e):
+        """A radio button: send AI requests with this key (and its provider)."""
+        entry = self._key_entry(e.control.value)
+        if entry:
+            keys.use(self.ai_settings, entry.id, entry.provider)
+            self.store.save_ai(self.ai_settings)
+            self._refresh_ai_controls()
+            self.page.update()
+
+    async def _check(self, provider: str, value: str):
+        """Run a connection check in the background and refresh the privacy log."""
+        model = self.ai_settings.model if provider == self.ai_settings.provider else ""
+        result = await self.in_thread(self.assistant.check_key, provider, value, model)
+        self.refresh_ai_log()
+        return result
+
+    async def on_check_key(self, e):
+        """Test: check that a saved key can connect."""
+        entry = self._key_entry(e.control.data)
+        value = keys.secret(self.ai_settings, self.keystore, entry.id) if entry else None
+        if not value:
+            return
+        self.key_checks[entry.id] = "busy"
+        self._refresh_keys()
+        self.page.update()
+        self.key_checks[entry.id] = await self._check(entry.provider, value)
+        self._refresh_keys()
+        self.page.update()
+
+    async def on_remove_key(self, e):
+        """The cross: after asking, delete the key from this device."""
+        entry = self._key_entry(e.control.data)
+        if not entry:
+            return
+        t = self.t
+        if not await self.confirm(t("Remove this key?"), t("'{name}' is deleted from this device. You can add it "
+                                                            "again later.", name=entry.name), t("Remove"), t("Cancel")):
+            return
+        keys.remove(self.ai_settings, self.keystore, entry.id)
+        self.key_checks.pop(entry.id, None)
+        self.store.save_ai(self.ai_settings)
+        self._refresh_ai_controls()
+        self.page.update()
+        self.notify(t("API key removed."))
+
+    async def on_new_key_provider(self, e):
+        """Another provider in "Add a key": show its note; an earlier check no longer applies."""
+        self._new_key_note()
+        await self.on_new_key_typed(e)
+
+    async def on_new_key_typed(self, e):
+        """The key being added changed: an earlier check no longer applies."""
+        if self._new_check is not None:
+            self._new_check = None
+            self.new_key_status.content = None
+            self.page.update()
+
+    async def on_check_new_key(self, e):
+        """Test connection: check the key typed in "Add a key" before saving it."""
+        value = (self.new_key.value or "").strip()
+        if not value:
             self.notify(self.t("Enter a key first."), error=True)
             return
-        self.keystore.set(self.ai_settings.provider, key)
-        self.ai_key.value = ""
+        provider = self.new_key_provider.value
+        self.new_key_status.content = self._check_status("busy", new=True)
+        self.page.update()
+        result = await self._check(provider, value)
+        self._new_check = (provider, value, result)
+        self.new_key_status.content = self._check_status(result, new=True)
+        self.page.update()
+
+    async def on_add_key(self, e):
+        """Add key: store the key under its name on this device (the first key is the one in use)."""
+        value = (self.new_key.value or "").strip()
+        if not value:
+            self.notify(self.t("Enter a key first."), error=True)
+            return
+        provider = self.new_key_provider.value
+        entry = keys.add(self.ai_settings, self.keystore, self.new_key_name.value or "", provider, value)
+        if self._new_check and self._new_check[:2] == (provider, value):
+            self.key_checks[entry.id] = self._new_check[2]  # tested just before adding
+        self._new_check = None
+        self.store.save_ai(self.ai_settings)
+        self.new_key.value = self.new_key_name.value = ""
+        self.new_key_status.content = None
         self._refresh_ai_controls()
         self.page.update()
         self.notify(self.t("API key saved on this device."))
-
-    async def on_remove_key(self, e):
-        """Delete the stored API key for the chosen provider."""
-        self.keystore.remove(self.ai_settings.provider)
-        self._refresh_ai_controls()
-        self.page.update()
-        self.notify(self.t("API key removed."))
 
     async def on_clear_cache(self, e):
         """Forget the cached AI answers (they are reused so the same text is never sent twice)."""
