@@ -1213,23 +1213,29 @@ class ConverterApp:
         t, pal = self.t, self.pal
         chosen = self.ui.get("app_font") if self.ui.get("app_font") in APP_FONTS else "atkinson"
 
+        scale = float(self.ui.get("text_scale", 1.0))
+
         def card(key: str) -> ft.Control:
-            """One font to pick: a sample, its name and a short note, all in that font."""
+            """One font to pick: a sample, its name (ticked when chosen) and a short note, all in that font. Every
+            card has the same size, which grows with the app text size so nothing is cut off."""
             family, _, name, note = APP_FONTS[key]
             on = key == chosen
+            title = [ft.Text(t(name), size=self.fs(14), weight=ft.FontWeight.BOLD, font_family=family,
+                             max_lines=1, overflow=ft.TextOverflow.ELLIPSIS, expand=True)]
+            if on:
+                title.append(ft.Icon(ft.Icons.CHECK_CIRCLE, color=pal["primary"], size=self.fs(16)))
             return ft.Container(ft.Column([
-                ft.Row([ft.Text("Aa Bb dq pb 123", size=self.fs(20), font_family=family),
-                        ft.Icon(ft.Icons.CHECK_CIRCLE, color=pal["primary"], size=20) if on else ft.Container()],
-                       alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                ft.Text(t(name), size=self.fs(15), weight=ft.FontWeight.BOLD, font_family=family),
-                ft.Text(t(note), size=self.fs(12), color=pal["muted"], font_family=family)], spacing=4, tight=True),
-                width=250, padding=12, border_radius=12, bgcolor=pal["surface"], data=key, on_click=self.on_app_font,
-                tooltip=t("Use this font in the app"),
+                ft.Text("Aa dq pb", size=self.fs(18), font_family=family, max_lines=1),
+                ft.Row(title, spacing=4),
+                ft.Text(t(note), size=self.fs(11), color=pal["muted"], font_family=family, max_lines=2,
+                        overflow=ft.TextOverflow.ELLIPSIS)], spacing=2, tight=True),
+                width=round(180 * scale), height=round(100 * scale), padding=10, border_radius=10,
+                bgcolor=pal["surface"], data=key, on_click=self.on_app_font, tooltip=t("Use this font in the app"),
                 border=ft.Border.all(2 if on else 1, pal["primary"] if on else pal["outline_variant"]))
 
         return ft.Column([
             self.text(t("App font"), 15, weight=ft.FontWeight.BOLD),
-            ft.Row([card(k) for k in APP_FONTS], wrap=True, spacing=12, run_spacing=12),
+            ft.Row([card(k) for k in APP_FONTS], wrap=True, spacing=10, run_spacing=10),
             self.text(t("Changes the font of the app's menus and buttons. The font of your converted documents is "
                         "chosen in the Convert tab."), 12)], spacing=8)
 
