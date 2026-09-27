@@ -29,7 +29,7 @@ HERE = ROOT / "windows"
 APP_NAME = "DyslexiaConverter"
 # Tesseract language data shipped with the app (the app's document languages + orientation detection)
 LANGUAGES = ["eng", "nld", "deu", "fra", "spa", "ita", "por", "osd"]
-PYINSTALLER_EXTRA = ["--collect-data=spellchecker", "--collect-data=docx", "--collect-data=reportlab",
+PYINSTALLER_EXTRA = ["--collect-data=spellchecker", "--collect-data=pyphen", "--collect-data=docx", "--collect-data=reportlab",
                      "--collect-submodules=dyslexia_converter", "--hidden-import=pytesseract",
                      "--collect-submodules=pyttsx3", "--collect-submodules=comtypes",
                      "--hidden-import=win32com.client", "--hidden-import=pythoncom", "--hidden-import=pywintypes",

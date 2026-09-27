@@ -71,6 +71,16 @@ def _speak_test() -> str:
                 f"{note}")
 
 
+def _dictionary_report() -> str:
+    """Check that the offline dictionary and the syllable patterns were packaged."""
+    from .dictionary import lookup
+
+    entry = lookup("running", "en")
+    if not entry.senses or len(entry.syllables) < 2:
+        return f"Dictionary test FAILED: {len(entry.senses)} meanings, syllables {entry.syllables}"
+    return f"Dictionary test: OK, '{entry.base}' has {len(entry.senses)} meanings, syllables {entry.syllables}"
+
+
 def run(argv: list[str]) -> int:
     src = Path(argv[0]) if argv else None
     out = Path(argv[1]) if len(argv) > 1 else None
@@ -83,6 +93,7 @@ def run(argv: list[str]) -> int:
         lines.append(f"Dyslexia Converter {__version__}")
         lines.append(f"Tesseract: {find_tesseract()}")
         lines.append(_speech_report())
+        lines.append(_dictionary_report())
         if src is None or out is None:
             raise SystemExit("usage: --selftest input.pdf output.pdf [log.txt]")
         session = pipeline.load(src)

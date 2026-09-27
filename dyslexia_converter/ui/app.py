@@ -1398,6 +1398,16 @@ class ConverterApp:
                            on_sentence=lambda si: post(self._show_word(si, 0)),
                            on_done=lambda finished: post(self._read_done(finished)))
 
+    def say_word(self, text: str) -> None:
+        """Say one word (from the word card in focus mode); stops reading aloud first."""
+        if not text or not self._speech_allowed():
+            return
+        if self._reading:
+            self._reading = False
+            self._update_read_buttons()
+        self.speaker.start([speech.Sentence([speech.Word(text, 0, [])])], 0,
+                           float(self.ui.get("read_speed", 1.0)), self._voice())
+
     async def _show_word(self, si: int, wi: int) -> None:
         """Highlight the sentence and word being read; turn the page when the reading moves on."""
         if not self._reading or self._read_units is None or si >= len(self._read_units):

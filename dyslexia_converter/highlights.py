@@ -1,4 +1,4 @@
-"""Coloured highlights the reader adds in focus mode, kept per document on this device.
+"""Coloured highlights (with notes) the reader adds in focus mode, kept per document on this device.
 
 A highlight is a run of words in reading order (word numbers counted through the whole converted
 document), with a colour. Storing word numbers instead of page positions keeps highlights on the same
@@ -34,6 +34,7 @@ class Highlight:
     end: int  # last word number (inclusive)
     colour: str
     words: str = ""  # the words highlighted, to find them again after changes
+    note: str = ""  # the reader's own comment on these words
 
 
 @dataclass
@@ -115,11 +116,18 @@ def page_marks(highlights: list[Highlight], words: list[tuple[int, str, list[Rec
 
 
 def add(highlights: list[Highlight], a: int, b: int, colour: str,
-        words: list[tuple[int, str, list[Rect]]]) -> list[Highlight]:
-    """Mark words a..b with a colour (replacing other colours there)."""
+        words: list[tuple[int, str, list[Rect]]], note: str = "") -> list[Highlight]:
+    """Mark words a..b with a colour (replacing other colours there); a note on a highlight that is
+    covered completely carries over."""
     a, b = min(a, b), max(a, b)
+    if not note:
+        for h in highlights:
+            where = resolve(h, words)
+            if h.note and where and a <= where[0] and where[1] <= b:
+                note = h.note
+                break
     out = erase(highlights, a, b, words)
-    out.append(Highlight(a, b, colour, _text(words, a, b)))
+    out.append(Highlight(a, b, colour, _text(words, a, b), note))
     return sorted(out, key=lambda h: h.start)
 
 
@@ -135,13 +143,66 @@ def erase(highlights: list[Highlight], a: int, b: int,
             continue
         s, e = where
         if e < a or s > b:
-            out.append(Highlight(s, e, h.colour, h.words))
+            out.append(Highlight(s, e, h.colour, h.words, h.note))
             continue
+        note = h.note  # a note stays with the first part that is left
         if s < a:
-            out.append(Highlight(s, a - 1, h.colour, _text(words, s, a - 1)))
+            out.append(Highlight(s, a - 1, h.colour, _text(words, s, a - 1), note))
+            note = ""
         if e > b:
-            out.append(Highlight(b + 1, e, h.colour, _text(words, b + 1, e)))
+            out.append(Highlight(b + 1, e, h.colour, _text(words, b + 1, e), note))
     return out
+
+
+def at(highlights: list[Highlight], n: int, words: list[tuple[int, str, list[Rect]]]) -> Optional[int]:
+    """Which highlight (its index in the list) covers word ``n``."""
+    for k, h in enumerate(highlights):
+        where = resolve(h, words)
+        if where and where[0] <= n <= where[1]:
+            return k
+    return None
+
+
+def set_note(highlights: list[Highlight], k: int, note: str) -> list[Highlight]:
+    out = list(highlights)
+    h = out[k]
+    out[k] = Highlight(h.start, h.end, h.colour, h.words, note.strip())
+    return out
+
+
+def recolour(highlights: list[Highlight], k: int, colour: str) -> list[Highlight]:
+    out = list(highlights)
+    h = out[k]
+    out[k] = Highlight(h.start, h.end, colour, h.words, h.note)
+    return out
+
+
+def note_marks(highlights: list[Highlight], words: list[tuple[int, str, list[Rect]]],
+               page: int) -> list[tuple[float, float]]:
+    """Where to show the note sign of each highlight with a note: the top right of its first band."""
+    out = []
+    for h in highlights:
+        where = resolve(h, words) if h.note else None
+        if where is None:
+            continue
+        first = next((p for p, _, rs in words[where[0]:where[1] + 1] if rs), None)
+        rects = [r for p, _, rs in words[where[0]:where[1] + 1] if p == first for r in rs]
+        if first == page and rects:
+            band = bands(rects)[0]
+            out.append((band[2], band[1]))
+    return out
+
+
+def lines_on_page(words: list[tuple[int, str, list[Rect]]], page: int) -> list[tuple[float, float]]:
+    """The lines of text on a page, top to bottom, as (top, bottom) in points (for the reading ruler)."""
+    lines: list[list[float]] = []
+    for r in sorted((r for p, _, rs in words if p == page for r in rs), key=lambda r: (r[1] + r[3]) / 2):
+        mid = (r[1] + r[3]) / 2
+        if lines and abs((lines[-1][0] + lines[-1][1]) / 2 - mid) < (r[3] - r[1]) * 0.5:
+            lines[-1][0], lines[-1][1] = min(lines[-1][0], r[1]), max(lines[-1][1], r[3])
+        else:
+            lines.append([r[1], r[3]])
+    return [tuple(x) for x in lines]
 
 
 def apply_to_pdf(pdf: bytes, highlights: list[Highlight], skip_pages: frozenset = frozenset()) -> bytes:
@@ -155,14 +216,24 @@ def apply_to_pdf(pdf: bytes, highlights: list[Highlight], skip_pages: frozenset 
     words = document_words(reading_units(pdf, skip_pages=skip_pages))
     doc = pymupdf.open(stream=bytes(pdf), filetype="pdf")
     try:
-        for pno in range(doc.page_count):
-            page = doc[pno]  # kept while its annotations are made
-            for rect, (r, g, b, a) in page_marks(highlights, words, pno):
-                # the see-through marker colour as it looks over white paper (highlights multiply)
-                colour = tuple(1 - a / 255 * (1 - c / 255) for c in (r, g, b))
-                annot = page.add_highlight_annot(pymupdf.Rect(rect))
-                annot.set_colors(stroke=colour)
-                annot.update()
+        pages = [doc[p] for p in range(doc.page_count)]  # kept while their annotations are made
+        for h in highlights:
+            where = resolve(h, words)
+            if where is None:
+                continue
+            r, g, b, a = COLOURS.get(h.colour, COLOURS["yellow"])
+            # the see-through marker colour as it looks over white paper (highlights multiply)
+            colour = tuple(1 - a / 255 * (1 - c / 255) for c in (r, g, b))
+            note = h.note
+            for pno in sorted({p for p, _, rs in words[where[0]:where[1] + 1] if rs}):
+                rects = [rr for p, _, rs in words[where[0]:where[1] + 1] if p == pno for rr in rs]
+                for band in bands(rects):
+                    annot = pages[pno].add_highlight_annot(pymupdf.Rect(band))
+                    annot.set_colors(stroke=colour)
+                    if note:  # the note becomes the highlight's comment, shown by PDF readers
+                        annot.set_info(content=note, title="Note")
+                        note = ""
+                    annot.update()
         return doc.tobytes(garbage=0, deflate=True)
     finally:
         doc.close()
@@ -193,7 +264,8 @@ class HighlightStore:
         out = []
         for d in self._read().get(key, []):
             try:
-                out.append(Highlight(int(d["start"]), int(d["end"]), str(d["colour"]), str(d.get("words", ""))))
+                out.append(Highlight(int(d["start"]), int(d["end"]), str(d["colour"]), str(d.get("words", "")),
+                                     str(d.get("note", ""))))
             except (KeyError, TypeError, ValueError):
                 continue
         return out

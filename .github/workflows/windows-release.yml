@@ -62,6 +62,9 @@ jobs:
           if (Select-String -Path selftest\report.txt -Pattern "Speech test FAILED" -Quiet) {
             throw "the packaged app could not read aloud"
           }
+          if (Select-String -Path selftest\report.txt -Pattern "Dictionary test FAILED" -Quiet) {
+            throw "the offline dictionary or the syllable patterns are missing from the build"
+          }
 
       - name: Build installer
         shell: pwsh
