@@ -75,12 +75,18 @@ def test_core_messages_are_translated(msg):
 
 def test_core_messages_still_exist_in_the_core():
     """If the core's wording changes, the patterns above must change with it."""
+    import re
+
     src = "".join((PKG / f).read_text(encoding="utf-8") for f in
                   ["pipeline.py", "extract/pdf_reader.py", "fonts.py", "ai/assistant.py"])
+    src = re.sub(r'"\s*\n\s*f?"', "", src)  # a message split over source lines reads as one
     for piece in ["scanned page(s) are kept as pictures because no OCR engine is ",
                   "used the text the scanner stored in the PDF, ",
-                  "of the PDF is \"\n                            \"unreadable, so (parts of) these pages are shown",
-                  "of the PDF contains \"\n                            \"errors. Install Tesseract OCR for a cleaner",
+                  "of the PDF is unreadable, so (parts of) these pages are shown",
+                  "of the PDF contains errors. Install Tesseract OCR for a cleaner",
+                  "of the PDF have an unusual layout (a box or quote across the columns), so the reading order may "
+                  "be mixed up there. Compare with the original in the Both view.",
+                  "page(s) with an unusual layout",
                   "Read {done} of {scans_total} scanned page(s){eta}", "Reading page {pno + 1} of {n}",
                   "Running OCR on page {pno + 1} of {n}", "is not installed on this device; using the similar free",
                   "Using the saved text recognition of this document", "Detecting document structure",

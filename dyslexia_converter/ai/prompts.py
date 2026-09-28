@@ -138,6 +138,54 @@ LANGUAGE_NAMES = {"en": "English", "nl": "Dutch", "fr": "French", "de": "German"
                   "it": "Italian"}  # named in full at the end of a summary request: a bare code is easily missed
 
 
+LAYOUT = Task(
+    name="layout",
+    system=(
+        "You help a tool that makes documents easier to read for people with dyslexia. You never rewrite text: "
+        "you only put the pieces of one page in reading order.\n\n"
+        "Each numbered line is one piece of the page: where it is (x from its left to its right edge and y from "
+        "its top to its bottom, in % of the page), its font size, and its first and last words (… marks words "
+        "left out). [figure] is a picture.\n"
+        "Put all pieces in reading order. The title and headings go where they belong. Running text is read "
+        "column by column: the left column from top to bottom, then the next column. A piece whose last words "
+        "run on into the first words of another piece is followed by that piece. Pull quotes (large text that "
+        "repeats a sentence of the article), side boxes, adverts, photo credits and page labels go after the "
+        "running text, in the order they appear. Never leave a piece out.\n"
+        'Answer with JSON: {"o": [piece numbers in reading order]}.\n\n'
+        "Example\n"
+        "0 | x 5-95 y 8-12 | 24pt | THE HIDDEN COST OF SLEEP\n"
+        "1 | x 5-48 y 20-45 | 9pt | Most people think that a good night's rest … the brain clears waste while we\n"
+        "2 | x 52-95 y 20-45 | 9pt | adults who slept less than six hours … were more likely to\n"
+        "3 | x 30-70 y 46-52 | 16pt | “THE BRAIN CLEARS WASTE WHILE WE SLEEP.”\n"
+        "4 | x 5-28 y 53-80 | 9pt | sleep, researchers now say. The study followed … and found that\n"
+        "5 | x 72-95 y 53-80 | 9pt | forget words. Not everyone agrees … most people sleep less.\n"
+        "6 | x 5-48 y 82-92 | 8pt | SUBSCRIBE TODAY … and save 30%\n"
+        "7 | x 97-99 y 30-60 | 6pt | PHOTO: J. DOE\n"
+        "8 | x 52-95 y 82-92 | [figure]\n"
+        'Answer: {"o": [0, 1, 4, 2, 5, 8, 3, 6, 7]}'
+    ),
+    schema={"type": "object", "additionalProperties": False, "required": ["o"],
+            "properties": {"o": {"type": "array", "items": {"type": "integer"}}}},
+    answer_hint='Answer with JSON only: {"o": [piece numbers in reading order]}',
+    tokens_per_item=4,
+)
+
+
+def layout_prompt(pieces: list[tuple[float, float, float, float, float, str | None]]) -> str:
+    """One page for the layout task: per piece its place (in % of the page: x0, y0, x1, y1), font size and the
+    first and last words of its text (None for a picture)."""
+    rows = []
+    for n, (x0, y0, x1, y1, size, text) in enumerate(pieces):
+        place = f"x {round(x0)}-{round(x1)} y {round(y0)}-{round(y1)}"
+        if text is None:
+            rows.append(f"{n} | {place} | [figure]")
+            continue
+        words = text.split()
+        shown = " ".join(words) if len(words) <= 18 else " ".join(words[:10]) + " … " + " ".join(words[-6:])
+        rows.append(f"{n} | {place} | {size:g}pt | {shown}")
+    return "\n".join(rows)
+
+
 def summary_prompt(text: str, language: str, detailed: bool, plain: bool) -> str:
     """The request for one summary: the options, then the text."""
     # the number of points is spelled out here too, and again after the text: some models skip the rule

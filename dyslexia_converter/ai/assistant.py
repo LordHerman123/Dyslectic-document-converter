@@ -28,7 +28,8 @@ from . import keys
 from .keystore import KeyStore, redact
 from .log import LogEntry, RequestLog
 from .privacy import mask, window
-from .prompts import CITATIONS, OCR, SUMMARY, Task, citation_prompt, ocr_prompt, summary_prompt
+from .prompts import (CITATIONS, LAYOUT, OCR, SUMMARY, Task, citation_prompt, layout_prompt, ocr_prompt,
+                      summary_prompt)
 from .providers import AIError, Reply, make_provider
 
 PRIVACY_NOTICE = (
@@ -66,6 +67,7 @@ class Request:
     prompt: str
     keys: list[str]  # cache key of each item, in order
     items: list  # what each numbered line is about (used to apply the answer)
+    answer_items: int = 0  # how many numbers the answer lists, when not one per key (the pieces of a page)
 
     @property
     def system(self) -> str:
@@ -75,7 +77,7 @@ class Request:
     @property
     def max_tokens(self) -> int:
         """The answer length to allow: a little for the frame plus a fixed amount per snippet."""
-        return 64 + self.task.tokens_per_item * len(self.keys)
+        return 64 + self.task.tokens_per_item * (self.answer_items or len(self.keys))
 
 
 class AICache:
@@ -245,6 +247,41 @@ class AIAssistant:
         result.message = redact(result.message, value)
         return result
 
+    # ------------------------------------------------------------------ unusual page layouts
+    def plan_layout(self, pages: dict[int, list]) -> tuple[list[Request], dict[int, list[int]]]:
+        """``pages``: page number -> its pieces (x0, y0, x1, y1 in % of the page, font size, text or None for a
+        picture). One request per page, with the text masked and only the first and last words of each piece;
+        orders known from earlier answers are reused."""
+        known: dict[int, list[int]] = {}
+        requests = []
+        for page, ps in pages.items():
+            prompt = layout_prompt([(x0, y0, x1, y1, size, mask(text) if text is not None else None)
+                                    for x0, y0, x1, y1, size, text in ps])
+            ck = self._item_key("layout", prompt)
+            hit = self.cache.get(ck)
+            if hit is not None:
+                known[page] = list(hit)
+            else:
+                requests.append(Request(LAYOUT, prompt, [ck], [(page, len(ps))], answer_items=len(ps)))
+        return requests, known
+
+    def order_layout(self, pages: dict[int, list],
+                     progress: Optional[Callable[[str, float], None]] = None) -> dict[int, list[int]]:
+        """The reading order of the pieces of pages with an unusual layout (page number -> piece numbers). An
+        answer that would lose or repeat text is not used: that page keeps the local order."""
+        requests, orders = self.plan_layout(pages)
+        if orders:
+            self.usage.append(UsageEntry("layout", len(orders), True))
+        for n, req in enumerate(requests):
+            if progress:
+                progress("Asking AI about unusual page layouts", n / max(1, len(requests)))
+            page, count = req.items[0]
+            order = checked_order(self.send(req).data.get("o"), count)
+            if order is not None:
+                orders[page] = order
+                self.cache.put(req.keys[0], order)
+        return orders
+
     # ------------------------------------------------------------------ summaries
     def summary_words(self, text: str) -> int:
         """How many words a summary of ``text`` sends (to tell the user before sending)."""
@@ -354,6 +391,17 @@ def _summary_parts(text: str, size: int = SUMMARY_WORDS) -> list[str]:
         parts.append(" ".join(words[start:end]))
         start = end
     return parts
+
+
+def checked_order(answer, count: int) -> Optional[list[int]]:
+    """The AI's reading order of ``count`` pieces, if it keeps every piece exactly once: an unknown or repeated
+    number makes the answer unusable (None); pieces it left out are added at the end in their local order."""
+    if not isinstance(answer, list) or not all(isinstance(i, int) and 0 <= i < count for i in answer):
+        return None
+    if len(set(answer)) != len(answer):
+        return None
+    given = set(answer)
+    return list(answer) + [i for i in range(count) if i not in given]
 
 
 def _apply_ocr(c: Correction, verdict: dict) -> None:

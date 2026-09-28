@@ -15,7 +15,7 @@ from typing import Callable, Optional, Union
 
 from rapidfuzz import fuzz
 
-from ..extract.layout import reading_order
+from ..extract.layout import interleaved, pieces, reading_order
 from ..extract.pdf_reader import CAPTION_RE, RawDocument, RawFigure, RawLine, RawPage, RawTable, overlap_ratio
 from ..model import Block, BlockKind, Document, OcrWordConfidence, StyleRange
 
@@ -136,8 +136,15 @@ class StructureDetector:
         return f"b{self._counter}"
 
     # --------------------------------------------------------------------- main
-    def detect(self, raw: RawDocument, source_path: str = "") -> Document:
-        """Build the structured document from what was read (``source_path`` is kept for reference)."""
+    def detect(self, raw: RawDocument, source_path: str = "", orders: Optional[dict[int, list[int]]] = None
+               ) -> Document:
+        """Build the structured document from what was read (``source_path`` is kept for reference).
+
+        ``orders``: for pages with an unusual layout, the reading order of their pieces (from the optional AI
+        layout check); every other page is read in the local order. The pieces of each unusual page are kept
+        in ``layout_pieces``.
+        """
+        self.layout_pieces: dict[int, list[list[Item]]] = {}
         doc = Document(source_path=source_path, pages=[p.info for p in raw.pages],
                        title=raw.title, author=raw.author, toc=raw.toc, warnings=list(raw.warnings))
         all_lines = [l for p in raw.pages for l in p.lines]
@@ -158,6 +165,15 @@ class StructureDetector:
             items: list[Item] = [l for l in page_body if id(l) not in fn_ids]
             items += page.figures + page.tables
             ordered = reading_order(items)
+            # a page whose columns are probably mixed up is reported; its order only changes with an AI order
+            page.info.unusual_layout, page.info.ai_layout = interleaved(ordered), False
+            if page.info.unusual_layout:
+                ps = pieces(items)
+                self.layout_pieces[page.info.number] = ps
+                order = (orders or {}).get(page.info.number)
+                if order is not None and sorted(order) == list(range(len(ps))):
+                    ordered = [it for n in order for it in ps[n]]
+                    page.info.unusual_layout, page.info.ai_layout = False, True
             page_blocks = self._build_blocks(ordered, b_size, page)
             for l in page.lines:
                 if id(l) in furniture:

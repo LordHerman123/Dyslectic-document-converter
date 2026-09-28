@@ -757,6 +757,8 @@ class ConverterApp:
         self.ai_cit = ft.Checkbox(label=t("Uncertain citations"), value=a.use_for_citations,
                                   on_change=self.on_ai_tasks)
         self.ai_ocr = ft.Checkbox(label=t("Uncertain OCR words"), value=a.use_for_ocr, on_change=self.on_ai_tasks)
+        self.ai_layout = ft.Checkbox(label=t("Pages with an unusual layout (reading order)"), value=a.use_for_layout,
+                                     on_change=self.on_ai_tasks)
         self._refresh_ai_controls()
         return ft.Container(ft.Column([
             self.text(t("AI assistance (optional)"), 18, weight=ft.FontWeight.BOLD),
@@ -770,7 +772,7 @@ class ConverterApp:
             self._add_key_box(),
             ft.Row([self.ai_model], wrap=True),
             self.text(t("Your AI provider may charge you for API usage."), 13, weight=ft.FontWeight.BOLD),
-            self.text(t("Use AI for:"), 14), ft.Row([self.ai_cit, self.ai_ocr], wrap=True),
+            self.text(t("Use AI for:"), 14), ft.Row([self.ai_cit, self.ai_ocr, self.ai_layout], wrap=True),
             ft.Row([ft.FilledButton(t("Ask AI about uncertain items now"), icon=ft.Icons.SMART_TOY,
                                     on_click=self.on_run_ai),
                     ft.OutlinedButton(t("Clear AI cache"), on_click=self.on_clear_cache)], wrap=True),
@@ -808,7 +810,8 @@ class ConverterApp:
         """One privacy-log entry, expandable to show exactly what was sent and received."""
         import time
         t = self.t
-        task = {"citations": t("Citations"), "summary": t("Summary"), "check": t("Connection check")}.get(
+        task = {"citations": t("Citations"), "summary": t("Summary"), "check": t("Connection check"),
+                "layout": t("Page layout")}.get(
             e.task, t("OCR words"))
         stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(e.when))
         title = f"{stamp} · {task} · {e.provider} / {e.model}"
@@ -894,6 +897,7 @@ class ConverterApp:
         """Remember what AI may be used for (citations, OCR words)."""
         self.ai_settings.use_for_citations = bool(self.ai_cit.value)
         self.ai_settings.use_for_ocr = bool(self.ai_ocr.value)
+        self.ai_settings.use_for_layout = bool(self.ai_layout.value)
         self.store.save_ai(self.ai_settings)
 
     # ------------------------------------------------------------------ API keys
@@ -1142,7 +1146,8 @@ class ConverterApp:
                  ft.Text(t("This is exactly the document text that will be sent:"), size=self.fs(14),
                          weight=ft.FontWeight.BOLD)]
         for r in requests:
-            label = t("Citations") if r.task.name == "citations" else t("OCR words")
+            label = {"citations": t("Citations"), "layout": t("Page layout: the first and last words of each "
+                                                              "piece of the page")}.get(r.task.name, t("OCR words"))
             lines.append(ft.Text(label, size=self.fs(13), weight=ft.FontWeight.BOLD))
             lines.append(ft.Container(ft.Text(r.prompt, size=self.fs(12), selectable=True),
                                       padding=8, border_radius=6, bgcolor=ft.Colors.SURFACE_CONTAINER_LOW))

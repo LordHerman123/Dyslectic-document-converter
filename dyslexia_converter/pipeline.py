@@ -52,6 +52,36 @@ class Session:
     ai_citation_decisions: dict[str, bool] = field(default_factory=dict)
     ai_log: list[str] = field(default_factory=list)
     page_map: dict[int, list[int]] = field(default_factory=dict)  # converted page -> original pages (preview)
+    layout_orders: dict[int, list[int]] = field(default_factory=dict)  # page -> reading order from the AI
+    # how to build the document again with a reading order from the AI, and the pieces of unusual pages
+    _build: Optional[Callable] = field(default=None, repr=False)
+    _layout_pieces: dict = field(default_factory=dict, repr=False)
+
+    # ------------------------------------------------------------ unusual page layouts
+    def layout_pages(self) -> dict[int, list]:
+        """Pages whose columns are probably mixed up (and have no AI order yet): page number -> its pieces as
+        the AI layout check sees them (place in % of the page, font size, text or None for a picture)."""
+        out = {}
+        for page in self.document.pages:
+            ps = self._layout_pieces.get(page.number)
+            if ps and page.unusual_layout:
+                out[page.number] = [_piece_view(g, page.width, page.height) for g in ps]
+        return out
+
+    def apply_layout(self, orders: dict[int, list[int]], settings: FormatSettings) -> int:
+        """Build the document again with these reading orders (page -> piece numbers); returns how many pages
+        changed. Decisions already made on OCR corrections of the same words are kept."""
+        if not orders or self._build is None:
+            return 0
+        self.layout_orders.update(orders)
+        old = self.document
+        kept = {(c.original, c.replacement): c.status for c in old.corrections if c.status in ("accepted", "rejected")}
+        self.document, self._layout_pieces = self._build(self.layout_orders)
+        if self.document.ocr_used:
+            self.recompute_corrections(settings)
+            for c in self.document.corrections:
+                c.status = kept.get((c.original, c.replacement), c.status)
+        return len(orders)
 
     # ------------------------------------------------------------ corrections
     def recompute_corrections(self, settings: FormatSettings) -> None:
@@ -208,6 +238,9 @@ class Session:
         """The requests that asking the AI now would send (answers known from earlier are not sent again)."""
         cands, words = self._ai_items(assistant, settings)
         requests = []
+        pages = self.layout_pages() if getattr(assistant.settings, "use_for_layout", False) else {}
+        if pages:
+            requests += assistant.plan_layout(pages)[0]
         if cands:
             requests += assistant.plan_citations(cands)[0]
         if words:
@@ -217,9 +250,15 @@ class Session:
     def run_ai(self, assistant, settings: FormatSettings, progress: Optional[ProgressFn] = None) -> str:
         """Ask the (optional) AI about items local rules could not decide.
 
-        Only a few words around each uncertain item are sent. Returns a short summary for the user.
+        Only a few words around each uncertain item are sent. Pages with an unusual layout go first (the first
+        and last words of each piece of the page), so the other questions are asked about the text in its new
+        order. Returns a short summary for the user.
         """
         sent = []
+        pages = self.layout_pages() if getattr(assistant.settings, "use_for_layout", False) else {}
+        if pages:
+            self.apply_layout(assistant.order_layout(pages, progress), settings)
+            sent.append(f"{len(pages)} page(s) with an unusual layout")
         cands, words = self._ai_items(assistant, settings)
         if cands:
             self.ai_citation_decisions.update(assistant.classify_citations(cands, progress))
@@ -375,6 +414,20 @@ def _garbled_scanner_pages(raw, dictionary: Dictionary, threshold: float = 0.9) 
     return [pg for pg, (good, n) in sorted(scores.items()) if n >= 20 and good / n < threshold]
 
 
+def _piece_view(group: list, width: float, height: float) -> tuple:
+    """A piece of a page as the AI layout check sees it: (x0, y0, x1, y1 in % of the page, font size, its text,
+    or None for a picture or table)."""
+    x0 = min(it.bbox[0] for it in group)
+    y0 = min(it.bbox[1] for it in group)
+    x1 = max(it.bbox[2] for it in group)
+    y1 = max(it.bbox[3] for it in group)
+    texts = [it.text for it in group if isinstance(getattr(it, "text", None), str)]
+    sizes = sorted(it.size for it in group if isinstance(getattr(it, "text", None), str))
+    w, h = max(1.0, width), max(1.0, height)
+    return (100 * x0 / w, 100 * y0 / h, 100 * x1 / w, 100 * y1 / h, round(sizes[len(sizes) // 2]) if sizes else 0,
+            " ".join(texts) if texts else None)
+
+
 def _page_list(pages: list[int]) -> str:
     """[3, 4, 5, 9] -> '3-5, 9'"""
     out, start, prev = [], None, None
@@ -437,21 +490,33 @@ def load(path: str | Path, settings: Optional[FormatSettings] = None, ocr_engine
 
     if progress:
         progress("Detecting document structure", 0.9)
-    doc = StructureDetector(dehyphenator(dictionary), word_rejoiner(dictionary)).detect(raw, path)
-    doc.language = language
-
     pictured = sorted({p.info.source_page + 1 for p in raw.pages
                        if any(f.image.kind == "unreadable-text" for f in p.figures)})
-    if pictured:
-        doc.warnings.append(f"The text the scanner stored for page(s) {_page_list(pictured)} of the PDF is "
-                            "unreadable, so (parts of) these pages are shown as pictures. Install Tesseract OCR "
-                            "to convert them to text.")
     bad = [pg for pg in _garbled_scanner_pages(raw, dictionary) if pg not in pictured]
-    if bad:
-        doc.warnings.append(f"The text the scanner stored for page(s) {_page_list(bad)} of the PDF contains "
-                            "errors. Install Tesseract OCR for a cleaner result.")
 
+    def build(orders: Optional[dict[int, list[int]]] = None) -> tuple[Document, dict]:
+        """The structured document (with the AI's reading order for these pages) and the pieces of every page
+        with an unusual layout."""
+        detector = StructureDetector(dehyphenator(dictionary), word_rejoiner(dictionary))
+        doc = detector.detect(raw, path, orders)
+        doc.language = language
+        if pictured:
+            doc.warnings.append(f"The text the scanner stored for page(s) {_page_list(pictured)} of the PDF is "
+                                "unreadable, so (parts of) these pages are shown as pictures. Install Tesseract "
+                                "OCR to convert them to text.")
+        if bad:
+            doc.warnings.append(f"The text the scanner stored for page(s) {_page_list(bad)} of the PDF contains "
+                                "errors. Install Tesseract OCR for a cleaner result.")
+        unusual = sorted({p.info.source_page + 1 for p in raw.pages if p.info.unusual_layout})
+        if unusual:
+            doc.warnings.append(f"Page(s) {_page_list(unusual)} of the PDF have an unusual layout (a box or "
+                                "quote across the columns), so the reading order may be mixed up there. Compare "
+                                "with the original in the Both view.")
+        return doc, detector.layout_pieces
+
+    doc, layout_pieces = build()
     session = Session(doc, custom)
+    session._build, session._layout_pieces = build, layout_pieces
     if doc.ocr_used:
         if progress:
             progress("Checking OCR text against the dictionary", 0.95)
