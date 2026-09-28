@@ -28,13 +28,14 @@ MESSAGE_PATTERNS: list[tuple[str, re.Pattern]] = [(k, re.compile(p)) for k, p in
                  r"these pages are shown as pictures\. Install Tesseract OCR to convert them to text\.$"),
     ("garbled", r"^The text the scanner stored for page\(s\) (.+?) of the PDF contains errors\. "
                 r"Install Tesseract OCR for a cleaner result\.$"),
-    ("unusual_layout", r"^Page\(s\) (.+?) of the PDF have an unusual layout \(a box or quote across the columns\), "
-                       r"so the reading order may be mixed up there\. Compare with the original in the Both view\.$"),
+    ("unusual_layout", r"^Page\(s\) (.+?) of the PDF have an unusual layout \(a box or quote across the columns\); "
+                       r"the app read them column by column\. Compare with the original in the Both view\.$"),
     ("sent_to_ai", r"^Sent to AI: (.+)$"),
     ("n_citations", r"^(\d+) uncertain citation\(s\)$"),
     ("n_ocr_words", r"^(\d+) uncertain OCR word\(s\)$"),
     ("n_layout_pages", r"^(\d+) page\(s\) with an unusual layout$"),
     ("font_substitute", r"^(.+) is not installed on this device; using the similar free font (.+) instead\.$"),
+    ("check_part", r"^Checking part (\d+) of (\d+)$"),
 ]]
 
 

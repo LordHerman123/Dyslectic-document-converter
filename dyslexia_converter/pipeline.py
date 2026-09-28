@@ -11,10 +11,11 @@ from __future__ import annotations
 
 import re
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Iterable, Optional
 
+from . import check
 from .extract.ocr import OcrEngine, default_engine
 from .extract.pdf_reader import read_pdf
 from .model import Correction, Document
@@ -53,27 +54,182 @@ class Session:
     ai_log: list[str] = field(default_factory=list)
     page_map: dict[int, list[int]] = field(default_factory=dict)  # converted page -> original pages (preview)
     layout_orders: dict[int, list[int]] = field(default_factory=dict)  # page -> reading order from the AI
+    # the whole-document AI check: what it found (fixed or not), and how many parts it could not check
+    check_findings: list[check.Finding] = field(default_factory=list)
+    check_failed: int = 0
+    check_reordered: list[int] = field(default_factory=list)  # pages the AI put in order from a finding
+    check_run: bool = False  # whether the AI check ran on this document
     # how to build the document again with a reading order from the AI, and the pieces of unusual pages
     _build: Optional[Callable] = field(default=None, repr=False)
     _layout_pieces: dict = field(default_factory=dict, repr=False)
 
+    # ------------------------------------------------------------ the whole-document AI check
+    def view(self) -> Document:
+        """The document as it is laid out: with the structure fixes the reader chose from the AI check."""
+        return check.view(self.document, self.check_findings)
+
+    def check_parts(self) -> list:
+        """The document in the parts the AI check sends (see :func:`check.parts`)."""
+        return check.parts(self.view())
+
+    def check_preview(self, assistant) -> tuple[list, int]:
+        """What checking now would send: the requests (parts answered before are not sent again) and the number
+        of words checked."""
+        doc = self.view()
+        ps = check.parts(doc)
+        requests = assistant.plan_check([[(n, code, page, text) for n, _, code, page, text in p] for p in ps],
+                                        doc.language)[0]
+        return requests, check.word_count(doc)
+
+    def run_check(self, assistant, progress: Optional[ProgressFn] = None) -> list[check.Finding]:
+        """Let the AI read the converted text and point out conversion mistakes. Every finding is checked
+        against the text; nothing is changed until the reader fixes it. Findings already fixed are kept."""
+        doc = self.view()
+        ps = check.parts(doc)
+        self.check_run = True
+        answers, self.check_failed = assistant.check_parts(
+            [[(n, code, page, text) for n, _, code, page, text in p] for p in ps], progress, doc.language)
+        kept = [f for f in self.check_findings if f.applied]
+        ids = {f.id for f in kept}
+        for i, part in enumerate(ps):
+            for f in check.findings_from(answers.get(i), part, doc, self.document):
+                if f.id not in ids:
+                    ids.add(f.id)
+                    kept.append(f)
+        order = {b.id: n for n, b in enumerate(self.document.blocks)}
+        kept.sort(key=lambda f: (order.get(f.block_id.split("~")[0], 0), f.start))
+        self.check_findings = kept
+        return kept
+
+    def finding(self, finding_id: str) -> Optional[check.Finding]:
+        """The finding with this id, or None."""
+        return next((f for f in self.check_findings if f.id == finding_id), None)
+
+    def fix_finding(self, finding_id: str) -> bool:
+        """Make the fix of one finding (returns False when it cannot: e.g. you already changed that text)."""
+        f = self.finding(finding_id)
+        if f is None or f.applied or not f.fixable:
+            return False
+        if f.structural:
+            if any(g.applied and g.structural and g.block_id == f.block_id for g in self.check_findings):
+                return False  # one change of structure per block
+            f.applied = True
+            return True
+        b = self.document.block(f.block_id)
+        if b is None or not (0 <= f.start < f.end <= len(b.text)):
+            return False
+        c = Correction(id=f"check-{f.id}", block_id=f.block_id, start=f.start, end=f.end,
+                       original=b.text[f.start:f.end], replacement=f.replacement, confidence=1.0, status="accepted",
+                       source="check")
+        if any(u.source in ("user", "check") and u.applied and u.overlaps(c) for u in self.document.corrections):
+            return False
+        self.document.corrections.append(c)
+        f.applied = True
+        return True
+
+    def undo_finding(self, finding_id: str) -> None:
+        """Undo the fix of one finding: the converted text comes back as it was."""
+        f = self.finding(finding_id)
+        if f is None:
+            return
+        self.document.corrections = [c for c in self.document.corrections if c.id != f"check-{f.id}"]
+        f.applied = False
+
+    def fix_safe_findings(self) -> int:
+        """Fix every broken or joined word (fixes that change only spaces and hyphens); returns how many."""
+        return sum(1 for f in self.check_findings if f.safe and not f.applied and self.fix_finding(f.id))
+
+    def undo_all_findings(self, settings: Optional[FormatSettings] = None) -> int:
+        """Undo every fix made from the check (with ``settings``: also the pages the AI put in order from a
+        finding); returns how many."""
+        done = [f for f in self.check_findings if f.applied]
+        for f in done:
+            self.undo_finding(f.id)
+        pages = list(self.check_reordered) if settings is not None else []
+        for page in pages:
+            self.undo_reorder(page, settings)
+        return len(done) + len(pages)
+
+    def check_and_fix(self, assistant, settings: FormatSettings, progress: Optional[ProgressFn] = None
+                      ) -> tuple[int, list[int]]:
+        """Let the AI go over the whole document: check it, let the AI put every page with text in the wrong place
+        in reading order (those pages are then checked again), and make every fix that was found. Everything
+        stays undoable. Returns how many fixes were made and which pages were put in order."""
+        self.run_check(assistant, progress)
+        pages = []
+        for f in [f for f in self.check_findings if f.kind == "order"]:
+            if f in self.check_findings:  # not already gone with an earlier order of its page
+                page = self.reorder_page(f.id, assistant, settings, progress)
+                if page is not None:
+                    pages.append(page)
+        if pages:
+            self.run_check(assistant, progress)  # only the parts whose text changed are sent again
+        fixed = sum(1 for f in list(self.check_findings) if f.fixable and not f.applied and self.fix_finding(f.id))
+        return fixed, pages
+
     # ------------------------------------------------------------ unusual page layouts
-    def layout_pages(self) -> dict[int, list]:
-        """Pages whose columns are probably mixed up (and have no AI order yet): page number -> its pieces as
-        the AI layout check sees them (place in % of the page, font size, text or None for a picture)."""
+    def layout_pages(self, extra: Iterable[int] = ()) -> dict[int, list]:
+        """Pages whose columns are probably mixed up (and have no AI order yet), and the pages in ``extra`` (where
+        the AI check found text in the wrong place): page number -> its pieces as the AI layout check sees them
+        (place in % of the page, font size, text or None for a picture)."""
+        extra = set(extra)
+        if extra - set(self._layout_pieces) and self._build is not None:
+            # the pieces of these pages were not kept: find them again (the document itself stays as it is)
+            self._layout_pieces = self._build(self.layout_orders, extra | set(self._layout_pieces))[1]
         out = {}
         for page in self.document.pages:
             ps = self._layout_pieces.get(page.number)
-            if ps and page.unusual_layout:
+            if ps and (page.unusual_layout or page.number in extra):
                 out[page.number] = [_piece_view(g, page.width, page.height) for g in ps]
         return out
 
     def apply_layout(self, orders: dict[int, list[int]], settings: FormatSettings) -> int:
         """Build the document again with these reading orders (page -> piece numbers); returns how many pages
-        changed. Decisions already made on OCR corrections of the same words are kept."""
+        changed. Decisions already made on OCR corrections of the same words are kept, and so are the reader's
+        own edits and the fixes chosen from the AI check on text that did not move."""
         if not orders or self._build is None:
             return 0
         self.layout_orders.update(orders)
+        self._rebuild(settings)
+        return len(orders)
+
+    def reorder_page(self, finding_id: str, assistant, settings: FormatSettings,
+                     progress: Optional[ProgressFn] = None) -> Optional[int]:
+        """Text in the wrong place, found by the AI check: ask the AI for the reading order of that page's pieces
+        (their place, size and first and last words) and read the page in that order. Returns the page number,
+        or None when the AI gave no usable order (then nothing changes). :meth:`undo_reorder` goes back."""
+        f = self.finding(finding_id)
+        b = self.document.block(f.block_id.split("~")[0]) if f is not None else None
+        if b is None or self._build is None:
+            return None
+        pieces = self.layout_pages([b.page]).get(b.page)
+        if not pieces or len(pieces) < 2:
+            return None
+        order = assistant.order_layout({b.page: pieces}, progress).get(b.page)
+        if order is None:
+            return None
+        page = b.page
+        self.apply_layout({page: order}, settings)
+        if page not in self.check_reordered:
+            self.check_reordered.append(page)
+        # the findings on this page were about the old order: they go, with any fix made from them
+        for f in [f for f in self.check_findings
+                  if getattr(self.document.block(f.block_id.split("~")[0]), "page", page) == page]:
+            self.undo_finding(f.id)
+            self.check_findings.remove(f)
+        return page
+
+    def undo_reorder(self, page: int, settings: FormatSettings) -> None:
+        """Read a page in the app's own order again (after an order from the AI)."""
+        if page in self.check_reordered:
+            self.check_reordered.remove(page)
+        if self.layout_orders.pop(page, None) is not None:
+            self._rebuild(settings)
+
+    def _rebuild(self, settings: FormatSettings) -> None:
+        """Build the document again with the reading orders in ``layout_orders``, carrying over what the reader
+        decided: OCR decisions on the same words, their own edits and the AI check's fixes and findings on blocks
+        whose text did not change (the others pointed at text that moved)."""
         old = self.document
         kept = {(c.original, c.replacement): c.status for c in old.corrections if c.status in ("accepted", "rejected")}
         self.document, self._layout_pieces = self._build(self.layout_orders)
@@ -81,7 +237,24 @@ class Session:
             self.recompute_corrections(settings)
             for c in self.document.corrections:
                 c.status = kept.get((c.original, c.replacement), c.status)
-        return len(orders)
+        moved = _block_map(old.blocks, self.document.blocks)
+        renamed: dict[str, str] = {}
+        findings = []
+        for f in self.check_findings:
+            base, sep, rest = f.block_id.partition("~")
+            if base not in moved:
+                continue
+            new_id = moved[base] + sep + rest
+            renamed[f.id] = new_id + f.id[len(f.block_id):]
+            f.id, f.block_id = renamed[f.id], new_id
+            findings.append(f)
+        self.check_findings = findings
+        for c in old.corrections:
+            if c.source == "user" and c.block_id in moved:
+                self.document.corrections.append(replace(c, block_id=moved[c.block_id]))
+            elif c.source == "check" and c.id[6:] in renamed and c.block_id in moved:
+                self.document.corrections.append(replace(c, id="check-" + renamed[c.id[6:]],
+                                                         block_id=moved[c.block_id]))
 
     # ------------------------------------------------------------ corrections
     def recompute_corrections(self, settings: FormatSettings) -> None:
@@ -98,8 +271,8 @@ class Session:
             old = previous.get((c.block_id, c.start, c.original))
             if old is not None and old.status in ("accepted", "rejected") and old.replacement == c.replacement:
                 c.status = old.status
-        # text the user typed in themselves is always kept
-        doc.corrections = fresh + [c for c in doc.corrections if c.source == "user"]
+        # text the user typed in themselves, and fixes they chose from the AI check, are always kept
+        doc.corrections = fresh + [c for c in doc.corrections if c.source in ("user", "check")]
 
     def set_correction(self, correction_id: str, status: str) -> None:
         """Set the status of one correction ("accepted", "rejected", ...) by its id."""
@@ -114,7 +287,7 @@ class Session:
 
     def pending_corrections(self) -> list[Correction]:
         """Suggestions still waiting for a decision (not those already replaced by the user's own text)."""
-        user = [u for u in self.document.corrections if u.source == "user" and u.applied]
+        user = [u for u in self.document.corrections if u.source in ("user", "check") and u.applied]
         return [c for c in self.document.corrections
                 if c.status == "pending" and not any(c.overlaps(u) for u in user)]
 
@@ -122,8 +295,8 @@ class Session:
         """Whether a correction is covered by the user's own edit of the same text (then it is not shown for
         review).
         """
-        return c.source != "user" and any(c.overlaps(u) for u in self.document.corrections
-                                           if u.source == "user" and u.applied)
+        return c.source not in ("user", "check") and any(c.overlaps(u) for u in self.document.corrections
+                                                         if u.source in ("user", "check") and u.applied)
 
     def sentence_span(self, c: Correction) -> tuple[int, int]:
         """Start and end (in the block's original text) of the sentence around a correction."""
@@ -214,7 +387,7 @@ class Session:
         ai = assistant.settings
         cands = []
         if ai.use_for_citations and settings.move_citations:
-            result = compose(self.document, settings, self.ai_citation_decisions)
+            result = self.compose(settings)
             seen: set[str] = set()
             for block_id, c in result.uncertain_citations:
                 if c.key in seen:
@@ -272,15 +445,16 @@ class Session:
 
     # ------------------------------------------------------------------ render
     def compose(self, settings: FormatSettings) -> ComposeResult:
-        """The document laid out for the settings (items ready for any output format)."""
-        return compose(self.document, settings, self.ai_citation_decisions)
+        """The document laid out for the settings (items ready for any output format), with the fixes chosen from
+        the AI check."""
+        return compose(self.view(), settings, self.ai_citation_decisions)
 
     def export(self, fmt: str, settings: FormatSettings) -> bytes:
         """The document in an output format: "pdf", "printable_pdf", "docx", "epub", "txt" or "md" (bytes)."""
         from .render import docx_writer, epub_writer, pdf_writer, text_writer
 
         result = self.compose(settings)
-        doc = self.document
+        doc = self.view()
         if fmt in ("pdf", "printable_pdf"):
             data = pdf_writer.build_pdf(result, settings, doc.title or _first_title(result), doc.author,
                                         printable=fmt == "printable_pdf")
@@ -296,6 +470,21 @@ class Session:
         if fmt == "md":
             return text_writer.build_markdown(result).encode("utf-8")
         raise ValueError(f"Unknown export format: {fmt}")
+
+
+def _block_map(old: list, new: list) -> dict[str, str]:
+    """Which new block each old block became, for blocks whose text did not change (in order, so a text that
+    occurs twice is matched to its own copy)."""
+    free: dict[str, list[str]] = {}
+    for b in new:
+        if b.text:
+            free.setdefault(b.text, []).append(b.id)
+    out = {}
+    for b in old:
+        ids = free.get(b.text) if b.text else None
+        if ids:
+            out[b.id] = ids.pop(0)
+    return out
 
 
 def _first_title(result: ComposeResult) -> str:
@@ -494,11 +683,11 @@ def load(path: str | Path, settings: Optional[FormatSettings] = None, ocr_engine
                        if any(f.image.kind == "unreadable-text" for f in p.figures)})
     bad = [pg for pg in _garbled_scanner_pages(raw, dictionary) if pg not in pictured]
 
-    def build(orders: Optional[dict[int, list[int]]] = None) -> tuple[Document, dict]:
+    def build(orders: Optional[dict[int, list[int]]] = None, extra: Iterable[int] = ()) -> tuple[Document, dict]:
         """The structured document (with the AI's reading order for these pages) and the pieces of every page
-        with an unusual layout."""
+        with an unusual layout or an AI order, and of the pages in ``extra``."""
         detector = StructureDetector(dehyphenator(dictionary), word_rejoiner(dictionary))
-        doc = detector.detect(raw, path, orders)
+        doc = detector.detect(raw, path, orders, extra)
         doc.language = language
         if pictured:
             doc.warnings.append(f"The text the scanner stored for page(s) {_page_list(pictured)} of the PDF is "
@@ -510,8 +699,8 @@ def load(path: str | Path, settings: Optional[FormatSettings] = None, ocr_engine
         unusual = sorted({p.info.source_page + 1 for p in raw.pages if p.info.unusual_layout})
         if unusual:
             doc.warnings.append(f"Page(s) {_page_list(unusual)} of the PDF have an unusual layout (a box or "
-                                "quote across the columns), so the reading order may be mixed up there. Compare "
-                                "with the original in the Both view.")
+                                "quote across the columns); the app read them column by column. Compare with the "
+                                "original in the Both view.")
         return doc, detector.layout_pieces
 
     doc, layout_pieces = build()

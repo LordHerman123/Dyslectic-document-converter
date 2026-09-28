@@ -194,3 +194,72 @@ def summary_prompt(text: str, language: str, detailed: bool, plain: bool) -> str
             f"Style: {'plain' if plain else 'normal'}\nText:\n{text}\n\n"
             f"Cover the whole text in {points}. Write the title and points in "
             f"{LANGUAGE_NAMES.get(language, language)}.")
+
+
+CHECK = Task(
+    name="check",
+    system=(
+        "You help a tool that converts PDF documents into an easier-to-read version for people with dyslexia. "
+        "Converting a PDF can go wrong. You read the converted text and point out where the CONVERSION went "
+        "wrong. You never rewrite text, and you never judge the author's writing: spelling mistakes, grammar, "
+        "style or odd wording that were already in the original are not conversion errors.\n\n"
+        "The first line names the document's language. Each numbered line after it is one block of the converted "
+        "document: its number | its kind (T title, H1-H3 "
+        "heading, P paragraph, L list item, Q quote, C caption, N footnote; 'scan' means the text was read from "
+        "a scan by text recognition) | the page of the original | its text.\n\n"
+        "Report only these conversion errors:\n"
+        "- word: a word broken in two ('num ber'), two words run together ('forthe'), or a hyphen from a line "
+        "break left in or lost ('non- disclosure', 'self- report'). Give the corrected words in 'w'. A hyphen "
+        "before 'and', 'or' or the same in another language is correct ('pre- and post-review', 'zorg- en "
+        "welzijnswerk').\n"
+        "- scan: only in 'scan' blocks, a word misread by text recognition ('tbe', 'rnodel'). Give the intended "
+        "word in 'w'.\n"
+        "- furniture: a running header or footer, page number, journal name or volume line, copyright or "
+        "download notice inside the text. Quote all of it.\n"
+        "- heading: a heading run into the start of a paragraph ('2. Methods We asked…'). Quote only the "
+        "heading.\n"
+        "- not_heading: a block marked as a heading (H1-H3) that is not a heading of this document, such as "
+        "part of a sentence or a figure label.\n"
+        "- order: text that breaks off and continues with something that does not belong there (a line from "
+        "another column, a box or a caption spliced in). Quote the first words of the text that does not "
+        "belong.\n"
+        "In 'q' copy the text exactly as it is in the block, as short as possible (at most 12 words). Add a "
+        "reason of at most 10 words in 'r'. When you are not sure, leave it out. Most blocks have no errors.\n"
+        'Answer with JSON: {"f": [{"b": block number, "t": type, "q": "exact text", "w": "correction", '
+        '"r": "reason"}]}, or {"f": []} when you find nothing.\n\n'
+        "Example\n"
+        "Language: English\n"
+        "0 | T | p1 | THE PRICE OF KNOWLEDGE\n"
+        "1 | P | p1 | Publishers say that their costs are high. The num ber of journals has grown fast, and some "
+        "now charge less than 100 euro per paper. 1 2 | S C I E N C E | V O L 7 Yet prices still vary.\n"
+        "2 | P | p2 | 2. Methods We asked forty publishers about their costs and recieved twelve answers.\n"
+        "3 | P | p2 | Prices that libraries pay are hidden by the non- Germany; and the Wellcome Trust in London, "
+        "have joined the plan. disclosure agreements that they sign.\n"
+        "4 | H2 | p3 | Figure 2\n"
+        "5 | P scan | p3 | Most of them said that the new rnodel was cheaper forthe small journals.\n"
+        'Answer: {"f": [{"b": 1, "t": "word", "q": "num ber", "w": "number", "r": "word broken in two"}, '
+        '{"b": 1, "t": "furniture", "q": "1 2 | S C I E N C E | V O L 7", "r": "page footer in the text"}, '
+        '{"b": 2, "t": "heading", "q": "2. Methods", "r": "heading run into the paragraph"}, '
+        '{"b": 3, "t": "order", "q": "Germany; and the Wellcome Trust in London, have joined the plan.", '
+        '"r": "a line from another column breaks the sentence"}, '
+        '{"b": 4, "t": "not_heading", "q": "Figure 2", "r": "a figure label, not a heading"}, '
+        '{"b": 5, "t": "scan", "q": "rnodel", "w": "model", "r": "misread letters"}, '
+        '{"b": 5, "t": "word", "q": "forthe", "w": "for the", "r": "two words run together"}]}\n'
+        "('recieved' in block 2 is the author's own spelling, so it is not reported.)"
+    ),
+    schema={"type": "object", "additionalProperties": False, "required": ["f"],
+            "properties": {"f": {"type": "array", "items": {
+                "type": "object", "additionalProperties": False, "required": ["b", "t", "q", "w", "r"],
+                "properties": {"b": {"type": "integer"}, "t": {"type": "string"}, "q": {"type": "string"},
+                               "w": {"type": "string"}, "r": {"type": "string"}}}}}},
+    answer_hint='Answer with JSON only: {"f": [{"b": block, "t": "type", "q": "exact text", "w": "correction", '
+                '"r": "reason"}]}',
+    tokens_per_item=25,
+)
+
+
+def check_prompt(blocks: list[tuple[int, str, int, str]], language: str = "en") -> str:
+    """One part of the document for the check: its language, then per block its number, kind code, original page
+    and text."""
+    return f"Language: {LANGUAGE_NAMES.get(language, language)}\n" + \
+        "\n".join(f"{n} | {kind} | p{page} | {text}" for n, kind, page, text in blocks)

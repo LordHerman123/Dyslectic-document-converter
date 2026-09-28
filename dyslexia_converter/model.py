@@ -126,7 +126,7 @@ class Correction:
     replacement: str
     confidence: float  # 0..1
     status: str = "pending"  # pending / auto / accepted / rejected
-    source: str = "dictionary"  # dictionary / ai / user (typed in by the user)
+    source: str = "dictionary"  # dictionary / ai / user (typed in by the user) / check (a fix from the AI check)
 
     @property
     def applied(self) -> bool:
@@ -139,10 +139,11 @@ class Correction:
 
 
 def effective_corrections(corrections: list[Correction]) -> list[Correction]:
-    """The corrections to apply: a correction the user typed in replaces any suggestion on the same text."""
+    """The corrections to apply: a correction the user typed in (or a fix they chose from the AI check) replaces
+    any suggestion on the same text."""
     applied = [c for c in corrections if c.applied]
-    user = [c for c in applied if c.source == "user"]
-    return [c for c in applied if c.source == "user" or not any(c.overlaps(u) for u in user)]
+    user = [c for c in applied if c.source in ("user", "check")]
+    return [c for c in applied if c.source in ("user", "check") or not any(c.overlaps(u) for u in user)]
 
 
 @dataclass
