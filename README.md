@@ -11,9 +11,9 @@ Your original PDF is only ever read, never modified.
 Everything works **locally and without AI**. AI is an optional extra that you turn on with your own
 API key. When it's on, it only sees small snippets that the local rules couldn't decide.
 
-## Download for Windows (version 1.11)
+## Download for Windows (version 1.12)
 
-Get `DyslexiaConverter-1.11.2-setup.exe` (installer) or `DyslexiaConverter-1.11.2-windows.zip` (unzip and
+Get `DyslexiaConverter-1.12.0-setup.exe` (installer) or `DyslexiaConverter-1.12.0-windows.zip` (unzip and
 double-click `DyslexiaConverter.exe`) from the repository's **Releases** page. Text recognition (Tesseract)
 is included; nothing else needs to be installed. How the Windows build is made: [windows/README.md](windows/README.md).
 
