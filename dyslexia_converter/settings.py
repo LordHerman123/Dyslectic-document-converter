@@ -131,6 +131,7 @@ class AISettings:
     consent_given: bool = False  # user accepted that content is sent to the provider
     use_for_citations: bool = True
     use_for_ocr: bool = True
+    use_for_layout: bool = True  # pages with an unusual layout (columns that may be mixed up)
     # the user's named API keys: {"id", "name", "provider"} each; the secrets are in the key store under "id"
     keys: list = field(default_factory=list)
     active_key: str = ""  # id of the key AI requests use (its provider is ``provider``)

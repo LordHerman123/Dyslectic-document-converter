@@ -434,6 +434,33 @@ def _rotated_blocks(page: pymupdf.Page, taken: list[Rect]) -> list[RawFigure]:
     return out
 
 
+def _join_drop_caps(spans: list[_Span]) -> list[_Span]:
+    """A drop cap (one large capital at the start of an article, several lines tall) is put back in front of
+    the rest of its word ("M" + "ichael"), instead of being read as a line of its own that swallows the text
+    beside it. Only a single letter at least 2.5 times the text size counts, with lower-case text starting just
+    right of its top."""
+    sizes = Counter()
+    for sp in spans:
+        sizes[round(sp.size)] += len(sp.text.strip())
+    if not sizes:
+        return spans
+    body = sizes.most_common(1)[0][0]
+    out = list(spans)
+    for cap in spans:
+        letter = cap.text.strip()
+        if len(letter) != 1 or not letter.isalpha() or not letter.isupper() or cap.size < 2.5 * body:
+            continue
+        top, height = cap.bbox[1], cap.bbox[3] - cap.bbox[1]
+        beside = [sp for sp in out if sp is not cap and sp.text[:1].islower() and sp.size < cap.size / 2
+                  and -1 <= sp.x0 - cap.x1 < 3 * sp.size and top - 0.2 * height <= sp.bbox[1] <= top + 0.5 * height]
+        if not beside:
+            continue
+        first = min(beside, key=lambda sp: (sp.bbox[1], sp.x0))
+        out[out.index(first)] = replace(first, text=letter + first.text)
+        out.remove(cap)
+    return out
+
+
 def _page_spans(page: pymupdf.Page) -> list[_Span]:
     """Every horizontal run of text on a page, in unrotated page coordinates (rotated text such as margin notes and
     watermarks is left out).
@@ -781,7 +808,7 @@ def _group_scripts(row: list[_Span], baseline: float, ref_size: float, skip: dic
 
 def _text_lines(page: pymupdf.Page, pno: int) -> list[RawLine]:
     """The text lines of a page, with bold/italic/math styles, formulas recognised and indices placed."""
-    spans = _page_spans(page)
+    spans = _join_drop_caps(_page_spans(page))
     try:
         rules = [tuple(d["rect"]) for d in page.get_drawings()
                  if d["rect"].height < 1.6 and 2 < d["rect"].width]

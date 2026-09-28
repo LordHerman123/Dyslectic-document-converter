@@ -145,3 +145,59 @@ def _xycut(items: list[T], bbox_of, depth: int) -> list[T]:
             return out
 
     return _rows_left_to_right(items, bbox_of)
+
+
+def interleaved(ordered: Sequence[T], bbox_of=lambda it: it.bbox, text_of=lambda it: getattr(it, "text", None),
+                min_steps: int = 3) -> bool:
+    """Whether the reading order probably mixes two columns: again and again a line of prose is followed by a
+    line of prose beside it at the same height. Correctly read columns never do that (their lines follow each
+    other downwards); it happens when a box or a quote across the column gap hides the columns. Short text
+    (chart labels, table cells, author lists) does not count.
+    """
+    lines = [it for it in ordered if isinstance(text_of(it), str)]
+    steps = 0
+    for a, b in zip(lines, lines[1:]):
+        ba, bb = bbox_of(a), bbox_of(b)
+        overlap = min(ba[3], bb[3]) - max(ba[1], bb[1])
+        beside = bb[0] >= ba[2] - 1 or ba[0] >= bb[2] - 1
+        prose = len(text_of(a).split()) >= 5 and len(text_of(b).split()) >= 5
+        if beside and prose and overlap > 0.5 * min(ba[3] - ba[1], bb[3] - bb[1]):
+            steps += 1
+    return steps >= min_steps
+
+
+def pieces(items: Sequence[T], bbox_of=lambda it: it.bbox, text_of=lambda it: getattr(it, "text", None),
+           block_of=lambda it: getattr(it, "block_no", None), size_of=lambda it: getattr(it, "size", 0.0)
+           ) -> list[list[T]]:
+    """A page's items grouped into pieces that can be put in order as a whole (for the optional AI layout
+    check): lines of one PDF text block in the same font size that follow each other downwards form a piece
+    (a block holding lines side by side is split); every figure or table is its own piece. The pieces are
+    numbered in the local reading order, so the same page always gives the same pieces.
+    """
+    rank = {id(it): n for n, it in enumerate(reading_order(items, bbox_of))}
+    groups: list[list[T]] = []
+    # lines top to bottom: each joins the piece of its own block and size whose last line is right above it
+    for it in sorted(items, key=lambda it: (bbox_of(it)[1], bbox_of(it)[0])):
+        if not isinstance(text_of(it), str):
+            groups.append([it])
+            continue
+        b = bbox_of(it)
+        h = max(1.0, b[3] - b[1])
+        best, best_gap = None, None
+        for group in groups:
+            last = group[-1]
+            if not isinstance(text_of(last), str) or block_of(last) != block_of(it) \
+                    or abs(size_of(last) - size_of(it)) > 0.5:
+                continue
+            lb = bbox_of(last)
+            overlap_x = min(lb[2], b[2]) - max(lb[0], b[0])
+            gap = b[1] - lb[3]  # line boxes of tightly set text overlap a little
+            if overlap_x > 0.3 * min(lb[2] - lb[0], b[2] - b[0]) and -0.6 * h <= gap < 2 * h \
+                    and b[1] > lb[1] + 0.3 * h and (best_gap is None or gap < best_gap):
+                best, best_gap = group, gap
+        if best is not None:
+            best.append(it)
+        else:
+            groups.append([it])
+    return sorted(groups, key=lambda g: min(rank[id(it)] for it in g))
+

@@ -159,6 +159,8 @@ class PageInfo:
     side: str = "full"  # "full", or "left"/"right" half of a two-page spread
     skew: float = 0.0  # degrees straightened
     text_source: str = ""  # "pdf", "ocr" or "scanner" (text layer stored in the PDF by a scanner)
+    unusual_layout: bool = False  # the reading order may mix columns (a box or quote across the column gap)
+    ai_layout: bool = False  # the reading order of this page came from the optional AI layout check
 
 
 @dataclass

@@ -101,6 +101,13 @@ will be sent to your provider using your key, and nothing is sent until you conf
 * The AI is only asked narrow questions: "is this parenthesis a citation?" and "is this word an OCR
   error?". It can't rewrite text: answers that aren't a single-word fix are thrown away. AI word
   suggestions always go to your review list.
+* **Pages with an unusual layout.** Magazine-style pages (a box, advert or big quote across the column
+  gap) can make the local reading order mix two columns. The app notices this on its own (it only looks
+  for lines of prose that follow each other side by side, which never happens in correctly read columns)
+  and says which pages are affected, without AI. With AI on, *Pages with an unusual layout* sends, for
+  those pages only, the place, font size and first and last words of each piece of the page, and asks in
+  which order to read them. The answer is only used when it keeps every piece exactly once, so no text can
+  be lost or repeated; otherwise the local order stays. Ordinary papers are never sent.
 * **As little data as possible.** Each uncertain item is sent with only a few words around it (about 8
   before and 6 after), never whole paragraphs or pages, with the item marked `[[like this]]`. E-mail
   addresses, web links, account numbers and long numbers such as phone numbers are masked first (`[email]`,
