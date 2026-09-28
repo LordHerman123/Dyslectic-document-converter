@@ -249,13 +249,15 @@ class ConverterApp:
         narrow = (p.width or 1200) < 820
         settings_panel, preview_panel = self.build_convert_tab()
         if narrow:  # phones: layout settings and preview get their own tabs
-            convert = [(t("Layout"), ft.Icons.TUNE, ft.Container(settings_panel, padding=12, expand=True)),
+            convert = [(t("Layout"), ft.Icons.TUNE, ft.Container(settings_panel, padding=ft.Padding.only(
+                left=12, right=12, top=16), expand=True)),
                        (t("Preview"), ft.Icons.PREVIEW, ft.Container(preview_panel, padding=8, expand=True))]
         else:
             convert = [(t("Convert"), ft.Icons.TUNE, ft.Row([
-                ft.Container(settings_panel, width=400, padding=ft.Padding.only(left=12, right=4)),
+                ft.Container(settings_panel, width=400, padding=ft.Padding.only(left=16, right=8, top=16)),
                 ft.VerticalDivider(width=1),
-                ft.Container(preview_panel, expand=True, padding=8)], expand=True,
+                ft.Container(preview_panel, expand=True, padding=ft.Padding.only(left=12, right=12, top=16,
+                                                                                 bottom=8))], expand=True,
                 vertical_alignment=ft.CrossAxisAlignment.STRETCH))]
         self.preview_tab_index = 1 if narrow else 0
         self.review_tab_index = len(convert)
@@ -419,12 +421,19 @@ class ConverterApp:
                                                            padding=ft.Padding.only(left=8, right=8, top=8, bottom=10))],
                                     maintain_state=True)
 
-        settings_col = ft.Column([
+        # the two choices made first, in a card of their own above the detailed settings
+        start_card = ft.Container(ft.Column([
+            ft.Container(height=2),  # room for the dropdown's floating label
             ft.Row([self.preset_dd]),
-            self.text(t(PRESET_DISCLAIMER), 12, italic=True),
+            self.text(t(PRESET_DISCLAIMER), 12, italic=True, color=self.pal["muted"]),
+            ft.Container(height=4),
             ft.Row([self.doc_lang_dd]),
             self.text(t("Detected from the text of each PDF. Choose a language if the guess is wrong: it sets the "
-                        "dictionary for OCR, spelling fixes and rejoining split words."), 12),
+                        "dictionary for OCR, spelling fixes and rejoining split words."), 12, color=self.pal["muted"]),
+        ], spacing=8), padding=ft.Padding.only(left=12, right=12, top=10, bottom=12), border_radius=12,
+            bgcolor=ft.Colors.SURFACE_CONTAINER_LOW)
+        settings_col = ft.Column([
+            start_card,
             section(t("Text"), [
                 ft.Row([self.dropdown("font", t("Font"), [(f, f) for f in FONT_CHOICES])]),
                 self.font_note,
@@ -537,7 +546,8 @@ class ConverterApp:
             ], alignment=ft.MainAxisAlignment.CENTER, spacing=2)
 
         self.orig_panel = ft.Column([nav("orig", self.orig_label),
-                                     ft.Container(self.orig_img, expand=True,
+                                     ft.Container(self.orig_img, expand=True, border_radius=10, padding=4,
+                                                  clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
                                                   border=ft.Border.all(1, self.pal["frame"]))],
                                     expand=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                                     visible=self.view_mode in ("orig", "side"))
@@ -545,16 +555,35 @@ class ConverterApp:
                                        on_size_change=self.on_conv_size, mouse_cursor=ft.MouseCursor.CLICK,
                                        expand=True)
         self.conv_panel = ft.Column([nav("conv", self.conv_label),
-                                     ft.Container(conv_view, expand=True,
+                                     ft.Container(conv_view, expand=True, border_radius=10, padding=4,
+                                                  clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
                                                   border=ft.Border.all(1, self.pal["frame"]))],
                                     expand=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                                     visible=self.view_mode in ("conv", "side"))
         self.build_read_bar()
+        # before a PDF is open: one clear way to start, instead of two empty page frames
+        self.pages_row = ft.Row([self.orig_panel, self.conv_panel], expand=True,
+                                vertical_alignment=ft.CrossAxisAlignment.START, visible=self.session is not None)
+        self.empty_state = ft.Container(ft.Column([
+            ft.Icon(ft.Icons.DESCRIPTION_OUTLINED, size=self.fs(56), color=ft.Colors.PRIMARY),
+            self.text(t("Open a PDF to start"), 22, weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER),
+            self.text(t("The converted version appears here next to the original, so you can compare them. "
+                        "Your original file is never changed."), 15, text_align=ft.TextAlign.CENTER,
+                      color=self.pal["muted"]),
+            ft.Container(height=6),
+            ft.FilledButton(t("Open PDF"), icon=ft.Icons.FOLDER_OPEN, on_click=self.on_open,
+                            style=ft.ButtonStyle(padding=ft.Padding.symmetric(horizontal=28, vertical=18))),
+            self.text(t("Articles, book chapters and scans all work. Change the layout on the left at any time."),
+                      13, text_align=ft.TextAlign.CENTER, color=self.pal["muted"]),
+        ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=12, tight=True, width=460),
+            alignment=ft.Alignment.CENTER, expand=True, visible=self.session is None, border_radius=16,
+            bgcolor=ft.Colors.SURFACE_CONTAINER_LOW)
         preview_col = ft.Column([
             self.build_toolbar(),
             self.read_panel,
-            ft.Row([self.orig_panel, self.conv_panel], expand=True, vertical_alignment=ft.CrossAxisAlignment.START),
-        ], expand=True)
+            self.pages_row,
+            self.empty_state,
+        ], expand=True, spacing=12)
 
         return settings_col, preview_col
 
@@ -573,22 +602,20 @@ class ConverterApp:
         """
         t = self.t
         self.review_summary = self.text(t("No scanned document loaded."), 14)
-        self.review_list = ft.ListView(expand=True, spacing=8, padding=8)
+        self.review_list = ft.Column(spacing=8)  # the page scrolls as a whole
         self.word_field = ft.TextField(label=t("Add a word to your dictionary"), width=280,
                                        on_submit=self.on_add_word)
         self.words_view = self.text(", ".join(sorted(self.custom_words.words)) or t("(none yet)"), 13)
-        return ft.Container(ft.Column([
-            self.text(t("OCR corrections"), 18, weight=ft.FontWeight.BOLD),
-            self.text(t("Corrections use a local dictionary. The original OCR text is kept, so every "
-                        "correction can be undone."), 13),
-            self.review_summary,
-            ft.Row([ft.OutlinedButton(t("Undo all corrections"), icon=ft.Icons.UNDO, on_click=self.on_undo_all)]),
+        return self.page_body(t("OCR corrections"), t("Corrections use a local dictionary. The original OCR text is "
+                                                      "kept, so every correction can be undone."), [
+            self.card(t("My dictionary (names, technical terms, abbreviations)"), [
+                ft.Row([self.word_field, ft.OutlinedButton(t("Add"), on_click=self.on_add_word)], wrap=True),
+                self.words_view], ft.Icons.MENU_BOOK_OUTLINED),
+            ft.Row([ft.Container(self.review_summary, expand=True),
+                    ft.OutlinedButton(t("Undo all corrections"), icon=ft.Icons.UNDO, on_click=self.on_undo_all)],
+                   vertical_alignment=ft.CrossAxisAlignment.CENTER),
             self.review_list,
-            ft.Divider(),
-            self.text(t("My dictionary (names, technical terms, abbreviations)"), 15, weight=ft.FontWeight.BOLD),
-            ft.Row([self.word_field, ft.OutlinedButton(t("Add"), on_click=self.on_add_word)], wrap=True),
-            self.words_view,
-        ], expand=True), padding=16, expand=True)
+        ])
 
     def refresh_review(self) -> None:
         """Fill the review list with the current document's corrections (or explain why there are none)."""
@@ -697,13 +724,11 @@ class ConverterApp:
     def build_map_tab(self) -> ft.Control:
         """The Document map tab: the headings found, to jump to a part of the document."""
         t = self.t
-        self.map_list = ft.ListView(expand=True, spacing=2, padding=8)
-        return ft.Container(ft.Column([
-            self.text(t("Document map"), 18, weight=ft.FontWeight.BOLD),
-            self.text(t("Headings found in the document. Select one to show it in the preview. "
-                        "Nothing here is invented: only headings present in the original are listed."), 13),
-            self.map_list,
-        ], expand=True), padding=16, expand=True)
+        self.map_list = ft.Column(spacing=2)  # the page scrolls as a whole
+        return self.page_body(t("Document map"), t("Headings found in the document. Select one to show it in the "
+                                                   "preview. Nothing here is invented: only headings present in the "
+                                                   "original are listed."),
+                              [ft.Card(content=ft.Container(self.map_list, padding=8))])
 
     def refresh_map(self) -> None:
         """List the headings of the converted document (its PDF outline)."""
@@ -763,34 +788,36 @@ class ConverterApp:
         self.ai_layout = ft.Checkbox(label=t("Pages with an unusual layout (reading order)"), value=a.use_for_layout,
                                      on_change=self.on_ai_tasks)
         self._refresh_ai_controls()
-        return ft.Container(ft.Column([
-            self.text(t("AI assistance (optional)"), 18, weight=ft.FontWeight.BOLD),
-            self.text(t("The converter works fully without AI. AI is only asked about items local rules are "
-                        "unsure about, in small snippets, and answers are cached so nothing is sent twice."), 13),
-            self.ai_mode,
-            self.text(t("API keys"), 16, weight=ft.FontWeight.BOLD),
-            self.text(t("Keys are kept on this device ({where}), never in settings or logs. The key marked 'In use' is the "
-                        "one AI requests use; click another to switch.", where=t(self.keystore.backend)), 13),
-            self.key_list,
-            self._add_key_box(),
-            ft.Row([self.ai_model], wrap=True),
-            self.text(t("Your AI provider may charge you for API usage."), 13, weight=ft.FontWeight.BOLD),
-            self.text(t("Use AI for:"), 14), ft.Row([self.ai_cit, self.ai_ocr, self.ai_layout], wrap=True),
-            ft.Row([ft.FilledButton(t("Ask AI about uncertain items now"), icon=ft.Icons.SMART_TOY,
-                                    on_click=self.on_run_ai),
-                    ft.OutlinedButton(t("Clear AI cache"), on_click=self.on_clear_cache)], wrap=True),
-            self.ai_usage,
-            ft.Divider(),
-            self.text(t("Privacy log: everything sent to the AI provider"), 18, weight=ft.FontWeight.BOLD),
-            self.text(t("Each request is listed with the exact text that left this device and the answer that "
-                        "came back. The log is kept only on this device; your API key is never part of it."), 13),
-            self.ai_log_summary,
-            ft.Row([ft.OutlinedButton(t("Save log..."), icon=ft.Icons.SAVE_ALT, on_click=self.on_save_ai_log),
-                    ft.OutlinedButton(t("Clear log"), icon=ft.Icons.DELETE_OUTLINE, on_click=self.on_clear_ai_log)],
-                   wrap=True),
-            self.ai_log_list,
-            self.end_space(),
-        ], scroll=ft.ScrollMode.AUTO, spacing=10, expand=True), padding=16, expand=True)
+        return self.page_body(t("AI assistance (optional)"), t(
+            "The converter works fully without AI. AI is only asked about items local rules are unsure about, in "
+            "small snippets, and answers are cached so nothing is sent twice."), [
+            self.card(t("On or off"), [self.ai_mode], ft.Icons.SMART_TOY_OUTLINED),
+            self.card(t("API keys"), [
+                self.text(t("Keys are kept on this device ({where}), never in settings or logs. The key marked 'In use' "
+                            "is the one AI requests use; click another to switch.", where=t(self.keystore.backend)),
+                          13),
+                self.key_list,
+                self._add_key_box(),
+                ft.Row([self.ai_model], wrap=True),
+                self.text(t("Your AI provider may charge you for API usage."), 13, weight=ft.FontWeight.BOLD)],
+                ft.Icons.KEY_OUTLINED),
+            self.card(t("Use AI for:"), [
+                ft.Row([self.ai_cit, self.ai_ocr, self.ai_layout], wrap=True),
+                self.text(t("The AI check button on the Convert screen reads the whole converted text and lists "
+                            "conversion mistakes; you choose what to fix."), 13, color=self.pal["muted"]),
+                ft.Row([ft.FilledButton(t("Ask AI about uncertain items now"), icon=ft.Icons.SMART_TOY,
+                                        on_click=self.on_run_ai),
+                        ft.OutlinedButton(t("Clear AI cache"), on_click=self.on_clear_cache)], wrap=True),
+                self.ai_usage], ft.Icons.TUNE),
+            self.card(t("Privacy log: everything sent to the AI provider"), [
+                self.text(t("Each request is listed with the exact text that left this device and the answer that "
+                            "came back. The log is kept only on this device; your API key is never part of it."), 13),
+                self.ai_log_summary,
+                ft.Row([ft.OutlinedButton(t("Save log..."), icon=ft.Icons.SAVE_ALT, on_click=self.on_save_ai_log),
+                        ft.OutlinedButton(t("Clear log"), icon=ft.Icons.DELETE_OUTLINE,
+                                          on_click=self.on_clear_ai_log)], wrap=True),
+                self.ai_log_list], ft.Icons.RECEIPT_LONG_OUTLINED),
+        ])
 
     LOG_SHOWN = 50  # latest requests shown in the AI tab; the saved log has them all
 
@@ -1159,6 +1186,25 @@ class ConverterApp:
         return ft.Container(ft.Column(lines, spacing=8, scroll=ft.ScrollMode.AUTO), width=640, height=420)
 
     # ---------------------------------------------------------------- settings tab
+    def card(self, title: str, controls: list[ft.Control], icon=None) -> ft.Control:
+        """A card grouping some settings under a heading (with an icon)."""
+        head = [self.text(title, 17, weight=ft.FontWeight.BOLD)]
+        if icon is not None:
+            head.insert(0, ft.Icon(icon, color=ft.Colors.PRIMARY, size=self.fs(22)))
+        return ft.Card(content=ft.Container(ft.Column([ft.Row(head, spacing=10)] + controls, spacing=10),
+                                            padding=ft.Padding.symmetric(horizontal=20, vertical=16)))
+
+    def page_body(self, title: str, intro: str, controls: list[ft.Control]) -> ft.Control:
+        """A tab's page: a title and a line about it, then its content at a readable width in the middle of a wide
+        window; the page scrolls as a whole."""
+        body = ft.Column([self.text(title, 22, weight=ft.FontWeight.BOLD),
+                          self.text(intro, 14, color=self.pal["muted"]) if intro else ft.Container(),
+                          ft.Container(height=4)] + controls, spacing=12,
+                         col={"xs": 12, "md": 11, "lg": 9, "xl": 7}, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)
+        return ft.Container(ft.Column([ft.ResponsiveRow([body], alignment=ft.MainAxisAlignment.CENTER),
+                                       self.end_space()], scroll=ft.ScrollMode.AUTO, expand=True),
+                            padding=ft.Padding.only(left=16, right=16, top=20), expand=True)
+
     def build_settings_tab(self) -> ft.Control:
         """The Settings tab: app language, text size, dark mode, high contrast, where data is kept and saved OCR
         results.
@@ -1180,43 +1226,32 @@ class ConverterApp:
                                       (1.5, t("Largest"))]],
                             on_select=self.on_ui_scale)
         tess = find_tesseract()
-
-        def heading(s: str) -> ft.Control:
-            """A section heading."""
-            return self.text(s, 17, weight=ft.FontWeight.BOLD)
-
-        def card(controls: list[ft.Control]) -> ft.Control:
-            """A card grouping some settings."""
-            return ft.Card(content=ft.Container(ft.Column(controls, spacing=10), padding=16))
-
-        return ft.Container(ft.Column([
-            self.text(t("Settings"), 20, weight=ft.FontWeight.BOLD),
-            card([heading(t("Appearance")),
-                  ft.Row([app_lang, scale], wrap=True, spacing=16),
-                  ft.Row([dark, contrast], wrap=True, spacing=24),
-                  self._app_font_picker(),
-                  self.text(t("These only change the app. Your exported documents keep their own layout "
-                              "and colours (see the Convert tab)."), 12, italic=True)]),
-            card([heading(t("Text recognition (OCR)")),
-                  self.text(t("Tesseract: {path}", path=tess) if tess else
-                            t("Tesseract was not found. Scanned pages fall back to the text the scanner stored. "
-                              "Get it at https://github.com/UB-Mannheim/tesseract/wiki"), 13, selectable=True),
-                  self.text(t("Scanned documents are only read once: the result is saved on this device, so "
-                              "opening the same PDF again is almost instant."), 13),
-                  ft.Row([ft.OutlinedButton(t("Clear saved OCR results"), icon=ft.Icons.DELETE_OUTLINE,
-                                            on_click=self.on_clear_ocr_cache)])]),
-            card([heading(t("Privacy and storage")),
-                  self.text(t("Everything is processed on this device unless you switch on AI (see AI settings). "
-                              "Your settings, dictionary and saved OCR results are stored here:"), 13),
-                  self.text(str(app_data_dir()), 12, selectable=True)]),
-            card([heading(t("Support")),
-                  self.text(t("The app is free. If it helps you, you can buy the maker a coffee. This is "
-                              "completely optional and changes nothing in the app."), 13),
-                  ft.Row([self.coffee_button()])]),
-            self.text(f"Dyslexia Converter {__version__}", 12),
-            self.end_space(),
-        ], scroll=ft.ScrollMode.AUTO, spacing=12, expand=True, horizontal_alignment=ft.CrossAxisAlignment.STRETCH),
-            padding=16, expand=True)
+        return self.page_body(t("Settings"), t("How the app itself looks and works. The layout of your documents is "
+                                               "set on the Convert screen."), [
+            self.card(t("Appearance"), [
+                ft.Row([app_lang, scale], wrap=True, spacing=16),
+                ft.Row([dark, contrast], wrap=True, spacing=24),
+                self._app_font_picker(),
+                self.text(t("These only change the app. Your exported documents keep their own layout "
+                            "and colours (see the Convert tab)."), 12, italic=True)], ft.Icons.PALETTE_OUTLINED),
+            self.card(t("Text recognition (OCR)"), [
+                self.text(t("Tesseract: {path}", path=tess) if tess else
+                          t("Tesseract was not found. Scanned pages fall back to the text the scanner stored. "
+                            "Get it at https://github.com/UB-Mannheim/tesseract/wiki"), 13, selectable=True),
+                self.text(t("Scanned documents are only read once: the result is saved on this device, so "
+                            "opening the same PDF again is almost instant."), 13),
+                ft.Row([ft.OutlinedButton(t("Clear saved OCR results"), icon=ft.Icons.DELETE_OUTLINE,
+                                          on_click=self.on_clear_ocr_cache)])], ft.Icons.DOCUMENT_SCANNER_OUTLINED),
+            self.card(t("Privacy and storage"), [
+                self.text(t("Everything is processed on this device unless you switch on AI (see AI settings). "
+                            "Your settings, dictionary and saved OCR results are stored here:"), 13),
+                self.text(str(app_data_dir()), 12, selectable=True)], ft.Icons.LOCK_OUTLINE),
+            self.card(t("Support"), [
+                self.text(t("The app is free. If it helps you, you can buy the maker a coffee. This is "
+                            "completely optional and changes nothing in the app."), 13),
+                ft.Row([self.coffee_button()])], ft.Icons.FAVORITE_BORDER),
+            self.text(f"Dyslexia Converter {__version__}", 12, color=self.pal["muted"]),
+        ])
 
     def _app_font_picker(self) -> ft.Control:
         """App font: one card per font, each showing a sample in that font; the chosen one is outlined."""
@@ -1424,24 +1459,29 @@ class ConverterApp:
                 expanded_cross_axis_alignment=ft.CrossAxisAlignment.START),
                 bgcolor=pal["surface"], border=ft.Border.all(1, pal["outline_variant"]), border_radius=12)
 
-        return ft.Container(ft.Column([
+        body = ft.Column([
             start,
             *[section(*s) for s in sections],
-            self.text(t("What never changes"), 16, weight=ft.FontWeight.BOLD),
-            self.text(t("The author's words. The converter does not summarise, paraphrase, simplify or remove "
-                        "text. Your original PDF is never modified or overwritten."), 14),
-            self.text(t("With AI-assisted mode on, Focus mode can make a summary on request. It is shown next to "
-                        "the text, marked as made by AI, and never replaces the author's words."), 14),
-            self.text(t("About the presets and fonts"), 16, weight=ft.FontWeight.BOLD),
-            self.text(t(PRESET_DISCLAIMER) + " " + t("No single font is best for every reader with dyslexia."), 14),
-            self.text(t("Updates and source code"), 16, weight=ft.FontWeight.BOLD),
-            self.text(t("You are using version {version}. The newest version, what changed in it, and the "
-                        "source code are on GitHub.", version=__version__), 14),
-            ft.Row([ft.OutlinedButton(t("Project on GitHub"), icon=ft.Icons.OPEN_IN_NEW, url=PROJECT_URL,
-                                      tooltip=t("Opens GitHub in your web browser"))], wrap=True),
-            self.text(PROJECT_URL, 12, selectable=True, color=ft.Colors.ON_SURFACE_VARIANT),
-            self.end_space(),
-        ], scroll=ft.ScrollMode.AUTO, spacing=10, expand=True), padding=16, expand=True)
+            self.card(t("What never changes"), [
+                self.text(t("The author's words. The converter does not summarise, paraphrase, simplify or remove "
+                            "text. Your original PDF is never modified or overwritten."), 14),
+                self.text(t("With AI-assisted mode on, Focus mode can make a summary on request. It is shown next to "
+                            "the text, marked as made by AI, and never replaces the author's words."), 14)],
+                ft.Icons.VERIFIED_OUTLINED),
+            self.card(t("About the presets and fonts"), [
+                self.text(t(PRESET_DISCLAIMER) + " " + t("No single font is best for every reader with dyslexia."),
+                          14)], ft.Icons.TEXT_FIELDS),
+            self.card(t("Updates and source code"), [
+                self.text(t("You are using version {version}. The newest version, what changed in it, and the "
+                            "source code are on GitHub.", version=__version__), 14),
+                ft.Row([ft.OutlinedButton(t("Project on GitHub"), icon=ft.Icons.OPEN_IN_NEW, url=PROJECT_URL,
+                                          tooltip=t("Opens GitHub in your web browser"))], wrap=True),
+                self.text(PROJECT_URL, 12, selectable=True, color=ft.Colors.ON_SURFACE_VARIANT)],
+                ft.Icons.SYSTEM_UPDATE_ALT),
+        ], spacing=12, col={"xs": 12, "md": 11, "lg": 9, "xl": 7}, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)
+        return ft.Container(ft.Column([ft.ResponsiveRow([body], alignment=ft.MainAxisAlignment.CENTER),
+                                       self.end_space()], scroll=ft.ScrollMode.AUTO, expand=True),
+                            padding=ft.Padding.only(left=16, right=16, top=20), expand=True)
 
     # ================================================================ dialogs
     def show_start_notice(self) -> None:
@@ -1586,6 +1626,7 @@ class ConverterApp:
         except OSError:
             self.doc_key = None
         self.update_highlight_option()
+        self.pages_row.visible, self.empty_state.visible = True, False
         self.orig_count = preview.page_count(self.source_path)
         self.orig_page = (self._page_range() or (1, 1))[0] - 1
         self.conv_page = 0
