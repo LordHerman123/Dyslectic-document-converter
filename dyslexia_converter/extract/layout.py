@@ -201,3 +201,54 @@ def pieces(items: Sequence[T], bbox_of=lambda it: it.bbox, text_of=lambda it: ge
             groups.append([it])
     return sorted(groups, key=lambda g: min(rank[id(it)] for it in g))
 
+
+def column_order(groups: Sequence[Sequence[T]], bbox_of=lambda it: it.bbox,
+                 text_of=lambda it: getattr(it, "text", None), size_of=lambda it: getattr(it, "size", 0.0)
+                 ) -> list[int]:
+    """A reading order for the pieces of a page whose columns got mixed up (used only on such pages): the
+    columns are found from the running text alone (the box or quote that hid them is left out), each is read
+    from top to bottom, left column first; titles above the columns come first, and anything lying across the
+    column gap (a pull quote, a box, an advert) comes after the columns. Every piece appears exactly once.
+    """
+    boxes = [(min(bbox_of(it)[0] for it in g), min(bbox_of(it)[1] for it in g),
+              max(bbox_of(it)[2] for it in g), max(bbox_of(it)[3] for it in g)) for g in groups]
+    texts = [[text_of(it) for it in g if isinstance(text_of(it), str)] for g in groups]
+    sizes: dict[float, int] = {}
+    for g in groups:
+        for it in g:
+            if isinstance(text_of(it), str):
+                sizes[round(size_of(it))] = sizes.get(round(size_of(it)), 0) + len(text_of(it))
+    body = max(sizes, key=sizes.get) if sizes else 0
+    running = [n for n, g in enumerate(groups) if texts[n] and all(abs(size_of(it) - body) <= 1.5 for it in g
+                                                                   if isinstance(text_of(it), str))]
+    # the column gaps: white space between the running text only (pieces of several lines: a centred byline or
+    # a one-line caption may cross the gap)
+    columns_text = [n for n in running if len(texts[n]) >= 2]
+    gaps = _gaps([(boxes[n][0], boxes[n][2]) for n in columns_text], MIN_GUTTER)
+    cuts = [(g0 + g1) / 2 for g0, g1 in gaps]
+    if not cuts:
+        return list(range(len(groups)))
+    top = min(boxes[n][1] for n in columns_text)
+
+    def column(n: int) -> int:
+        """Which column a piece is in (by its middle)."""
+        mid = (boxes[n][0] + boxes[n][2]) / 2
+        return sum(1 for c in cuts if mid > c)
+
+    def across(n: int) -> bool:
+        """Whether a piece lies across a column gap."""
+        return any(boxes[n][0] < c - MIN_GUTTER < c + MIN_GUTTER < boxes[n][2] for c in cuts)
+
+    head, cols, after = [], {}, []
+    for n in range(len(groups)):
+        if boxes[n][3] <= top + 1:
+            head.append(n)  # above the columns: title, standfirst, byline, opening picture
+        elif across(n) and n not in running:
+            after.append(n)  # pull quote, box, advert across the gap
+        else:
+            cols.setdefault(column(n), []).append(n)
+    order = sorted(head, key=lambda n: (boxes[n][1], boxes[n][0]))
+    for c in sorted(cols):
+        order += sorted(cols[c], key=lambda n: (boxes[n][1], boxes[n][0]))
+    return order + sorted(after, key=lambda n: (boxes[n][1], boxes[n][0]))
+

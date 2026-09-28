@@ -510,8 +510,8 @@ def load(path: str | Path, settings: Optional[FormatSettings] = None, ocr_engine
         unusual = sorted({p.info.source_page + 1 for p in raw.pages if p.info.unusual_layout})
         if unusual:
             doc.warnings.append(f"Page(s) {_page_list(unusual)} of the PDF have an unusual layout (a box or "
-                                "quote across the columns), so the reading order may be mixed up there. Compare "
-                                "with the original in the Both view.")
+                                "quote across the columns); the app read them column by column. Compare with the "
+                                "original in the Both view.")
         return doc, detector.layout_pieces
 
     doc, layout_pieces = build()

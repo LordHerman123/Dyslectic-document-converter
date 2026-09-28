@@ -84,8 +84,8 @@ def test_core_messages_still_exist_in_the_core():
                   "used the text the scanner stored in the PDF, ",
                   "of the PDF is unreadable, so (parts of) these pages are shown",
                   "of the PDF contains errors. Install Tesseract OCR for a cleaner",
-                  "of the PDF have an unusual layout (a box or quote across the columns), so the reading order may "
-                  "be mixed up there. Compare with the original in the Both view.",
+                  "of the PDF have an unusual layout (a box or quote across the columns); the app read them column "
+                  "by column. Compare with the original in the Both view.",
                   "page(s) with an unusual layout",
                   "Read {done} of {scans_total} scanned page(s){eta}", "Reading page {pno + 1} of {n}",
                   "Running OCR on page {pno + 1} of {n}", "is not installed on this device; using the similar free",

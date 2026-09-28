@@ -15,7 +15,7 @@ from typing import Callable, Optional, Union
 
 from rapidfuzz import fuzz
 
-from ..extract.layout import interleaved, pieces, reading_order
+from ..extract.layout import column_order, interleaved, pieces, reading_order
 from ..extract.pdf_reader import CAPTION_RE, RawDocument, RawFigure, RawLine, RawPage, RawTable, overlap_ratio
 from ..model import Block, BlockKind, Document, OcrWordConfidence, StyleRange
 
@@ -165,15 +165,19 @@ class StructureDetector:
             items: list[Item] = [l for l in page_body if id(l) not in fn_ids]
             items += page.figures + page.tables
             ordered = reading_order(items)
-            # a page whose columns are probably mixed up is reported; its order only changes with an AI order
+            # a page whose columns are probably mixed up (a box or quote across the column gap) is read column by
+            # column from its pieces instead, or in the order the optional AI layout check gave; every other page
+            # keeps the order above
             page.info.unusual_layout, page.info.ai_layout = interleaved(ordered), False
             if page.info.unusual_layout:
                 ps = pieces(items)
                 self.layout_pieces[page.info.number] = ps
                 order = (orders or {}).get(page.info.number)
                 if order is not None and sorted(order) == list(range(len(ps))):
-                    ordered = [it for n in order for it in ps[n]]
                     page.info.unusual_layout, page.info.ai_layout = False, True
+                else:
+                    order = column_order(ps)
+                ordered = [it for n in order for it in ps[n]]
             page_blocks = self._build_blocks(ordered, b_size, page)
             for l in page.lines:
                 if id(l) in furniture:

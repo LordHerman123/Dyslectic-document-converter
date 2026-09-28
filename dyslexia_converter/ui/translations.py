@@ -1553,20 +1553,19 @@ PATTERNS: dict[str, dict[str, str]] = {
         "it": "Il testo salvato dallo scanner per la/le pagina/e {0} del PDF contiene errori. Installa Tesseract "
               "OCR per un risultato più pulito."},
     "unusual_layout": {
-        "nl": "Pagina('s) {0} van de pdf hebben een ongewone opmaak (een kader of citaat over de kolommen heen), "
-              "dus de leesvolgorde kan daar door elkaar lopen. Vergelijk met het origineel in de weergave Beide.",
+        "nl": "Pagina('s) {0} van de pdf hebben een ongewone opmaak (een kader of citaat over de kolommen heen); "
+              "de app las ze kolom per kolom. Vergelijk met het origineel in de weergave Beide.",
         "fr": "La/les page(s) {0} du PDF ont une mise en page inhabituelle (un encadré ou une citation à cheval "
-              "sur les colonnes) : l'ordre de lecture peut y être mélangé. Comparez avec l'original dans la vue "
-              "Les deux.",
+              "sur les colonnes) ; l'application les a lues colonne par colonne. Comparez avec l'original dans la "
+              "vue Les deux.",
         "de": "Seite(n) {0} des PDFs haben ein ungewöhnliches Layout (ein Kasten oder Zitat über die Spalten "
-              "hinweg), daher kann die Lesereihenfolge dort durcheinander sein. Vergleichen Sie mit dem Original "
-              "in der Ansicht Beide.",
+              "hinweg); die App hat sie Spalte für Spalte gelesen. Vergleichen Sie mit dem Original in der Ansicht "
+              "Beide.",
         "es": "La(s) página(s) {0} del PDF tienen un diseño poco habitual (un recuadro o una cita que cruza las "
-              "columnas), así que el orden de lectura puede estar mezclado ahí. Compáralo con el original en la "
-              "vista Ambos.",
+              "columnas); la aplicación las leyó columna por columna. Compáralo con el original en la vista Ambos.",
         "it": "La/le pagina/e {0} del PDF hanno un'impaginazione insolita (un riquadro o una citazione a cavallo "
-              "delle colonne), quindi l'ordine di lettura potrebbe essere confuso. Confronta con l'originale nella "
-              "vista Entrambi."},
+              "delle colonne); l'app le ha lette colonna per colonna. Confronta con l'originale nella vista "
+              "Entrambi."},
     "sent_to_ai": {"nl": "Naar AI gestuurd: {0}", "fr": "Envoyé à l'IA : {0}", "de": "An die KI gesendet: {0}",
                    "es": "Enviado a la IA: {0}", "it": "Inviato all'IA: {0}"},
     "n_citations": {"nl": "{0} twijfelachtige verwijzing(en)", "fr": "{0} citation(s) incertaine(s)",

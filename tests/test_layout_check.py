@@ -149,6 +149,20 @@ def test_boxed_page_is_flagged_and_the_ai_order_fixes_it(isolated_home, tmp_path
     assert ai.log.entries()[-1].task == "layout"
 
 
+def test_boxed_page_is_read_column_by_column_without_ai(isolated_home, tmp_path):
+    from dyslexia_converter import pipeline
+
+    path = tmp_path / "boxed.pdf"
+    boxed_pdf(path)
+    session = pipeline.load(path, use_ocr=False)
+    text = body_text(session)
+    assert any("column by column" in w for w in session.document.warnings)
+    assert text.index("Left column sentence 23") < text.index("Right column sentence 0")
+    assert text.index("Right column sentence 7") < text.index("Right column sentence 8")
+    for i in range(24):  # every sentence once
+        assert text.count(f"Left column sentence {i} ") == 1 and text.count(f"Right column sentence {i} ") == 1
+
+
 def test_an_answer_that_would_repeat_text_is_not_used(isolated_home, tmp_path, monkeypatch):
     session, ai, settings = run_layout(tmp_path, monkeypatch, lambda prompt: {"o": [0, 0, 1]})
     before = [b.text for b in session.document.blocks]
