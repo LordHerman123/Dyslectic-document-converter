@@ -16,6 +16,7 @@ TEXTS = {
     "p4": (BlockKind.PARAGRAPH, "Prices are hidden by the non- Germany; and the Trust in London, have joined. "
                                 "disclosure agreements. Write to jane@example.org for data."),
     "f": (BlockKind.PARAGRAPH, "© 2013 Example Publishers Limited. All rights reserved"),
+    "s": (BlockKind.PARAGRAPH, "Both pre- and post-review costs were counted for every journal we asked."),
     "r": (BlockKind.REFERENCE, "Smith, J. (2020). A reference that is never sent. Journal 3, 1-9."),
 }
 ANSWER = [
@@ -32,6 +33,7 @@ ANSWER = [
     {"b": 3, "t": "word", "q": "not in the text", "w": "x", "r": "made up"},  # not there: dropped
     {"b": 99, "t": "word", "q": "num ber", "w": "number", "r": "unknown block"},  # dropped
     {"b": 1, "t": "rewrite", "q": "Publishers say", "w": "They say", "r": "unknown type"},  # dropped
+    {"b": 7, "t": "word", "q": "pre- and", "w": "pre-and", "r": "hyphen"},  # a suspended hyphen: dropped
 ]
 
 
@@ -96,7 +98,7 @@ def test_only_findings_that_hold_are_kept(checked):
     assert ("word", "num ber") in found and ("scan", "rnodel") in found and ("word", "forthe") in found
     assert ("heading", "2. Methods") in found and ("not_heading", "Figure 2") in found
     assert ("order", "Germany; and the Trust in London, have joined.") in found
-    assert not any(q in ("recieved", "not in the text", "Publishers say") for _, q in found)
+    assert not any(q in ("recieved", "not in the text", "Publishers say", "pre- and") for _, q in found)
     assert len(session.check_findings) == 9
 
 

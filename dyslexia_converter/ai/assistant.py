@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
@@ -30,7 +32,7 @@ from .log import LogEntry, RequestLog
 from .privacy import mask, window
 from .prompts import (CHECK, CITATIONS, LAYOUT, OCR, SUMMARY, Task, check_prompt, citation_prompt, layout_prompt,
                       ocr_prompt, summary_prompt)
-from .providers import AIError, Reply, UnreadableAnswer, make_provider
+from .providers import AIError, Busy, Reply, UnreadableAnswer, make_provider
 
 PRIVACY_NOTICE = (
     "Some document content will be sent to the AI provider using your API key.\n\n"
@@ -42,6 +44,8 @@ PRIVACY_NOTICE = (
 CHUNK = 30  # items per request: the fixed instructions and examples are shared by more items
 SUMMARY_WORDS = 3000  # a longer text is summarised in parts, and the parts' points summarised once more
 SUMMARY_POINTS = {False: 5, True: 10}  # most points in a short / detailed summary
+RETRY_WAITS = (2.0, 6.0)  # seconds to wait before asking a busy provider again
+CHECK_WORKERS = 3  # parts of the whole-document check sent side by side
 
 
 class ConsentRequired(Exception):
@@ -144,6 +148,7 @@ class AIAssistant:
         self.cache = cache or AICache()
         self.log = log or RequestLog()
         self.usage: list[UsageEntry] = []
+        self._lock = threading.Lock()
 
     # ------------------------------------------------------------------ state
     @property
@@ -216,28 +221,45 @@ class AIAssistant:
 
     # ---------------------------------------------------------------- sending
     def send(self, request: Request) -> Reply:
-        """Send one request, log exactly what was sent and received (also when it fails), and return the reply."""
+        """Send one request, log exactly what was sent and received (also when it fails), and return the reply.
+        When the provider is busy (a rate limit, a passing server error) it is asked again after a short wait;
+        every attempt is in the log."""
         provider, key = self._provider()
-        entry = LogEntry(request.task.name, self.settings.provider, provider.model, len(request.keys),
-                         request.system, request.prompt)
-        try:
-            reply = provider.complete_json(request.system, request.prompt, request.task.schema,
-                                           request.max_tokens, request.task.answer_hint)
-        except AIError as e:
-            entry.error = str(e)
+        for attempt in range(len(RETRY_WAITS) + 1):
+            entry = LogEntry(request.task.name, self.settings.provider, provider.model, len(request.keys),
+                             request.system, request.prompt)
+            try:
+                reply = provider.complete_json(request.system, request.prompt, request.task.schema,
+                                               request.max_tokens, request.task.answer_hint)
+            except Busy as e:
+                entry.error = str(e)
+                self._record(entry)
+                if attempt == len(RETRY_WAITS):
+                    raise
+                time.sleep(RETRY_WAITS[attempt])
+                continue
+            except AIError as e:
+                entry.error = str(e)
+                self._record(entry)
+                raise
+            except Exception as e:  # never leak the key through unexpected errors
+                entry.error = f"request failed ({type(e).__name__})"
+                self._record(entry)
+                raise AIError(redact(f"AI request failed: {type(e).__name__}", key)) from None
+            entry.answer = reply.text or json.dumps(reply.data)
+            entry.input_tokens, entry.output_tokens = reply.input_tokens, reply.output_tokens
+            entry.cached_tokens = reply.cached_tokens
+            self._record(entry, UsageEntry(request.task.name, len(request.keys), False, reply.input_tokens,
+                                           reply.output_tokens))
+            return reply
+        raise AIError("The AI provider is busy. Try again later.")  # not reached
+
+    def _record(self, entry: LogEntry, usage: Optional[UsageEntry] = None) -> None:
+        """Write a request to the privacy log (and count its tokens); requests may be sent side by side."""
+        with self._lock:
             self.log.add(entry)
-            raise
-        except Exception as e:  # never leak the key through unexpected errors
-            entry.error = f"request failed ({type(e).__name__})"
-            self.log.add(entry)
-            raise AIError(redact(f"AI request failed: {type(e).__name__}", key)) from None
-        entry.answer = reply.text or json.dumps(reply.data)
-        entry.input_tokens, entry.output_tokens = reply.input_tokens, reply.output_tokens
-        entry.cached_tokens = reply.cached_tokens
-        self.log.add(entry)
-        self.usage.append(UsageEntry(request.task.name, len(request.keys), False,
-                                     reply.input_tokens, reply.output_tokens))
-        return reply
+            if usage is not None:
+                self.usage.append(usage)
 
     def check_key(self, provider: str, value: str, model: str = "") -> "keys.CheckResult":
         """Check that a key works with one tiny request (no document text); the check is in the privacy log."""
@@ -283,13 +305,14 @@ class AIAssistant:
         return orders
 
     # ------------------------------------------------------------------ the whole-document check
-    def plan_check(self, parts: list[list[tuple[int, str, int, str]]]) -> tuple[list[Request], dict[int, list]]:
+    def plan_check(self, parts: list[list[tuple[int, str, int, str]]], language: str = "en"
+                   ) -> tuple[list[Request], dict[int, list]]:
         """``parts``: the document in parts, each a list of (block number, kind code, page, text). One request per
         part, with the text masked; answers known from earlier checks of the same text are reused."""
         known: dict[int, list] = {}
         requests = []
         for i, part in enumerate(parts):
-            prompt = check_prompt([(n, kind, page, mask(text)) for n, kind, page, text in part])
+            prompt = check_prompt([(n, kind, page, mask(text)) for n, kind, page, text in part], language)
             ck = self._item_key("check", prompt)
             hit = self.cache.get(ck)
             if hit is not None:
@@ -299,25 +322,35 @@ class AIAssistant:
         return requests, known
 
     def check_parts(self, parts: list[list[tuple[int, str, int, str]]],
-                    progress: Optional[Callable[[str, float], None]] = None) -> tuple[dict[int, list], int]:
+                    progress: Optional[Callable[[str, float], None]] = None, language: str = "en"
+                    ) -> tuple[dict[int, list], int]:
         """Ask the AI to check each part of the document. Returns part number -> the AI's findings (not yet
         checked against the text), and how many parts got no usable answer (they are skipped; an error such
         as a refused key stops the check)."""
-        requests, answers = self.plan_check(parts)
+        requests, answers = self.plan_check(parts, language)
         if answers:
             self.usage.append(UsageEntry("check", len(answers), True))
         failed = 0
-        for n, req in enumerate(requests):
-            if progress:
-                progress(f"Checking part {n + 1} of {len(requests)}", n / max(1, len(requests)))
-            try:
-                found = self.send(req).data.get("f", [])
-            except UnreadableAnswer:
-                failed += 1
-                continue
-            found = [r for r in found if isinstance(r, dict)] if isinstance(found, list) else []
-            answers[req.items[0]] = found
-            self.cache.put(req.keys[0], found)
+        if progress and requests:
+            progress(f"Checking part 1 of {len(requests)}", 0.0)
+        # a few parts at a time: a long document is checked in a fraction of the time
+        pool = ThreadPoolExecutor(max_workers=CHECK_WORKERS)
+        try:
+            futures = {pool.submit(self.send, req): req for req in requests}
+            for done, fut in enumerate(as_completed(futures), start=1):
+                req = futures[fut]
+                try:
+                    found = fut.result().data.get("f", [])
+                except UnreadableAnswer:
+                    failed += 1
+                    continue
+                found = [r for r in found if isinstance(r, dict)] if isinstance(found, list) else []
+                answers[req.items[0]] = found
+                self.cache.put(req.keys[0], found)
+                if progress and done < len(requests):
+                    progress(f"Checking part {done + 1} of {len(requests)}", done / len(requests))
+        finally:
+            pool.shutdown(wait=True, cancel_futures=True)  # an error (a refused key) stops the parts not sent yet
         return answers, failed
 
     # ------------------------------------------------------------------ summaries

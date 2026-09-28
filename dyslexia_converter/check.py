@@ -30,6 +30,8 @@ KINDS = ("word", "scan", "furniture", "heading", "not_heading", "order")
 STRUCTURAL = ("heading", "not_heading", "furniture_block")
 _SENT = {BlockKind.TITLE: "T", BlockKind.PARAGRAPH: "P", BlockKind.LIST_ITEM: "L", BlockKind.QUOTE: "Q",
          BlockKind.CAPTION: "C", BlockKind.FOOTNOTE: "N"}  # headings: H1-H3
+# a hyphen before "and" / "or" in several languages ("pre- and post-review"): correct, never joined
+SUSPENDED = re.compile(r"[-\u2010\u2011]\s+(?:and|or|nor|en|of|und|oder|bzw|et|ou|y|o|e|ed)\b", re.I)
 _BREAKS = re.compile(r"[\s\-‐‑­]")  # what a safe word fix may change: spaces and hyphens
 
 
@@ -193,6 +195,8 @@ def _finding(kind: str, quote: str, fix: str, reason: str, b: Block, doc: Docume
     if kind in ("word", "scan"):
         if not fix or fix == quote or words > 4 or len(fix.split()) > 4:
             return None
+        if SUSPENDED.search(quote) and not SUSPENDED.search(fix):
+            return None  # "pre- and post-review", "zorg- en welzijnswerk": a hyphen that belongs there
         if _BREAKS.sub("", fix) != _BREAKS.sub("", quote):  # letters change: only a word misread in a scan
             if b.source != "ocr" or " " in quote or " " in fix or \
                     Levenshtein.distance(fix.lower(), quote.lower()) > max(2, len(quote) // 3):

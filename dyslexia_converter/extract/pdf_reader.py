@@ -825,7 +825,17 @@ def _text_lines(page: pymupdf.Page, pno: int) -> list[RawLine]:
     lines: list[RawLine] = []
     for row in _rows(spans, rules):
         bno = Counter(sp.block_no for sp in row).most_common(1)[0][0]
-        full = [sp for sp in row if sp.size >= max(o.size for o in row) * 0.85]
+        # the text size of the row; a bullet or symbol drawn in a much larger font does not count
+        common = Counter()
+        for sp in row:
+            common[round(sp.size, 1)] += len(sp.text.strip())
+        main = common.most_common(1)[0][0] if common else 0
+        max_size = max((sp.size for sp in row if not (len(sp.text.strip()) == 1 and not sp.text.strip().isalnum()
+                                                         and sp.size > 1.3 * main)), default=0) \
+            or max(sp.size for sp in row)
+        # the baseline of the full-size text (not of such a large bullet, which would make the text beside it
+        # look like superscript)
+        full = [sp for sp in row if sp.size >= max_size * 0.85]
         weights = Counter()
         for sp in full:
             weights[round(sp.baseline, 1)] += len(sp.text.strip()) or 1
@@ -835,14 +845,6 @@ def _text_lines(page: pymupdf.Page, pno: int) -> list[RawLine]:
         weighted = Counter()
         bold_chars = italic_chars = 0
         fonts = Counter()
-        # the text size of the row; a bullet or symbol drawn in a much larger font does not count
-        common = Counter()
-        for sp in row:
-            common[round(sp.size, 1)] += len(sp.text.strip())
-        main = common.most_common(1)[0][0] if common else 0
-        max_size = max((sp.size for sp in row if not (len(sp.text.strip()) == 1 and not sp.text.strip().isalnum()
-                                                         and sp.size > 1.3 * main)), default=0) \
-            or max(sp.size for sp in row)
         # what counts as smaller type: symbols of a maths font can be set larger than the text around
         # them (ϕ at 9.7 pt in 8 pt text), which must not turn that text into superscript
         on_line = [sp for sp in row if abs(sp.baseline - baseline) < 0.1 * sp.size]

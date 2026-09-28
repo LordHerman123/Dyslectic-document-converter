@@ -92,7 +92,7 @@ def test_core_messages_still_exist_in_the_core():
                   "Running OCR on page {pno + 1} of {n}", "is not installed on this device; using the similar free",
                   "Using the saved text recognition of this document", "Detecting document structure",
                   "Checking OCR text against the dictionary", "Sent to AI: ", "Nothing needed AI help.",
-                  "Checking part {n + 1} of {len(requests)}"]:
+                  "Checking part {done + 1} of {len(requests)}"]:
         assert piece in src, piece
 
 

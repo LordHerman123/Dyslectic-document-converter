@@ -203,12 +203,15 @@ CHECK = Task(
         "Converting a PDF can go wrong. You read the converted text and point out where the CONVERSION went "
         "wrong. You never rewrite text, and you never judge the author's writing: spelling mistakes, grammar, "
         "style or odd wording that were already in the original are not conversion errors.\n\n"
-        "Each numbered line is one block of the converted document: its number | its kind (T title, H1-H3 "
+        "The first line names the document's language. Each numbered line after it is one block of the converted "
+        "document: its number | its kind (T title, H1-H3 "
         "heading, P paragraph, L list item, Q quote, C caption, N footnote; 'scan' means the text was read from "
         "a scan by text recognition) | the page of the original | its text.\n\n"
         "Report only these conversion errors:\n"
         "- word: a word broken in two ('num ber'), two words run together ('forthe'), or a hyphen from a line "
-        "break left in or lost ('non- disclosure', 'self- report'). Give the corrected words in 'w'.\n"
+        "break left in or lost ('non- disclosure', 'self- report'). Give the corrected words in 'w'. A hyphen "
+        "before 'and', 'or' or the same in another language is correct ('pre- and post-review', 'zorg- en "
+        "welzijnswerk').\n"
         "- scan: only in 'scan' blocks, a word misread by text recognition ('tbe', 'rnodel'). Give the intended "
         "word in 'w'.\n"
         "- furniture: a running header or footer, page number, journal name or volume line, copyright or "
@@ -225,6 +228,7 @@ CHECK = Task(
         'Answer with JSON: {"f": [{"b": block number, "t": type, "q": "exact text", "w": "correction", '
         '"r": "reason"}]}, or {"f": []} when you find nothing.\n\n'
         "Example\n"
+        "Language: English\n"
         "0 | T | p1 | THE PRICE OF KNOWLEDGE\n"
         "1 | P | p1 | Publishers say that their costs are high. The num ber of journals has grown fast, and some "
         "now charge less than 100 euro per paper. 1 2 | S C I E N C E | V O L 7 Yet prices still vary.\n"
@@ -254,6 +258,8 @@ CHECK = Task(
 )
 
 
-def check_prompt(blocks: list[tuple[int, str, int, str]]) -> str:
-    """One part of the document for the check: per block its number, kind code, original page and text."""
-    return "\n".join(f"{n} | {kind} | p{page} | {text}" for n, kind, page, text in blocks)
+def check_prompt(blocks: list[tuple[int, str, int, str]], language: str = "en") -> str:
+    """One part of the document for the check: its language, then per block its number, kind code, original page
+    and text."""
+    return f"Language: {LANGUAGE_NAMES.get(language, language)}\n" + \
+        "\n".join(f"{n} | {kind} | p{page} | {text}" for n, kind, page, text in blocks)

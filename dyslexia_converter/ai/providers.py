@@ -11,12 +11,19 @@ from typing import Optional
 from .keystore import redact
 
 
+TIMEOUT = 120.0  # seconds: a part of the whole-document check can take a larger model a while to answer
+
+
 class AIError(Exception):
     """A provider error with any API key removed from the message."""
 
 
 class UnreadableAnswer(AIError):
     """The provider answered, but not with the JSON asked for (e.g. an answer cut off at its length limit)."""
+
+
+class Busy(AIError):
+    """The provider asked to slow down (rate limit) or had a passing server error: worth asking again shortly."""
 
 
 @dataclass
@@ -77,7 +84,7 @@ class AnthropicProvider(AIProvider):
             import anthropic
         except ImportError as e:
             raise AIError("The 'anthropic' package is not installed (pip install anthropic).") from e
-        client = anthropic.Anthropic(api_key=self._key, max_retries=2, timeout=60.0)
+        client = anthropic.Anthropic(api_key=self._key, max_retries=2, timeout=TIMEOUT)
         output_config: dict = {"format": {"type": "json_schema", "schema": schema}}
         if not self.model.startswith("claude-haiku"):
             output_config["effort"] = "low"  # small classification tasks: little thinking needed
@@ -135,7 +142,7 @@ class GeminiProvider(AIProvider):
                                  "thinkingConfig": {"thinkingBudget": 0}},
         }
         try:
-            r = httpx.post(self.URL.format(model=self.model), json=body, timeout=60.0,
+            r = httpx.post(self.URL.format(model=self.model), json=body, timeout=TIMEOUT,
                            headers={"x-goog-api-key": self._key, "content-type": "application/json"})
         except httpx.HTTPError as e:
             raise AIError("Could not reach the Gemini API. Check your internet connection.") from e
@@ -143,7 +150,9 @@ class GeminiProvider(AIProvider):
         if r.status_code in (401, 403) or (r.status_code == 400 and "API_KEY_INVALID" in r.text):
             raise AIError("The API key was rejected by Google. Check the key in AI Settings.")
         if r.status_code == 429:
-            raise AIError("Gemini rate limit / free-tier quota reached. Try again later.")
+            raise Busy("Gemini rate limit / free-tier quota reached. Try again later.")
+        if r.status_code in (500, 502, 503, 504):
+            raise Busy(f"Gemini API error ({r.status_code}). Try again later.")
         if r.status_code >= 400:
             raise AIError(redact(f"Gemini API error ({r.status_code}).", self._key))
         try:
@@ -185,7 +194,7 @@ class MistralProvider(AIProvider):
             ],
         }
         try:
-            r = httpx.post(self.URL, json=body, timeout=60.0,
+            r = httpx.post(self.URL, json=body, timeout=TIMEOUT,
                            headers={"Authorization": f"Bearer {self._key}", "Content-Type": "application/json",
                                     "Accept": "application/json"})
         except httpx.HTTPError as e:
@@ -193,7 +202,9 @@ class MistralProvider(AIProvider):
         if r.status_code in (401, 403):
             raise AIError("The API key was rejected by Mistral. Check the key in AI Settings.")
         if r.status_code == 429:
-            raise AIError("Mistral rate limit / free-plan quota reached. Try again in a minute.")
+            raise Busy("Mistral rate limit / free-plan quota reached. Try again in a minute.")
+        if r.status_code in (500, 502, 503, 504):
+            raise Busy(f"Mistral API error ({r.status_code}). Try again later.")
         if r.status_code >= 400:
             raise AIError(redact(f"Mistral API error ({r.status_code}).", self._key))
         try:

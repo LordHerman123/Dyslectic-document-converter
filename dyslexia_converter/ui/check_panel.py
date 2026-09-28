@@ -186,12 +186,24 @@ class CheckPanel:
                  ft.TextButton(t("Check again"), icon=ft.Icons.REFRESH, on_click=self.on_check_again,
                                disabled=not self.ready()[0])]
         cards = [self.card(f) for f in findings]
+        # pages read in the AI's order: each can go back to the app's own order
+        doc = app.session.document if app.session else None
+        reordered = []
+        for number in sorted(app.session.layout_orders) if app.session else []:
+            info = doc.pages[number] if 0 <= number < len(doc.pages) else None
+            shown = (info.source_page + 1) if info is not None and info.source_page >= 0 else number + 1
+            reordered.append(ft.Row([
+                ft.Icon(ft.Icons.SWAP_VERT, size=app.fs(16), color=ft.Colors.PRIMARY),
+                app.text(t("Page {n} is read in the AI's order.", n=shown), 13, expand=True),
+                ft.TextButton(t("Undo"), icon=ft.Icons.UNDO, data=number, on_click=self.on_undo_reorder)],
+                spacing=6))
         return ft.Column([
             ft.Row([ft.Icon(ft.Icons.FACT_CHECK_OUTLINED, color=ft.Colors.PRIMARY),
                     app.text(t("AI check"), 18, weight=ft.FontWeight.BOLD, expand=True),
                     ft.IconButton(ft.Icons.CLOSE, tooltip=t("Back to the settings"), on_click=self.close)]),
             app.text(summary, 13),
             ft.Row(tools, wrap=True, spacing=8, run_spacing=6),
+            *reordered,
             ft.ListView(cards, spacing=8, expand=True, padding=ft.Padding.only(right=8, bottom=24)),
         ], spacing=8, expand=True)
 
@@ -203,7 +215,7 @@ class CheckPanel:
                  "heading": t("Heading run into the text"), "not_heading": t("Not a heading"),
                  "order": t("Text in the wrong place")}[f.kind]
         if f.kind in ("word", "scan"):
-            fix = f"“{f.quote}” → “{f.fix}”"
+            fix = None  # shown as the old and new words with an arrow between them (below)
         elif f.kind == "furniture":
             fix = t("Hide it, like other headers and footers") if f.whole else t("Remove it from the text")
         elif f.kind == "heading":
@@ -222,6 +234,11 @@ class CheckPanel:
             actions.append(ft.OutlinedButton(t("Undo"), icon=ft.Icons.UNDO, data=f.id, on_click=self.on_undo))
         elif f.fixable:
             actions.append(ft.FilledTonalButton(t("Fix"), icon=ft.Icons.CHECK, data=f.id, on_click=self.on_fix))
+        elif f.kind == "order" and self.ready()[0]:
+            actions.append(ft.FilledTonalButton(t("Let AI fix the order of this page"), icon=ft.Icons.AUTO_FIX_HIGH,
+                                                data=f.id, on_click=self.on_reorder,
+                                                tooltip=t("The AI puts the pieces of the page in reading order; "
+                                                          "you can undo it")))
         head = [ft.Icon(KIND_ICONS[f.kind], size=app.fs(18), color=ft.Colors.PRIMARY),
                 app.text(label, 14, weight=ft.FontWeight.BOLD, expand=True),
                 app.text(t("page {n}", n=f.page), 12, color=app.pal["muted"])]
@@ -233,7 +250,10 @@ class CheckPanel:
             ft.Text(spans=[ft.TextSpan(f.before + " " if f.before else ""), ft.TextSpan(f.quote, style=mark),
                            ft.TextSpan(" " + f.after if f.after else "")], size=app.fs(14), selectable=True),
             ft.Row([ft.Icon(ft.Icons.ARROW_FORWARD if f.fixable else ft.Icons.INFO_OUTLINE, size=app.fs(16)),
-                    app.text(fix, 13, expand=True)], spacing=6, vertical_alignment=ft.CrossAxisAlignment.START),
+                    app.text(fix, 13, expand=True)], spacing=6, vertical_alignment=ft.CrossAxisAlignment.START)
+            if fix is not None else
+            ft.Row([app.text(f"“{f.quote}”", 13), ft.Icon(ft.Icons.EAST, size=app.fs(16)),
+                    app.text(f"“{f.fix}”", 13, weight=ft.FontWeight.BOLD)], spacing=6, wrap=True),
             app.text(t("AI: {reason}", reason=f.reason), 12, italic=True, color=app.pal["muted"])
             if f.reason else ft.Container(),
             ft.Row(actions, spacing=6, wrap=True),
@@ -268,6 +288,51 @@ class CheckPanel:
         """Undo every fix made from the check."""
         if self.app.session.undo_all_findings():
             await self._changed()
+
+    async def on_reorder(self, e) -> None:
+        """Text in the wrong place: after saying what will be sent, ask the AI for the reading order of the page."""
+        app, t = self.app, self.app.t
+        f = app.session.finding(e.control.data)
+        if f is None:
+            return
+        cls = PROVIDERS.get(app.ai_settings.provider)
+        if not await app.confirm(
+                t("Let AI fix the order of page {n}?", n=f.page),
+                t("This sends where each piece of page {n} is, its type size and its first and last words (e-mail "
+                  "addresses, links and long numbers masked) to {provider}. The app then reads the page in the order "
+                  "the AI gives; you can undo it. The findings on this page are cleared: Check again checks the page "
+                  "anew.",
+                  n=f.page, provider=cls.label if cls else app.ai_settings.provider),
+                t("Send"), t("Cancel")):
+            return
+        app.busy(True, t("Asking AI for the reading order of the page..."))
+        try:
+            page = await app.in_thread(app.session.reorder_page, f.id, app.assistant, app.settings)
+        except ConsentRequired as ex:
+            app.notify(t.message(str(ex).split("\n")[0]), error=True)
+            return
+        except AIError as ex:
+            app.notify(t.message(str(ex)) + " " + t("Nothing was changed."), error=True)
+            return
+        except Exception as ex:
+            log.error("reorder failed: %s", redact(str(ex)))
+            app.notify(t("The AI check failed; nothing was changed."), error=True)
+            return
+        finally:
+            app.busy(False, app.doc_status() if app.session else "")
+            app.refresh_ai_log()
+        if page is None:
+            app.notify(t("The AI gave no usable order; the page is unchanged."))
+            return
+        app.notify(t("Page {n} is read in the AI's order.", n=f.page))
+        app.refresh_review()
+        await self._changed()
+
+    async def on_undo_reorder(self, e) -> None:
+        """Read a page in the app's own order again."""
+        self.app.session.undo_reorder(int(e.control.data), self.app.settings)
+        self.app.refresh_review()
+        await self._changed()
 
     async def on_check_again(self, e) -> None:
         """Check again (parts whose text did not change are answered from earlier answers)."""

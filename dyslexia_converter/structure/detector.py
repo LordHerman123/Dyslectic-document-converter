@@ -11,11 +11,11 @@ import re
 import statistics
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Callable, Optional, Union
+from typing import Callable, Iterable, Optional, Union
 
 from rapidfuzz import fuzz
 
-from ..extract.layout import column_order, interleaved, pieces, reading_order
+from ..extract.layout import column_order, interleaved, pieces, reading_order, untangle
 from ..extract.pdf_reader import CAPTION_RE, RawDocument, RawFigure, RawLine, RawPage, RawTable, overlap_ratio
 from ..model import Block, BlockKind, Document, OcrWordConfidence, StyleRange
 
@@ -32,10 +32,20 @@ REFERENCE_HEADINGS = re.compile(
     r"^\s*(?:\d+\.?\s*)?(references|reference list|bibliography|works cited|literature cited|literature|"
     r"sources|referenties|literatuur|literatuurlijst|bronnen|bronvermelding)\s*$", re.I)
 RUNNING_HEAD_RE = re.compile(r"^(?:\d{1,4}\s+\S.*|.*\S\s+\d{1,4})$")
+CONTINUED_RE = re.compile(r"^\s*\(?\s*(?:cont|cont'd|contd|continued|vervolg|suite|fortsetzung|continua)\s*\.?\s*\)?"
+                          r"[\s.:;]*$", re.I)
+SUBSECTION_RE = re.compile(r"^\d+(?:\.\d+)+\.?\s+[A-Z]")  # "1.1. Responsibility...": a new section
+MARKER_RE = re.compile(r"[a-z](?:,[a-z])*|\d{1,2}|[\u2217*\u2020\u2021\u00a7\u00b6]")  # affiliation marks
+FIGURE_DOI_RE = re.compile(r"^(?:doi:\s?|https?://(?:dx\.)?doi\.org/)10\.\S+\.[gt]\d{3}$", re.I)
+# a publisher's masthead on the first page, and the journal line "Research Policy 42 (2013) 1568–1580"
+MASTHEAD_RE = re.compile(r"^(?:contents lists available at\b|journal homepage:|available online at\b|"
+                         r"www\.sciencedirect\.com$|sciencedirect$)", re.I)
+JOURNAL_LINE_RE = re.compile(r"^[A-Z][\w&.,:'’ -]{2,80}\s\d{1,4}\s\((?:19|20)\d{2}\)\s[A-Za-z]?\d+(?:\s?[–-]\s?\d+)?$")
 SPECIAL_HEADINGS = re.compile(
     r"^\s*(abstract|samenvatting|summary|keywords|key words|trefwoorden|introduction|inleiding|"
     r"conclusions?|conclusie|discussion|discussie|methods?|methode|results|resultaten|"
-    r"acknowledg(e)?ments?|dankwoord|appendix|bijlage|contents|inhoud|inhoudsopgave)\b[\s:.]*$", re.I)
+    r"acknowledg(e)?ments?|dankwoord|appendix|bijlage|contents|inhoud|inhoudsopgave|highlights|article info|"
+    r"graphical abstract)\b[\s:.]*$", re.I)
 
 Item = Union[RawLine, RawFigure, RawTable]
 # run-in headings of theorem-like blocks
@@ -93,8 +103,10 @@ class _Para:
 # ----------------------------------------------------------------------------- helpers
 
 def _norm_furniture(text: str) -> str:
-    """A header/footer line with numbers replaced, so "Page 3" and "Page 4" count as the same."""
-    return re.sub(r"\d+", "#", text.strip().lower())
+    """A header/footer line without its numbers and punctuation, so "Page 3" and "Page 4" count as the same, and so do
+    "290 B. Wynne" and "B. Wynne", "CHAPTER 6 « Science" and "CHAPTER 6 » Science" (OCR reads such marks
+    differently), or "NEWS FEATURE" and "FEATURE NEWS" (left and right pages)."""
+    return " ".join(sorted(re.sub(r"[^\w\s]|\d", " ", text.strip().lower()).split())) or "0"
 
 
 def body_font_size(lines: list[RawLine]) -> float:
@@ -136,14 +148,16 @@ class StructureDetector:
         return f"b{self._counter}"
 
     # --------------------------------------------------------------------- main
-    def detect(self, raw: RawDocument, source_path: str = "", orders: Optional[dict[int, list[int]]] = None
-               ) -> Document:
+    def detect(self, raw: RawDocument, source_path: str = "", orders: Optional[dict[int, list[int]]] = None,
+               extra: Iterable[int] = ()) -> Document:
         """Build the structured document from what was read (``source_path`` is kept for reference).
 
-        ``orders``: for pages with an unusual layout, the reading order of their pieces (from the optional AI
-        layout check); every other page is read in the local order. The pieces of each unusual page are kept
-        in ``layout_pieces``.
+        ``orders``: for pages with an unusual layout (or where the AI check found text in the wrong place), the
+        reading order of their pieces from the optional AI layout check; every other page is read in the local
+        order. The pieces of each unusual page, and of the pages in ``extra`` (to ask the AI about), are kept in
+        ``layout_pieces``.
         """
+        extra = set(extra)
         self.layout_pieces: dict[int, list[list[Item]]] = {}
         doc = Document(source_path=source_path, pages=[p.info for p in raw.pages],
                        title=raw.title, author=raw.author, toc=raw.toc, warnings=list(raw.warnings))
@@ -169,15 +183,20 @@ class StructureDetector:
             # column from its pieces instead, or in the order the optional AI layout check gave; every other page
             # keeps the order above
             page.info.unusual_layout, page.info.ai_layout = interleaved(ordered), False
-            if page.info.unusual_layout:
+            number = page.info.number
+            order = (orders or {}).get(number)
+            if page.info.unusual_layout or order is not None or number in extra:
                 ps = pieces(items)
-                self.layout_pieces[page.info.number] = ps
-                order = (orders or {}).get(page.info.number)
+                self.layout_pieces[number] = ps
                 if order is not None and sorted(order) == list(range(len(ps))):
                     page.info.unusual_layout, page.info.ai_layout = False, True
+                    ordered = [it for n in order for it in ps[n]]
+                elif page.info.unusual_layout:
+                    ordered = [it for n in column_order(ps) for it in ps[n]]
                 else:
-                    order = column_order(ps)
-                ordered = [it for n in order for it in ps[n]]
+                    ordered = untangle(ordered)
+            else:
+                ordered = untangle(ordered)  # a pull quote inside a column, with the text wrapped around it
             page_blocks = self._build_blocks(ordered, b_size, page)
             for l in page.lines:
                 if id(l) in furniture:
@@ -188,7 +207,8 @@ class StructureDetector:
             in_references = in_references or any(
                 b.kind == BlockKind.HEADING and REFERENCE_HEADINGS.match(b.text) for b in page_blocks)
 
-        blocks = self._merge_across_breaks(blocks)
+        blocks = self._merge_across_breaks(blocks, body)
+        blocks = self._join_markers(blocks)
         self._classify_headings(blocks, body)
         self._apply_toc(blocks, raw.toc)
         heights = {p.info.number: p.info.height for p in raw.pages}
@@ -222,14 +242,65 @@ class StructureDetector:
         result = set()
         for l, key in candidates:
             text = l.text.strip()
+            tokens = text.split()
             if PAGE_NUMBER_RE.match(text):
                 result.add(id(l))
-            elif n >= 2 and counts[key] >= max(2, 0.4 * n) and len(key) > 2:
-                result.add(id(l))
-            elif RUNNING_HEAD_RE.match(text) and len(text.split()) <= 10 and counts[key] >= 2:
+            elif n >= 2 and counts[key] >= max(2, 0.4 * n) and len(text) > 2 and key != "0":
+                result.add(id(l))  # (a line of only numbers and marks, like an equation number "(12)", is no header)
+            elif RUNNING_HEAD_RE.match(text) and len(tokens) <= 10 and counts[key] >= 2:
                 # book running heads: "12 CHAPTER TITLE" / "Section title 13", repeated
                 result.add(id(l))
+            elif len(tokens) >= 8 and sum(len(t) == 1 for t in tokens) >= 0.6 * len(tokens) \
+                    and re.search(r"(?:\b[A-Za-z0-9] ){5,}[A-Za-z0-9]\b", text):
+                # a letter-spaced journal line ("4 2 6 | N A T U R E | V O L 4 9 5"), even where each page words
+                # it differently
+                result.add(id(l))
+            elif text.count(" | ") >= 2 and re.search(r"\d", text) and len(tokens) <= 16:
+                result.add(id(l))  # "Nature | Vol 520 | 23 April 2015"
+        for page in raw.pages:
+            result |= self._page_number_lines(page, result)
+            result |= self._masthead_lines(page)
+            # "(cont)." / "(continued)" at the top of a page: a box going on from the page before
+            result |= {id(l) for l in page.lines if l.y0 < 0.15 * page.info.height and CONTINUED_RE.match(l.text)}
         return result
+
+    @staticmethod
+    def _page_number_lines(page: RawPage, known: set[int]) -> set[int]:
+        """A page number printed a little inside the margin (book scans often have wide margins): a bare number
+        that is the first or last thing on the page, well apart from the text, in the outer fifth of the page."""
+        h = page.info.height
+        lines = [l for l in page.lines if id(l) not in known]
+        if len(lines) < 3:
+            return set()
+        out = set()
+        items = [l.bbox for l in lines] + [f.bbox for f in page.figures] + [t.bbox for t in page.tables]
+        for l, lowest in ((max(lines, key=lambda l: l.y1), True), (min(lines, key=lambda l: l.y0), False)):
+            if not re.fullmatch(r"[-–]?\s*\d{1,4}\s*[-–]?", l.text.strip()):
+                continue
+            if lowest and (l.y0 < 0.8 * h or any(b[3] > l.y1 + 1 for b in items)):
+                continue
+            if not lowest and (l.y1 > 0.2 * h or any(b[1] < l.y0 - 1 for b in items)):
+                continue
+            others = [b for b in items if b != l.bbox]
+            gap = min((l.y0 - b[3] if lowest else b[1] - l.y1) for b in others) if others else 0
+            if gap >= 0.8 * max(1.0, l.y1 - l.y0):
+                out.add(id(l))
+        return out
+
+    @staticmethod
+    def _masthead_lines(page: RawPage) -> set[int]:
+        """A publisher's masthead above the title ("Contents lists available at ScienceDirect", the journal
+        name, "journal homepage: ...", "Research Policy 42 (2013) 1568-1580"): page furniture, not the title."""
+        h = page.info.height
+        top = [l for l in page.lines if l.y1 < 0.25 * h]
+        out = {id(l) for l in top if MASTHEAD_RE.match(l.text.strip())
+               or (l.y1 < 0.12 * h and JOURNAL_LINE_RE.match(l.text.strip()))}
+        start = [l for l in top if l.text.strip().lower().startswith("contents lists available")]
+        end = [l for l in top if l.text.strip().lower().startswith("journal homepage")]
+        if start and end:  # the journal's name sits between the two
+            y0, y1 = start[0].y0, end[0].y1
+            out |= {id(l) for l in top if y0 <= l.y0 and l.y1 <= y1}
+        return out
 
     # --------------------------------------------------------------- footnotes
     def _find_footnotes(self, page: RawPage, lines: list[RawLine], body_size: float) -> list[RawLine]:
@@ -364,7 +435,14 @@ class StructureDetector:
         # "cli-" + "- mate deniers": OCR read the line-end hyphen twice; not a new "- " list item
         hyphen_run = c.source == "ocr" and bool(re.search(r"[A-Za-z][-–][^\w\s]{0,2}$", p.text.rstrip())) \
             and bool(re.match(r"^\s*[-–]\s?[a-z]", c.text))
-        if (LIST_RE.match(c.text) and not running_on and not hyphen_run) or REF_BRACKET_RE.match(c.text):
+        # "...1.8 million articles" + "— an average revenue per article...": a dash in a sentence, at a line start
+        # (an en dash only when the aside closes with a second one: "– based on some criteria – that..."; after a
+        # comma a dash starts a list: "we conclude that," + "– if τ = 1, then:")
+        dash_on = _dash_goes_on(" ".join(l.text for l in para.lines), c.text) \
+            and not p.text.rstrip().endswith(TERMINAL + (",",)) \
+            and min(l.x0 for l in para.lines) - 2 <= c.x0 <= p.x0 + 2 and not LIST_RE.match(para.lines[0].text)
+        if (LIST_RE.match(c.text) and not running_on and not hyphen_run and not dash_on) \
+                or REF_BRACKET_RE.match(c.text):
             return False
         if re.search(r" … \S+\s*$", p.text):
             return False  # an entry of a printed table of contents
@@ -377,6 +455,8 @@ class StructureDetector:
                 and (p.x1 - p.x0) < 0.5 * (c.x1 - c.x0) and not (p.italic or c.italic):
             return False  # e.g. a heading set in a different typeface
         moved_column = c.y0 < p.y0 - 2 or c.x0 > p.x1
+        if moved_column and (SPECIAL_HEADINGS.match(c.text) or SPECIAL_HEADINGS.match(p.text)):
+            return False  # "article info" and "abstract" side by side: two labels
         if moved_column:
             return not p.text.rstrip().endswith(TERMINAL) and not c.text[:1].isupper()
         gap = c.y0 - p.y1
@@ -484,12 +564,15 @@ class StructureDetector:
             and not text.rstrip().endswith((".", ",", ";"))
 
     # ----------------------------------------------------- cross-page merging
-    def _merge_across_breaks(self, blocks: list[Block]) -> list[Block]:
-        """Join a paragraph split by a column or page break."""
+    def _merge_across_breaks(self, blocks: list[Block], body: Optional[dict] = None) -> list[Block]:
+        """Join a paragraph split by a column or page break (``body``: the body text size of text and OCR
+        pages)."""
+        body = body or {}
+        first = min((b.page for b in blocks), default=0)
         out: list[Block] = []
         last_para: Optional[Block] = None
         floats_between = False
-        for b in blocks:
+        for i, b in enumerate(blocks):
             if b.kind in (BlockKind.FURNITURE, BlockKind.FOOTNOTE):
                 out.append(b)
                 continue
@@ -501,20 +584,26 @@ class StructureDetector:
                 continue
             if b.kind in (BlockKind.IMAGE, BlockKind.TABLE, BlockKind.CAPTION) or (
                     last_para is not None and b.kind == BlockKind.PARAGRAPH
-                    and b.font_size < last_para.font_size - 1 and len(b.text) < 200):
-                # figures/tables (and their notes) can interrupt a running paragraph
+                    and b.font_size < last_para.font_size - 1 and len(b.text) < 200
+                    and not (len(b.text) >= 80 and b.font_size >= body.get(b.source, 0) - 0.5 and b.page > first)):
+                # figures/tables (and their notes, labels) can interrupt a running paragraph; running text in the
+                # body size after a larger line (a heading not recognised yet) is no such note (but on the first
+                # page, the author lines under the title stay apart)
                 out.append(b)
                 floats_between = True
                 continue
             adjacent = last_para is not None and (last_para is out[-1 - _trailing(out)] or floats_between)
             if floats_between and not b.text[:1].islower():
                 adjacent = False
-            if (b.kind == BlockKind.PARAGRAPH and last_para is not None and adjacent
+            dash_on = last_para is not None and adjacent and self._dash_continues(last_para, b, blocks[i + 1:])
+            if ((b.kind == BlockKind.PARAGRAPH or dash_on) and last_para is not None and adjacent
                     and last_para.kind == BlockKind.PARAGRAPH
                     and abs(last_para.font_size - b.font_size) <= 1.0
                     and not last_para.text.rstrip().endswith(TERMINAL)
                     and not re.search(r" … \S+\s*$", last_para.text)
-                    and not b.text[:1].isupper() and not LIST_RE.match(b.text)):
+                    and not b.text[:1].isupper() and (dash_on or not LIST_RE.match(b.text))
+                    and not SPECIAL_HEADINGS.match(b.text) and not SPECIAL_HEADINGS.match(last_para.text)
+                    and not SUBSECTION_RE.match(b.text)):
                 sep = " "
                 left = re.search(r"([A-Za-z]+)-$", last_para.text)
                 right = re.match(r"([a-z]+)", b.text)
@@ -534,6 +623,46 @@ class StructureDetector:
             out.append(b)
             last_para = b
             floats_between = False
+        return out
+
+    @staticmethod
+    def _dash_continues(para: Block, b: Block, rest: list[Block]) -> bool:
+        """"— an average revenue per article…" at the top of the next column or page, right after a sentence
+        that broke off: the paragraph goes on after a dash; it is no list item (unless more items follow)."""
+        if b.kind != BlockKind.LIST_ITEM or not _dash_goes_on(para.text, b.text) or para.text.rstrip().endswith(","):
+            return False
+        if not (b.page != para.page or b.bbox[1] < para.bbox[3] - 2):
+            return False  # no column or page break between them
+        nxt = next((x for x in rest if x.kind not in (BlockKind.FURNITURE, BlockKind.FOOTNOTE)), None)
+        return not (nxt is not None and nxt.kind == BlockKind.LIST_ITEM and nxt.text[:1] == b.text[:1])
+
+    def _join_markers(self, blocks: list[Block]) -> list[Block]:
+        """Put a lone superscript marker back in front of its line: the "b" of an affiliation "b University
+        of…", printed a little higher and smaller, is read as a line of its own. Figure DOIs printed under a
+        caption ("doi:10.1371/journal.pone.0127502.g001") join the caption."""
+        out: list[Block] = []
+        for i, b in enumerate(blocks):
+            prev = out[-1] if out else None
+            if b.kind == BlockKind.PARAGRAPH and FIGURE_DOI_RE.match(b.text.strip()):
+                cap = next((x for x in reversed(out) if x.kind not in (BlockKind.FURNITURE, BlockKind.FOOTNOTE)),
+                           None)
+                if cap is not None and cap.kind == BlockKind.CAPTION and cap.page == b.page:
+                    cap.text = cap.text.rstrip() + " " + b.text.strip()
+                    continue
+            if prev is not None and prev.kind == BlockKind.PARAGRAPH and MARKER_RE.fullmatch(prev.text.strip()) \
+                    and b.kind == BlockKind.PARAGRAPH and b.page == prev.page and prev.font_size < b.font_size \
+                    and 0 <= b.bbox[0] - prev.bbox[2] < 2 * b.font_size \
+                    and abs(b.bbox[1] - prev.bbox[1]) < max(b.font_size, 4.0):
+                mark = prev.text.strip()
+                shift = len(mark) + 1
+                b.text = mark + " " + b.text
+                b.styles = [StyleRange(0, len(mark), superscript=True)] + [st.moved(shift) for st in b.styles]
+                b.ocr_confidence = [OcrWordConfidence(c.start + shift, c.end + shift, c.confidence)
+                                    for c in b.ocr_confidence]
+                b.bbox = (prev.bbox[0], min(prev.bbox[1], b.bbox[1]), b.bbox[2], max(prev.bbox[3], b.bbox[3]))
+                out[-1] = b
+                continue
+            out.append(b)
         return out
 
     # --------------------------------------------------------------- headings
@@ -556,10 +685,15 @@ class StructureDetector:
             bold = getattr(b, "_bold", False)
             if not words or nlines > 3 or len(words) > 18:
                 continue
-            if sum(ch.isalpha() for ch in text) < 3 or text[:1].islower():
-                continue  # fragments and sentence continuations are never headings
+            special = SPECIAL_HEADINGS.match(text) or REFERENCE_HEADINGS.match(text)
+            if sum(ch.isalpha() for ch in text) < 3 or (text[:1].islower() and not special):
+                continue  # fragments and sentence continuations are never headings ("abstract" set in small
+                # capitals is a label)
             if _looks_garbled(text):
                 continue  # OCR noise is never a heading
+            if text[:1] in "“\"‘" and text[-1:] in "”\"’" and len(words) >= 5 and (b.font_size > bs * 1.1 or bold):
+                b.kind = BlockKind.QUOTE  # a pull quote set large ("“Simplicity is a virtue...”"), not a heading
+                continue
             ends_sentence = text.endswith((".", ",", ";")) and not NUMBERED_HEADING_RE.match(text + " x")
             bigger = b.font_size >= bs * (1.25 if b.source == "ocr" else 1.12) or (
                 b.source == "text" and b.font_size >= bs * 1.07 and nlines == 1 and len(words) <= 10)
@@ -568,7 +702,6 @@ class StructureDetector:
                                  and b.font_size >= bs * 0.95 and nlines == 1 and len(words) <= 10
                                  and font_chars[font] < 0.1 * sum(font_chars.values()))
             numbered = NUMBERED_HEADING_RE.match(text)
-            special = SPECIAL_HEADINGS.match(text) or REFERENCE_HEADINGS.match(text)
             if special and (bold or bigger or distinct_font or _is_upper_heading(text) or len(words) <= 3):
                 b.kind = BlockKind.HEADING
             elif ends_sentence or text.endswith(","):
@@ -802,6 +935,18 @@ class StructureDetector:
                     j += 1
                 out.insert(j, cap)
         return out
+
+
+def _dash_goes_on(before: str, line: str) -> bool:
+    """Whether a line starting with a dash goes on with the sentence before it (a dash in running text, not a list
+    bullet): an em dash, or an en dash that opens an aside closed later on the line ("– based on some criteria –
+    that...") or closes one opened before ("... – makes little sense")."""
+    line = line.lstrip()
+    if re.match(r"\u2014\s", line):
+        return True
+    if re.match(r"\u2013\s", line):
+        return bool(re.search(r"\s\u2013\s", line[2:])) or before.count(" \u2013 ") % 2 == 1
+    return False
 
 
 def _is_equation(b: Block) -> bool:
