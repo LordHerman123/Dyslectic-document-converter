@@ -35,6 +35,7 @@ MESSAGE_PATTERNS: list[tuple[str, re.Pattern]] = [(k, re.compile(p)) for k, p in
     ("n_ocr_words", r"^(\d+) uncertain OCR word\(s\)$"),
     ("n_layout_pages", r"^(\d+) page\(s\) with an unusual layout$"),
     ("font_substitute", r"^(.+) is not installed on this device; using the similar free font (.+) instead\.$"),
+    ("check_part", r"^Checking part (\d+) of (\d+)$"),
 ]]
 
 

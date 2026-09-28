@@ -16,7 +16,7 @@ def _ui_texts() -> list[str]:
     """Every literal passed to the translator (t("...") or self.t("...")) in the UI."""
     out = []
     nodes = []
-    for name in ("app.py", "focus.py"):
+    for name in ("app.py", "focus.py", "check_panel.py"):
         nodes += list(ast.walk(ast.parse((PKG / "ui" / name).read_text(encoding="utf-8"))))
     for node in nodes:
         if isinstance(node, ast.Call) and node.args and isinstance(node.args[0], ast.Constant) \
@@ -66,6 +66,7 @@ def test_every_pattern_has_translations():
     "Sent to AI: 2 uncertain citation(s), 5 uncertain OCR word(s)",
     "Verdana is not installed on this device; using the similar free font DejaVu Sans instead.",
     "Detecting document structure",
+    "Checking part 2 of 5",
 ])
 def test_core_messages_are_translated(msg):
     for lang in OTHER:
@@ -90,7 +91,8 @@ def test_core_messages_still_exist_in_the_core():
                   "Read {done} of {scans_total} scanned page(s){eta}", "Reading page {pno + 1} of {n}",
                   "Running OCR on page {pno + 1} of {n}", "is not installed on this device; using the similar free",
                   "Using the saved text recognition of this document", "Detecting document structure",
-                  "Checking OCR text against the dictionary", "Sent to AI: ", "Nothing needed AI help."]:
+                  "Checking OCR text against the dictionary", "Sent to AI: ", "Nothing needed AI help.",
+                  "Checking part {n + 1} of {len(requests)}"]:
         assert piece in src, piece
 
 

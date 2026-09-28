@@ -15,6 +15,10 @@ class AIError(Exception):
     """A provider error with any API key removed from the message."""
 
 
+class UnreadableAnswer(AIError):
+    """The provider answered, but not with the JSON asked for (e.g. an answer cut off at its length limit)."""
+
+
 @dataclass
 class Reply:
     """A provider's answer and what the request cost in tokens."""
@@ -30,9 +34,9 @@ def _parse(text: str) -> dict:
     try:
         data = json.loads(text)
     except ValueError as e:
-        raise AIError("The AI returned an unreadable answer; the local result was kept.") from e
+        raise UnreadableAnswer("The AI returned an unreadable answer; the local result was kept.") from e
     if not isinstance(data, dict):
-        raise AIError("The AI returned an unreadable answer; the local result was kept.")
+        raise UnreadableAnswer("The AI returned an unreadable answer; the local result was kept.")
     return data
 
 
@@ -146,7 +150,7 @@ class GeminiProvider(AIProvider):
             data = r.json()
             text = data["candidates"][0]["content"]["parts"][0]["text"]
         except (KeyError, IndexError, ValueError) as e:
-            raise AIError("The AI returned an unreadable answer; the local result was kept.") from e
+            raise UnreadableAnswer("The AI returned an unreadable answer; the local result was kept.") from e
         usage = data.get("usageMetadata", {}) or {}
         out = (usage.get("candidatesTokenCount", 0) or 0) + (usage.get("thoughtsTokenCount", 0) or 0)
         return Reply(_parse(text), text, usage.get("promptTokenCount", 0) or 0, out,
@@ -196,7 +200,7 @@ class MistralProvider(AIProvider):
             data = r.json()
             text = data["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError, ValueError) as e:
-            raise AIError("The AI returned an unreadable answer; the local result was kept.") from e
+            raise UnreadableAnswer("The AI returned an unreadable answer; the local result was kept.") from e
         usage = data.get("usage", {}) or {}
         return Reply(_parse(text), text, usage.get("prompt_tokens", 0) or 0, usage.get("completion_tokens", 0) or 0)
 

@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
+from . import check
 from .extract.ocr import OcrEngine, default_engine
 from .extract.pdf_reader import read_pdf
 from .model import Correction, Document
@@ -53,9 +54,93 @@ class Session:
     ai_log: list[str] = field(default_factory=list)
     page_map: dict[int, list[int]] = field(default_factory=dict)  # converted page -> original pages (preview)
     layout_orders: dict[int, list[int]] = field(default_factory=dict)  # page -> reading order from the AI
+    # the whole-document AI check: what it found (fixed or not), and how many parts it could not check
+    check_findings: list[check.Finding] = field(default_factory=list)
+    check_failed: int = 0
     # how to build the document again with a reading order from the AI, and the pieces of unusual pages
     _build: Optional[Callable] = field(default=None, repr=False)
     _layout_pieces: dict = field(default_factory=dict, repr=False)
+
+    # ------------------------------------------------------------ the whole-document AI check
+    def view(self) -> Document:
+        """The document as it is laid out: with the structure fixes the reader chose from the AI check."""
+        return check.view(self.document, self.check_findings)
+
+    def check_parts(self) -> list:
+        """The document in the parts the AI check sends (see :func:`check.parts`)."""
+        return check.parts(self.view())
+
+    def check_preview(self, assistant) -> tuple[list, int]:
+        """What checking now would send: the requests (parts answered before are not sent again) and the number
+        of words checked."""
+        doc = self.view()
+        ps = check.parts(doc)
+        requests = assistant.plan_check([[(n, code, page, text) for n, _, code, page, text in p] for p in ps])[0]
+        return requests, check.word_count(doc)
+
+    def run_check(self, assistant, progress: Optional[ProgressFn] = None) -> list[check.Finding]:
+        """Let the AI read the converted text and point out conversion mistakes. Every finding is checked
+        against the text; nothing is changed until the reader fixes it. Findings already fixed are kept."""
+        doc = self.view()
+        ps = check.parts(doc)
+        answers, self.check_failed = assistant.check_parts(
+            [[(n, code, page, text) for n, _, code, page, text in p] for p in ps], progress)
+        kept = [f for f in self.check_findings if f.applied]
+        ids = {f.id for f in kept}
+        for i, part in enumerate(ps):
+            for f in check.findings_from(answers.get(i), part, doc, self.document):
+                if f.id not in ids:
+                    ids.add(f.id)
+                    kept.append(f)
+        order = {b.id: n for n, b in enumerate(self.document.blocks)}
+        kept.sort(key=lambda f: (order.get(f.block_id.split("~")[0], 0), f.start))
+        self.check_findings = kept
+        return kept
+
+    def finding(self, finding_id: str) -> Optional[check.Finding]:
+        """The finding with this id, or None."""
+        return next((f for f in self.check_findings if f.id == finding_id), None)
+
+    def fix_finding(self, finding_id: str) -> bool:
+        """Make the fix of one finding (returns False when it cannot: e.g. you already changed that text)."""
+        f = self.finding(finding_id)
+        if f is None or f.applied or not f.fixable:
+            return False
+        if f.structural:
+            if any(g.applied and g.structural and g.block_id == f.block_id for g in self.check_findings):
+                return False  # one change of structure per block
+            f.applied = True
+            return True
+        b = self.document.block(f.block_id)
+        if b is None or not (0 <= f.start < f.end <= len(b.text)):
+            return False
+        c = Correction(id=f"check-{f.id}", block_id=f.block_id, start=f.start, end=f.end,
+                       original=b.text[f.start:f.end], replacement=f.replacement, confidence=1.0, status="accepted",
+                       source="check")
+        if any(u.source in ("user", "check") and u.applied and u.overlaps(c) for u in self.document.corrections):
+            return False
+        self.document.corrections.append(c)
+        f.applied = True
+        return True
+
+    def undo_finding(self, finding_id: str) -> None:
+        """Undo the fix of one finding: the converted text comes back as it was."""
+        f = self.finding(finding_id)
+        if f is None:
+            return
+        self.document.corrections = [c for c in self.document.corrections if c.id != f"check-{f.id}"]
+        f.applied = False
+
+    def fix_safe_findings(self) -> int:
+        """Fix every broken or joined word (fixes that change only spaces and hyphens); returns how many."""
+        return sum(1 for f in self.check_findings if f.safe and not f.applied and self.fix_finding(f.id))
+
+    def undo_all_findings(self) -> int:
+        """Undo every fix made from the check; returns how many."""
+        done = [f for f in self.check_findings if f.applied]
+        for f in done:
+            self.undo_finding(f.id)
+        return len(done)
 
     # ------------------------------------------------------------ unusual page layouts
     def layout_pages(self) -> dict[int, list]:
@@ -77,6 +162,7 @@ class Session:
         old = self.document
         kept = {(c.original, c.replacement): c.status for c in old.corrections if c.status in ("accepted", "rejected")}
         self.document, self._layout_pieces = self._build(self.layout_orders)
+        self.check_findings = []  # they point into the document as it was
         if self.document.ocr_used:
             self.recompute_corrections(settings)
             for c in self.document.corrections:
@@ -98,8 +184,8 @@ class Session:
             old = previous.get((c.block_id, c.start, c.original))
             if old is not None and old.status in ("accepted", "rejected") and old.replacement == c.replacement:
                 c.status = old.status
-        # text the user typed in themselves is always kept
-        doc.corrections = fresh + [c for c in doc.corrections if c.source == "user"]
+        # text the user typed in themselves, and fixes they chose from the AI check, are always kept
+        doc.corrections = fresh + [c for c in doc.corrections if c.source in ("user", "check")]
 
     def set_correction(self, correction_id: str, status: str) -> None:
         """Set the status of one correction ("accepted", "rejected", ...) by its id."""
@@ -114,7 +200,7 @@ class Session:
 
     def pending_corrections(self) -> list[Correction]:
         """Suggestions still waiting for a decision (not those already replaced by the user's own text)."""
-        user = [u for u in self.document.corrections if u.source == "user" and u.applied]
+        user = [u for u in self.document.corrections if u.source in ("user", "check") and u.applied]
         return [c for c in self.document.corrections
                 if c.status == "pending" and not any(c.overlaps(u) for u in user)]
 
@@ -122,8 +208,8 @@ class Session:
         """Whether a correction is covered by the user's own edit of the same text (then it is not shown for
         review).
         """
-        return c.source != "user" and any(c.overlaps(u) for u in self.document.corrections
-                                           if u.source == "user" and u.applied)
+        return c.source not in ("user", "check") and any(c.overlaps(u) for u in self.document.corrections
+                                                         if u.source in ("user", "check") and u.applied)
 
     def sentence_span(self, c: Correction) -> tuple[int, int]:
         """Start and end (in the block's original text) of the sentence around a correction."""
@@ -214,7 +300,7 @@ class Session:
         ai = assistant.settings
         cands = []
         if ai.use_for_citations and settings.move_citations:
-            result = compose(self.document, settings, self.ai_citation_decisions)
+            result = self.compose(settings)
             seen: set[str] = set()
             for block_id, c in result.uncertain_citations:
                 if c.key in seen:
@@ -272,15 +358,16 @@ class Session:
 
     # ------------------------------------------------------------------ render
     def compose(self, settings: FormatSettings) -> ComposeResult:
-        """The document laid out for the settings (items ready for any output format)."""
-        return compose(self.document, settings, self.ai_citation_decisions)
+        """The document laid out for the settings (items ready for any output format), with the fixes chosen from
+        the AI check."""
+        return compose(self.view(), settings, self.ai_citation_decisions)
 
     def export(self, fmt: str, settings: FormatSettings) -> bytes:
         """The document in an output format: "pdf", "printable_pdf", "docx", "epub", "txt" or "md" (bytes)."""
         from .render import docx_writer, epub_writer, pdf_writer, text_writer
 
         result = self.compose(settings)
-        doc = self.document
+        doc = self.view()
         if fmt in ("pdf", "printable_pdf"):
             data = pdf_writer.build_pdf(result, settings, doc.title or _first_title(result), doc.author,
                                         printable=fmt == "printable_pdf")

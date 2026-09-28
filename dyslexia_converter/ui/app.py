@@ -24,6 +24,7 @@ from ..fonts import FONT_CHOICES, get_family
 from ..render import preview
 from ..settings import PRESET_DISCLAIMER, PRESETS, FormatSettings, SettingsStore
 from ..transform.spelling import CustomWords
+from .check_panel import CheckPanel
 from .focus import FocusMode
 from .i18n import LANGUAGES, Translator, system_language
 from .theme import make_theme, palette
@@ -103,6 +104,7 @@ class ConverterApp:
         self.doc_key: Optional[str] = None
         self.hl_items: list = []  # ("Include my highlights" divider, menu item) of each export menu
         self.focus = FocusMode(self)
+        self.checker = CheckPanel(self)  # the whole-document AI check
         self._read_units: Optional[list] = None  # sentences of the converted PDF, made when reading starts
         self._read_pos: Optional[int] = None  # sentence being read (kept when paused)
         self._reading = False
@@ -246,12 +248,17 @@ class ConverterApp:
 
         narrow = (p.width or 1200) < 820
         settings_panel, preview_panel = self.build_convert_tab()
+        # the settings column; the AI check's findings are shown in its place
+        self.settings_col = settings_panel
+        self.checker.open = False
         if narrow:  # phones: layout settings and preview get their own tabs
-            convert = [(t("Layout"), ft.Icons.TUNE, ft.Container(settings_panel, padding=12, expand=True)),
+            self.left_holder = ft.Container(settings_panel, padding=12, expand=True)
+            convert = [(t("Layout"), ft.Icons.TUNE, self.left_holder),
                        (t("Preview"), ft.Icons.PREVIEW, ft.Container(preview_panel, padding=8, expand=True))]
         else:
+            self.left_holder = ft.Container(settings_panel, width=400, padding=ft.Padding.only(left=12, right=4))
             convert = [(t("Convert"), ft.Icons.TUNE, ft.Row([
-                ft.Container(settings_panel, width=400, padding=ft.Padding.only(left=12, right=4)),
+                self.left_holder,
                 ft.VerticalDivider(width=1),
                 ft.Container(preview_panel, expand=True, padding=8)], expand=True,
                 vertical_alignment=ft.CrossAxisAlignment.STRETCH))]
@@ -342,6 +349,7 @@ class ConverterApp:
         self.mode_icon.color = self._mode_color()
         self.mode_text.value = self._mode_label()
         self.mode_text.color = self.pal["muted"]
+        self.checker.update_button()  # the AI check needs AI and a key
 
     # ---------------------------------------------------------------- convert tab
     def slider(self, key: str, label: str, lo: float, hi: float, step: float, unit: str) -> ft.Control:
@@ -600,7 +608,7 @@ class ConverterApp:
         corr = session.document.corrections
         pending = session.pending_corrections()
         mine = [c for c in corr if c.source == "user"]
-        others = [c for c in corr if c.source != "user" and not session.replaced_by_user(c)]
+        others = [c for c in corr if c.source not in ("user", "check") and not session.replaced_by_user(c)]
         done = [c for c in others if c.applied]
         rejected = [c for c in others if c.status == "rejected"]
         mode = {"review": t("Review uncertain corrections"), "automatic": t("Automatic (high confidence only)"),
@@ -938,6 +946,7 @@ class ConverterApp:
         self.key_list.value = active or None
         self.key_list.content.controls = [self._key_row(e, e.id == active) for e in entries] or [
             self.text(self.t("No keys yet. Add one below."), 13, color=self.pal["muted"])]
+        self.checker.update_button()
 
     def _key_row(self, e: "keys.KeyEntry", in_use: bool) -> ft.Control:
         """One saved key: pick it, see whether it works, test it, or remove it with the cross."""
@@ -1131,6 +1140,9 @@ class ConverterApp:
             self.busy(False)
         self.refresh_ai_log()
         self.refresh_review()
+        if self.checker.open and not self.session.check_findings:
+            self.checker.close()  # a new reading order: the check's findings no longer apply
+        self.checker.update_button()
         await self.rerender()
 
     def _ai_preview(self, requests) -> ft.Control:
@@ -1371,6 +1383,8 @@ class ConverterApp:
                 (t("Local-only:"), t("the default. Nothing from your document leaves this device.")),
                 (t("AI-assisted:"), t("AI checks uncertain citations and OCR words, and makes summaries in Focus "
                                       "mode when you ask. Summaries are marked as made by AI.")),
+                (t("AI check:"), t("the AI check button on the Convert screen lets the AI read the whole converted "
+                                   "text and list conversion mistakes. You choose what to fix, and can undo it.")),
                 (t("API keys:"), t("add a key with a name, test the connection, and remove it with the cross.")),
                 (t("Privacy log:"), t("every request is listed with the exact text that was sent.")),
             ]),
@@ -1571,6 +1585,9 @@ class ConverterApp:
             self.notify(self.t("Could not read this PDF:") + " " + redact(str(ex)), error=True)
             return
         d = self.session.document
+        if self.checker.open:  # the findings were about the previous document
+            self.checker.close()
+        self.checker.update_button()
         try:
             self.doc_key = await self.in_thread(highlights.document_key, self.source_path)
         except OSError:
@@ -1706,8 +1723,8 @@ class ConverterApp:
                                            tooltip=t("Read the converted document in the whole window"))
         self.hl_items = []
         self.export_menu = self.build_export_menu()
-        return ft.Row([self.view_seg, self.read_toggle, ft.Container(expand=True), self.focus_btn, self.export_menu],
-                      spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+        return ft.Row([self.view_seg, self.read_toggle, ft.Container(expand=True), self.checker.button(),
+                       self.focus_btn, self.export_menu], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
     def build_export_menu(self, compact: bool = False) -> ft.PopupMenuButton:
         """One "Export" button; the formats (and whether to include highlights) are in its menu."""

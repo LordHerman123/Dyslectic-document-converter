@@ -28,9 +28,9 @@ from . import keys
 from .keystore import KeyStore, redact
 from .log import LogEntry, RequestLog
 from .privacy import mask, window
-from .prompts import (CITATIONS, LAYOUT, OCR, SUMMARY, Task, citation_prompt, layout_prompt, ocr_prompt,
-                      summary_prompt)
-from .providers import AIError, Reply, make_provider
+from .prompts import (CHECK, CITATIONS, LAYOUT, OCR, SUMMARY, Task, check_prompt, citation_prompt, layout_prompt,
+                      ocr_prompt, summary_prompt)
+from .providers import AIError, Reply, UnreadableAnswer, make_provider
 
 PRIVACY_NOTICE = (
     "Some document content will be sent to the AI provider using your API key.\n\n"
@@ -281,6 +281,44 @@ class AIAssistant:
                 orders[page] = order
                 self.cache.put(req.keys[0], order)
         return orders
+
+    # ------------------------------------------------------------------ the whole-document check
+    def plan_check(self, parts: list[list[tuple[int, str, int, str]]]) -> tuple[list[Request], dict[int, list]]:
+        """``parts``: the document in parts, each a list of (block number, kind code, page, text). One request per
+        part, with the text masked; answers known from earlier checks of the same text are reused."""
+        known: dict[int, list] = {}
+        requests = []
+        for i, part in enumerate(parts):
+            prompt = check_prompt([(n, kind, page, mask(text)) for n, kind, page, text in part])
+            ck = self._item_key("check", prompt)
+            hit = self.cache.get(ck)
+            if hit is not None:
+                known[i] = hit
+            else:
+                requests.append(Request(CHECK, prompt, [ck], [i], answer_items=len(part) + 20))
+        return requests, known
+
+    def check_parts(self, parts: list[list[tuple[int, str, int, str]]],
+                    progress: Optional[Callable[[str, float], None]] = None) -> tuple[dict[int, list], int]:
+        """Ask the AI to check each part of the document. Returns part number -> the AI's findings (not yet
+        checked against the text), and how many parts got no usable answer (they are skipped; an error such
+        as a refused key stops the check)."""
+        requests, answers = self.plan_check(parts)
+        if answers:
+            self.usage.append(UsageEntry("check", len(answers), True))
+        failed = 0
+        for n, req in enumerate(requests):
+            if progress:
+                progress(f"Checking part {n + 1} of {len(requests)}", n / max(1, len(requests)))
+            try:
+                found = self.send(req).data.get("f", [])
+            except UnreadableAnswer:
+                failed += 1
+                continue
+            found = [r for r in found if isinstance(r, dict)] if isinstance(found, list) else []
+            answers[req.items[0]] = found
+            self.cache.put(req.keys[0], found)
+        return answers, failed
 
     # ------------------------------------------------------------------ summaries
     def summary_words(self, text: str) -> int:

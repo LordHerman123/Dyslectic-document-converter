@@ -100,6 +100,18 @@ will be sent to your provider using your key, and nothing is sent until you conf
   provider. Every summary is marked *Made by AI* with a warning that AI can make mistakes; it sits beside
   the text and never replaces it. You can copy it, read it aloud or save it as a note. While AI is off the
   button is greyed out and explains how to switch AI on.
+* **AI check of the whole document, only on request.** With AI on, the *AI check* button next to *Focus mode*
+  lets the AI read the converted text and list where the conversion went wrong: broken or joined words
+  ("num ber", "non- disclosure"), headers, footers or page numbers in the text, headings run into a
+  paragraph, blocks wrongly shown as a heading, and text in the wrong place. It does not look for the
+  author's own spelling mistakes. Before sending, it says how many words go to which provider and model, and
+  shows the exact text; tables, pictures and the reference list are not sent, and e-mail addresses, links and
+  long numbers are masked. Every finding is checked against the text first (a finding that quotes text that
+  isn't there is dropped), and nothing changes until you press *Fix*: a word fix may only change spaces and
+  hyphens (a scanned word a few letters), a header is hidden, a heading is split off; text in the wrong place
+  is only shown, with *Show* turning the preview to its page. *Fix all broken words* makes only the
+  space-and-hyphen fixes, and every fix can be undone. Checking again only sends parts whose text changed.
+  Without AI (or without a key) the button is greyed out and says what is needed.
 * The AI is only asked narrow questions: "is this parenthesis a citation?" and "is this word an OCR
   error?". It can't rewrite text: answers that aren't a single-word fix are thrown away. AI word
   suggestions always go to your review list.
