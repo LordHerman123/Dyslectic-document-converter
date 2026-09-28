@@ -315,16 +315,6 @@ class ConverterApp:
         self.page.theme_mode = ft.ThemeMode.DARK if dark else ft.ThemeMode.LIGHT
         self.page.bgcolor = self.pal["bg"]
 
-    def restyle(self) -> None:
-        """Re-apply the palette to the few controls that carry their own colours."""
-        self.apply_theme()
-        self._update_mode_status()
-        self.font_note.color = self.pal["muted"]
-        for panel in (self.orig_panel, self.conv_panel):
-            panel.controls[1].border = ft.Border.all(1, self.pal["frame"])
-        self._render_notices()
-        self.page.update()
-
     def _mode_label(self) -> str:
         """The text of the privacy status in the header (local-only or AI-assisted), shorter on narrow windows."""
         if self.ai_settings.mode == "ai_assisted":
@@ -1306,16 +1296,16 @@ class ConverterApp:
         await self.rebuild(tab=self.settings_tab_index)
 
     async def on_contrast(self, e):
-        """High-contrast colours on or off."""
+        """High-contrast colours on or off. Every screen is built again in the new colours (many controls carry their own)."""
         self.ui["high_contrast"] = bool(e.control.value)
         self.store.save_ui(self.ui)
-        self.restyle()
+        await self.rebuild(tab=self.settings_tab_index)
 
     async def on_dark_mode(self, e):
-        """Dark mode on or off."""
+        """Dark mode on or off. Every screen is built again in the new colours (many controls carry their own)."""
         self.ui["dark_mode"] = bool(e.control.value)
         self.store.save_ui(self.ui)
-        self.restyle()
+        await self.rebuild(tab=self.settings_tab_index)
 
     async def on_clear_ocr_cache(self, e):
         """Delete the saved OCR results (scanned documents are then read again when opened)."""
