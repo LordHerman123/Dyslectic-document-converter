@@ -176,6 +176,7 @@ class CheckPanel:
         """Before the first check: what the two buttons do."""
         app, t = self.app, self.app.t
         return ft.Column([
+            ft.Container(height=8),
             app.text(t("The AI reads the converted text and lists places where the conversion may have gone wrong: "
                        "broken or joined words, headers or page numbers in the text, headings run into the text, "
                        "and text in the wrong place. It does not look for the author's own spelling mistakes."), 14),
@@ -193,6 +194,7 @@ class CheckPanel:
                                       on_click=self.on_check_again, disabled=not self.ready()[0]),
                     ft.FilledButton(t("Check and fix everything"), icon=ft.Icons.AUTO_FIX_HIGH,
                                     on_click=self.on_auto, disabled=not self.ready()[0])], wrap=True),
+            app.end_space(),
         ], spacing=14, scroll=ft.ScrollMode.AUTO)
 
     def panel(self) -> ft.Control:
@@ -221,8 +223,9 @@ class CheckPanel:
                 ft.TextButton(t("Undo"), icon=ft.Icons.UNDO, data=number, on_click=self.on_undo_reorder)],
                 spacing=6))
         cards = [self.card(f) for f in findings]
-        return ft.Column(rows + [ft.ListView(cards, spacing=8, expand=True,
-                                             padding=ft.Padding.only(right=8, bottom=24))], spacing=8, expand=True)
+        return ft.Column([ft.Container(height=4)] + rows + [
+            ft.ListView(cards, spacing=8, expand=True, padding=ft.Padding.only(top=4, right=8, bottom=56))],
+            spacing=8, expand=True)
 
     def card(self, f) -> ft.Control:
         """One finding: what it is, where, the text with the quote marked, the fix, and Fix / Undo. Clicking it
@@ -429,7 +432,7 @@ class CheckPanel:
             parts.append(ft.ExpansionTile(
                 title=app.text(t("Show the text that will be sent"), 14),
                 controls=[ft.Container(ft.Column([ft.Text(sent, size=app.fs(12), selectable=True)],
-                                                 scroll=ft.ScrollMode.AUTO), height=240, padding=8,
+                                                 scroll=ft.ScrollMode.AUTO), height=240, padding=12,
                                        border_radius=6, bgcolor=ft.Colors.SURFACE_CONTAINER_LOW)]))
         return ft.Container(ft.Column(parts, spacing=10, tight=True), width=620)
 
