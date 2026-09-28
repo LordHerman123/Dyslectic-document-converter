@@ -89,6 +89,12 @@ class FocusMode:
         self.card_mode: Optional[str] = None  # "drag", "word", "selection", "note" or "bubble"
         self.sel: Optional[tuple[int, int]] = None  # first and last word number of the selected text
         self.sel_unit: Optional[str] = None  # "word", "sentence" or "paragraph" when selected as a whole
+        self._orig_idx = -1  # the original page shown beside the pages
+        self._orig_zoom = 1.0  # its zoom (1 = as wide as the panel)
+        self._orig_wide = False  # the original panel made wider
+        self._orig_aspect = 1.414  # height / width of the original page shown
+        self._orig_px = 0  # how sharp the shown original page is rendered (pixels wide)
+        self.source = "converted"  # which pages focus mode shows: "converted" or "original" (read only)
         self._anchor = 0  # the word first held
         self._drag_page = 0
         self._drag_to: Optional[int] = None
@@ -162,6 +168,7 @@ class FocusMode:
         self.ruler, self.card_word, self._reading, self.bars_hidden = None, None, None, False
         self.sel, self.card_mode = None, None
         self.page_zoom = 1.0
+        self.source, self._orig_idx = "converted", -1  # focus mode always starts with the converted text
         del app.hl_items[1:]  # forget the menu of an earlier focus mode
 
         self.page_label = app.text("", 14)
@@ -183,11 +190,13 @@ class FocusMode:
         self.ruler_toggle = ft.IconButton(ft.Icons.STRAIGHTEN, tooltip=t("Reading ruler (move it with the arrow "
                                                                          "keys or by tapping a line)"),
                                           on_click=self.on_ruler, style=self._toggle_style())
+        self.back_btn = ft.FilledTonalButton(t("Back to the converted text"), icon=ft.Icons.ARROW_BACK,
+                                             on_click=self.on_back_to_converted, visible=False)
         self.top = ft.Container(ft.Row([
             ft.IconButton(ft.Icons.CLOSE, tooltip=t("Leave focus mode"), on_click=self.on_close),
             ft.Container(width=4),
-            self.read_toggle, self.settings_toggle, self.mark_toggle, self.swatches,
-            self.ruler_toggle, self.notes_toggle, self._ai_button(),
+            self.back_btn, self.read_toggle, self.settings_toggle, self.mark_toggle, self.swatches,
+            self.ruler_toggle, self.notes_toggle, self._original_button(), self._ai_button(),
             ft.Container(expand=True),
             self.page_label,
             app.build_export_menu(compact=True),
@@ -338,16 +347,20 @@ class FocusMode:
         return max(240.0, min(self.BASE_W * self.zoom, w - 40))
 
     async def _build_pages(self) -> None:
-        """Create one frame per page of the converted document (blank until rendered) and read its words."""
+        """Create one frame per page (blank until rendered) and read the words of the converted document (the
+        original, read on its own, has no words to select, mark or read aloud)."""
         app = self.app
-        pdf = app.converted_pdf
+        pdf = self._pdf
         n = preview.page_count(pdf)
         self.sizes = [await app.in_thread(preview.page_size, pdf, i) for i in range(n)]
-        units = await app._units()
-        self.words = hl.document_words(units)
-        self._sentences = hl.sentence_spans(self.words)
-        self._paragraphs = hl.paragraph_spans(self.words)
-        self._toc_starts = await app.in_thread(self._heading_starts)
+        if self.source == "original":
+            self.words, self._sentences, self._paragraphs, self._toc_starts = [], [], [], []
+        else:
+            units = await app._units()
+            self.words = hl.document_words(units)
+            self._sentences = hl.sentence_spans(self.words)
+            self._paragraphs = hl.paragraph_spans(self.words)
+            self._toc_starts = await app.in_thread(self._heading_starts)
         self._lines = {}
         page_bg = TINT_COLOURS.get(self.tint, TINT_COLOURS["white"])[0]
         self.images, self.frames, self.detectors, self.overlays = [], [], [], []
@@ -459,6 +472,60 @@ class FocusMode:
         self.page_label.value = text
         self.counter.content.value = f"{self.current + 1} / {len(self.sizes)}"
         self.counter.visible = self.bars_hidden or self.layout == "pages"
+        if self.source == "original":
+            self.page_label.value = self.app.t("Original") + " · " + text
+        elif self._side_mode == "original":  # the original follows the page being read
+            target = self._original_of(self.current)
+            if target is not None and target != self._orig_idx:
+                self.app.page.run_task(self._show_original, target)
+
+    @property
+    def _pdf(self):
+        """The pages focus mode shows: the converted document, or the original when reading only that."""
+        return self.app.source_path if self.source == "original" else self.app.converted_pdf
+
+    async def on_read_original(self, e=None) -> None:
+        """Read only the original: its own pages in focus mode (zoom, page colour, pages and rotation still
+        work; selecting, marking and read aloud belong to the converted text and wait until you go back)."""
+        start = self._orig_idx if self._orig_idx >= 0 else (self._original_of(self.current) or 0)
+        await self._switch_source("original", start)
+
+    async def on_back_to_converted(self, e=None) -> None:
+        """Back from the original to the converted text, at the page that holds the original page's text."""
+        hit = next((p for p, src in sorted(self.app._page_map().items()) if self.current in src), 0)
+        await self._switch_source("converted", hit)
+
+    async def _switch_source(self, source: str, page: int) -> None:
+        """Show the converted document or the original in focus mode, starting at ``page``."""
+        if self.sel or self.card_word:
+            await self.close_card()
+        if self._side_mode:
+            self._open_side(None)
+        self.app.stop_reading()
+        if self.tool:  # the highlighter works on the converted text only
+            self.tool = None
+            self.mark_toggle.selected = False
+            self._set_tool_gestures()
+        self.source = source
+        self.current = page
+        self.ruler = None
+        self._refresh_source_bar()
+        await self._build_pages()
+        await self._show_layout()
+        self._start_rendering()
+
+    def _refresh_source_bar(self) -> None:
+        """Reading only the original: the tools that belong to the converted text are hidden, and a button leads
+        back to it."""
+        original = self.source == "original"
+        for c in (self.mark_toggle, self.ruler_toggle, self.notes_toggle, self.orig_toggle, self.ai_toggle):
+            c.visible = not original
+        self.read_toggle.visible = not original and self.app._speech_allowed()
+        if original:
+            self.swatches.visible = False
+            if self._is_open(self.read_panel):
+                self._fold(self.read_panel, False)
+        self.back_btn.visible = original
 
     def _lines_of(self, i: int) -> list:
         """The lines of text on page ``i`` (for the reading ruler), worked out once and kept."""
@@ -471,6 +538,8 @@ class FocusMode:
         read, the reading ruler, the word on the word card, in the page colour.
         """
         width = int(max(1000, self._page_w(i) * 1.3))
+        if self.source == "original":  # the original on its own: only the page colour
+            return preview.render_highlight(self._pdf, i, width, [], [], tint=self.tint)
         marks = hl.page_marks(self.highlights, self.words, i)
         sentence, word = (self._reading[1], self._reading[2]) if self._reading and self._reading[0] == i else ((), ())
         ruler = ()
@@ -1517,20 +1586,123 @@ class FocusMode:
 
     @property
     def _side_mode(self) -> Optional[str]:
-        """What the side panel shows now: "notes", "ai", or None when it is folded away."""
-        return self.side.data if self.side.content is not None else None
+        """What the side panel shows now: "notes", "ai", "original", or None when it is folded away."""
+        side = getattr(self, "side", None)
+        return side.data if side is not None and side.content is not None else None
 
     def _open_side(self, mode: Optional[str]) -> None:
-        """Show the notes list or the AI summary beside the pages (or neither)."""
+        """Show the notes list, the AI summary or the original page beside the pages (or neither)."""
         self.notes_toggle.selected = mode == "notes"
         self.ai_toggle.selected = mode == "ai"
+        self.orig_toggle.selected = mode == "original"
         self.side.data = mode
-        self.side.width = min(380.0, max(260.0, self._avail()[0] * 0.35)) if mode else 0
-        self.side.content = (self._notes_panel() if mode == "notes" else self._ai_panel()) if mode else None
+        self.side.width = self._side_width(mode)
+        builders = {"notes": self._notes_panel, "ai": self._ai_panel, "original": self._original_panel}
+        self.side.content = builders[mode]() if mode else None
         self.side.padding = 12 if mode else 0
         self.app.page.update()
         if mode == "notes":
             self._refresh_notes()
+        if mode == "original":
+            target = self._original_of(self.current)
+            self.app.page.run_task(self._show_original, target if target is not None else 0)
+
+    def _side_width(self, mode: Optional[str]) -> float:
+        """How wide the side panel is: the original page gets more room (half the window when made wider)."""
+        if not mode:
+            return 0
+        avail = self.app.page.width or 1200  # the window, not the pages (which shrink once the panel is open)
+        if mode == "original":
+            return max(300.0, avail * (0.6 if self._orig_wide else 0.4))
+        return min(380.0, max(260.0, avail * 0.35))
+
+    # ------------------------------------------------------------------ the original beside the pages
+    def _original_button(self) -> ft.IconButton:
+        """The button that shows the original PDF page beside the converted pages."""
+        self.orig_toggle = ft.IconButton(ft.Icons.COMPARE_OUTLINED, tooltip=self.app.t("Show the original"),
+                                         on_click=self.on_original_panel, style=self._toggle_style())
+        return self.orig_toggle
+
+    def on_original_panel(self, e) -> None:
+        """The original button: show or hide the original page beside the pages."""
+        self._open_side("original" if self._side_mode != "original" else None)
+
+    def _original_of(self, converted: int) -> Optional[int]:
+        """The first original page whose text is on this converted page (None for contents or notes pages)."""
+        pages = self.app._page_map().get(converted)
+        return min(pages) if pages else None
+
+    def _original_panel(self) -> ft.Control:
+        """The original page: page arrows, zoom (smaller, larger, fit), a wider panel, and the page itself,
+        which can be scrolled both ways when zoomed in."""
+        app, t = self.app, self.app.t
+        self.orig_label = app.text("", 12)
+        self.orig_image = ft.Image(src=_blank(), fit=ft.BoxFit.FILL, gapless_playback=True)
+        header = ft.Row([
+            ft.Icon(ft.Icons.PICTURE_AS_PDF_OUTLINED, color=ft.Colors.PRIMARY),
+            ft.Text(t("Original"), size=app.fs(16), weight=ft.FontWeight.BOLD, expand=True),
+            ft.IconButton(ft.Icons.CHEVRON_LEFT, tooltip=t("Previous page of the original"),
+                          on_click=lambda e: app.page.run_task(self._show_original, self._orig_idx - 1)),
+            self.orig_label,
+            ft.IconButton(ft.Icons.CHEVRON_RIGHT, tooltip=t("Next page of the original"),
+                          on_click=lambda e: app.page.run_task(self._show_original, self._orig_idx + 1)),
+            ft.IconButton(ft.Icons.CLOSE, tooltip=t("Close"), on_click=self.on_original_panel)], spacing=0)
+        tools = ft.Row([
+            ft.IconButton(ft.Icons.ZOOM_OUT, tooltip=t("Smaller"), on_click=lambda e: self._zoom_original(1 / 1.25)),
+            ft.IconButton(ft.Icons.ZOOM_IN, tooltip=t("Larger"), on_click=lambda e: self._zoom_original(1.25)),
+            ft.IconButton(ft.Icons.FIT_SCREEN, tooltip=t("Fit to the panel"), on_click=lambda e: self._zoom_original(0)),
+            ft.IconButton(ft.Icons.OPEN_IN_FULL if not self._orig_wide else ft.Icons.CLOSE_FULLSCREEN,
+                          tooltip=t("Wider") if not self._orig_wide else t("Narrower"), on_click=self.on_original_wide),
+            ft.Container(expand=True),
+            ft.TextButton(t("Read only the original"), icon=ft.Icons.MENU_BOOK_OUTLINED,
+                          on_click=self.on_read_original)], spacing=0)
+        # zoomed in, the page scrolls both ways (mouse wheel, scroll bars, or a finger)
+        self.orig_box = ft.Container(self.orig_image)
+        self._size_original()
+        view = ft.Row([ft.Column([self.orig_box], scroll=ft.ScrollMode.AUTO, expand=True)],
+                      scroll=ft.ScrollMode.AUTO, vertical_alignment=ft.CrossAxisAlignment.START, expand=True)
+        return ft.Column([header, tools, ft.Container(view, expand=True,
+                                                      border=ft.Border.all(1, ft.Colors.OUTLINE_VARIANT))],
+                         spacing=4, expand=True)
+
+    def _size_original(self) -> None:
+        """Make the original page as wide as the panel times the zoom (its height follows the page's shape)."""
+        panel = self.side.width or self._side_width("original")
+        self.orig_image.width = max(120.0, (panel - 30) * self._orig_zoom)
+        self.orig_image.height = self.orig_image.width * self._orig_aspect
+        self.orig_box.width, self.orig_box.height = self.orig_image.width, self.orig_image.height
+
+    def _zoom_original(self, factor: float) -> None:
+        """Zoom the original page in or out (0: fit it to the panel again)."""
+        self._orig_zoom = 1.0 if factor == 0 else max(0.5, min(5.0, self._orig_zoom * factor))
+        self._size_original()
+        self.orig_box.update()
+        if self._orig_zoom > 2 and self._orig_px < 3000:  # zoomed far in: render it sharper
+            self.app.page.run_task(self._show_original, self._orig_idx)
+
+    def on_original_wide(self, e) -> None:
+        """Make the original panel wider (half the window and more) or back to its usual width."""
+        self._orig_wide = not self._orig_wide
+        self._open_side("original")
+
+    async def _show_original(self, index: int) -> None:
+        """Show page ``index`` of the original (rendered sharp enough to zoom in)."""
+        app = self.app
+        total = preview.page_count(app.source_path) if app.source_path else 0
+        if not total or self._side_mode != "original":
+            return
+        index = max(0, min(total - 1, index))
+        self._orig_idx = index
+        self.orig_label.value = app.t("page {n} of {total}", n=index + 1, total=total)
+        w, h = await app.in_thread(preview.page_size, app.source_path, index)
+        self._orig_aspect = h / w if w else 1.414
+        self._orig_px = 3000 if self._orig_zoom > 2 else 1600
+        self.orig_image.src = await app.in_thread(preview.render_page, app.source_path, index, self._orig_px)
+        self._size_original()
+        try:
+            self.side.update()
+        except Exception:
+            pass
 
     def _notes_panel(self) -> ft.Control:
         """The panel: filters (all / with notes / colour), the list, and export."""

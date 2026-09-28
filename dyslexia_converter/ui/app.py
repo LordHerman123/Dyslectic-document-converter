@@ -1437,6 +1437,39 @@ class ConverterApp:
         ], scroll=ft.ScrollMode.AUTO, spacing=10, expand=True), padding=16, expand=True)
 
     # ================================================================ dialogs
+    def show_start_notice(self) -> None:
+        """At start: the converter changes how a document looks, never what it says; the layout can go wrong,
+        so compare with the original. Shown every start until "Don't show this again" is ticked."""
+        if self.ui.get("hide_start_notice"):
+            return
+        t = self.t
+        again = ft.Checkbox(label=t("Don't show this again"), value=False)
+
+        def close(e):
+            """OK: close the notice (and remember the tick)."""
+            if again.value:
+                self.ui["hide_start_notice"] = True
+                self.store.save_ui(self.ui)
+            self.page.pop_dialog()
+
+        points = [
+            (ft.Icons.TEXT_FIELDS, t("The converter changes how a document looks, never what it says: it does not "
+                                     "rewrite, shorten or add to the text.")),
+            (ft.Icons.VIEW_QUILT_OUTLINED, t("It can make mistakes in the layout, for example the order of "
+                                             "paragraphs, a heading, or where a picture or table goes.")),
+            (ft.Icons.DOCUMENT_SCANNER_OUTLINED, t("Scanned pages are read by text recognition, which can misread "
+                                                   "a word; uncertain words are shown for you to check.")),
+            (ft.Icons.COMPARE_OUTLINED, t("When something looks wrong, compare with the original: the Both view, "
+                                          "or Show the original in focus mode.")),
+        ]
+        body = ft.Column([ft.Row([ft.Icon(icon, color=ft.Colors.PRIMARY, size=self.fs(22)),
+                                  self.text(line, 15, expand=True)], spacing=12,
+                                 vertical_alignment=ft.CrossAxisAlignment.START) for icon, line in points]
+                         + [ft.Container(height=4), again], spacing=14, tight=True, width=self.fs(480))
+        self.page.show_dialog(ft.AlertDialog(
+            modal=True, title=self.text(t("Good to know"), 20, weight=ft.FontWeight.BOLD), content=body,
+            actions=[ft.FilledButton(t("OK"), on_click=close)]))
+
     async def confirm(self, title: str, message, yes: str, no: str) -> bool:
         """Ask a yes/no question. ``message`` is text or a control (for longer content)."""
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
@@ -2134,6 +2167,7 @@ def main(page: ft.Page) -> None:
     app = ConverterApp(page)
     app.build()
     page.update()
+    app.show_start_notice()
 
 
 ASSETS_DIR = str(Path(__file__).resolve().parent.parent / "assets")
