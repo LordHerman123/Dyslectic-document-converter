@@ -15,7 +15,7 @@ API key. When it's on, it only sees small snippets that the local rules couldn't
 
 ## Download for Windows (version 1.12)
 
-Get `DyslexiaConverter-1.12.0-setup.exe` (installer) or `DyslexiaConverter-1.12.0-windows.zip` (unzip and
+Get `DyslexiaConverter-1.13.0-setup.exe` (installer) or `DyslexiaConverter-1.13.0-windows.zip` (unzip and
 double-click `DyslexiaConverter.exe`) from the repository's **Releases** page. Text recognition (Tesseract)
 is included; nothing else needs to be installed. How the Windows build is made: [windows/README.md](windows/README.md).
 
@@ -101,7 +101,8 @@ will be sent to your provider using your key, and nothing is sent until you conf
   the text and never replaces it. You can copy it, read it aloud or save it as a note. While AI is off the
   button is greyed out and explains how to switch AI on.
 * **AI check of the whole document, only on request.** With AI on, the *AI check* button next to *Focus mode*
-  lets the AI read the converted text and list where the conversion went wrong: broken or joined words
+  opens its own screen (*Back to converting* or Esc returns to the Convert screen as it was). There the AI can
+  read the converted text and list where the conversion went wrong: broken or joined words
   ("num ber", "non- disclosure"), headers, footers or page numbers in the text, headings run into a
   paragraph, blocks wrongly shown as a heading, and text in the wrong place. It does not look for the
   author's own spelling mistakes. Before sending, it says how many words go to which provider and model, and
@@ -111,7 +112,11 @@ will be sent to your provider using your key, and nothing is sent until you conf
   hyphens (a scanned word a few letters), a header is hidden, a heading is split off; text in the wrong place
   is only shown, with *Show* turning the preview to its page. *Fix all broken words* makes only the
   space-and-hyphen fixes, and every fix can be undone. Checking again only sends parts whose text changed.
-  Without AI (or without a key) the button is greyed out and says what is needed. The parts are sent a few
+  Without AI (or without a key) the button is greyed out and says what is needed. The findings are listed on
+  the left; clicking one shows its page, original and converted, on the right.
+* **Check and fix everything.** One button on the AI check screen lets the AI go over all pages: it checks the
+  text, puts every page with text in the wrong place in reading order (those pages are then checked again),
+  and the app makes every fix it found. It says first what will be sent, and *Undo all* puts everything back. The parts are sent a few
   at a time, and each carries the document's language (so a Dutch "zorg- en welzijnswerk" is left alone).
 * **Text in the wrong place can be put right by the AI, page by page.** On such a finding, *Let AI fix the
   order of this page* sends only where each piece of that page is, its type size and its first and last words,

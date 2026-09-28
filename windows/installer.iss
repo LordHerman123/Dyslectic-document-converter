@@ -1,9 +1,9 @@
 ; Inno Setup script: wraps the built app folder into DyslexiaConverter-<version>-setup.exe
 ; Built by .github/workflows/windows-release.yml, or manually:
-;   iscc /DMyAppVersion=1.12.0 /DSourceDir=..\dist\DyslexiaConverter windows\installer.iss
+;   iscc /DMyAppVersion=1.13.0 /DSourceDir=..\dist\DyslexiaConverter windows\installer.iss
 
 #ifndef MyAppVersion
-  #define MyAppVersion "1.12.0"
+  #define MyAppVersion "1.13.0"
 #endif
 #ifndef SourceDir
   #define SourceDir "..\dist\DyslexiaConverter"

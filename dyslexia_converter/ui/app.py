@@ -248,17 +248,12 @@ class ConverterApp:
 
         narrow = (p.width or 1200) < 820
         settings_panel, preview_panel = self.build_convert_tab()
-        # the settings column; the AI check's findings are shown in its place
-        self.settings_col = settings_panel
-        self.checker.open = False
         if narrow:  # phones: layout settings and preview get their own tabs
-            self.left_holder = ft.Container(settings_panel, padding=12, expand=True)
-            convert = [(t("Layout"), ft.Icons.TUNE, self.left_holder),
+            convert = [(t("Layout"), ft.Icons.TUNE, ft.Container(settings_panel, padding=12, expand=True)),
                        (t("Preview"), ft.Icons.PREVIEW, ft.Container(preview_panel, padding=8, expand=True))]
         else:
-            self.left_holder = ft.Container(settings_panel, width=400, padding=ft.Padding.only(left=12, right=4))
             convert = [(t("Convert"), ft.Icons.TUNE, ft.Row([
-                self.left_holder,
+                ft.Container(settings_panel, width=400, padding=ft.Padding.only(left=12, right=4)),
                 ft.VerticalDivider(width=1),
                 ft.Container(preview_panel, expand=True, padding=8)], expand=True,
                 vertical_alignment=ft.CrossAxisAlignment.STRETCH))]
@@ -1140,8 +1135,6 @@ class ConverterApp:
             self.busy(False)
         self.refresh_ai_log()
         self.refresh_review()
-        if self.checker.open and not self.session.check_findings:
-            self.checker.close()  # a new reading order: the check's findings no longer apply
         self.checker.update_button()
         await self.rerender()
 
@@ -1586,7 +1579,7 @@ class ConverterApp:
             return
         d = self.session.document
         if self.checker.open:  # the findings were about the previous document
-            self.checker.close()
+            await self.checker.close()
         self.checker.update_button()
         try:
             self.doc_key = await self.in_thread(highlights.document_key, self.source_path)

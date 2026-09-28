@@ -207,3 +207,26 @@ def test_no_check_without_consent_or_key(isolated_home):
         session.run_check(AIAssistant(AISettings(mode="local_only"), ks))
     with pytest.raises(AIError):
         session.run_check(AIAssistant(AISettings(mode="ai_assisted", consent_given=True), ks))
+
+
+def test_check_and_fix_everything_makes_every_fix_and_undo_all_puts_it_back(isolated_home, monkeypatch):
+    from dyslexia_converter import pipeline
+    from dyslexia_converter.ai import assistant as assistant_mod
+    from dyslexia_converter.ai.keystore import KeyStore
+    from dyslexia_converter.settings import AISettings, FormatSettings
+    from dyslexia_converter.transform.spelling import CustomWords
+
+    session = pipeline.Session(document(), CustomWords())
+    ks = KeyStore()
+    ks._keyring = False
+    ks.set("mistral", "test-key-000000000")
+    monkeypatch.setattr(assistant_mod, "make_provider", lambda *a, **k: Answering(ANSWER))
+    ai = assistant_mod.AIAssistant(AISettings(mode="ai_assisted", consent_given=True), ks)
+    before = text_of(session)
+    fixed, pages = session.check_and_fix(ai, FormatSettings())
+    assert fixed == 8 and pages == []  # every finding but the text in the wrong place (no page to reorder here)
+    after = text_of(session)
+    assert "The number of journals" in after and "the new model was cheaper for the small" in after
+    assert "heading:2. Methods" in after and "All rights reserved" not in after
+    assert session.undo_all_findings(FormatSettings()) == 8
+    assert text_of(session) == before

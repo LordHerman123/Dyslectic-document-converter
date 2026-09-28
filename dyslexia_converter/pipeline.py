@@ -57,6 +57,8 @@ class Session:
     # the whole-document AI check: what it found (fixed or not), and how many parts it could not check
     check_findings: list[check.Finding] = field(default_factory=list)
     check_failed: int = 0
+    check_reordered: list[int] = field(default_factory=list)  # pages the AI put in order from a finding
+    check_run: bool = False  # whether the AI check ran on this document
     # how to build the document again with a reading order from the AI, and the pieces of unusual pages
     _build: Optional[Callable] = field(default=None, repr=False)
     _layout_pieces: dict = field(default_factory=dict, repr=False)
@@ -84,6 +86,7 @@ class Session:
         against the text; nothing is changed until the reader fixes it. Findings already fixed are kept."""
         doc = self.view()
         ps = check.parts(doc)
+        self.check_run = True
         answers, self.check_failed = assistant.check_parts(
             [[(n, code, page, text) for n, _, code, page, text in p] for p in ps], progress, doc.language)
         kept = [f for f in self.check_findings if f.applied]
@@ -136,12 +139,33 @@ class Session:
         """Fix every broken or joined word (fixes that change only spaces and hyphens); returns how many."""
         return sum(1 for f in self.check_findings if f.safe and not f.applied and self.fix_finding(f.id))
 
-    def undo_all_findings(self) -> int:
-        """Undo every fix made from the check; returns how many."""
+    def undo_all_findings(self, settings: Optional[FormatSettings] = None) -> int:
+        """Undo every fix made from the check (with ``settings``: also the pages the AI put in order from a
+        finding); returns how many."""
         done = [f for f in self.check_findings if f.applied]
         for f in done:
             self.undo_finding(f.id)
-        return len(done)
+        pages = list(self.check_reordered) if settings is not None else []
+        for page in pages:
+            self.undo_reorder(page, settings)
+        return len(done) + len(pages)
+
+    def check_and_fix(self, assistant, settings: FormatSettings, progress: Optional[ProgressFn] = None
+                      ) -> tuple[int, list[int]]:
+        """Let the AI go over the whole document: check it, let the AI put every page with text in the wrong place
+        in reading order (those pages are then checked again), and make every fix that was found. Everything
+        stays undoable. Returns how many fixes were made and which pages were put in order."""
+        self.run_check(assistant, progress)
+        pages = []
+        for f in [f for f in self.check_findings if f.kind == "order"]:
+            if f in self.check_findings:  # not already gone with an earlier order of its page
+                page = self.reorder_page(f.id, assistant, settings, progress)
+                if page is not None:
+                    pages.append(page)
+        if pages:
+            self.run_check(assistant, progress)  # only the parts whose text changed are sent again
+        fixed = sum(1 for f in list(self.check_findings) if f.fixable and not f.applied and self.fix_finding(f.id))
+        return fixed, pages
 
     # ------------------------------------------------------------ unusual page layouts
     def layout_pages(self, extra: Iterable[int] = ()) -> dict[int, list]:
@@ -186,6 +210,8 @@ class Session:
             return None
         page = b.page
         self.apply_layout({page: order}, settings)
+        if page not in self.check_reordered:
+            self.check_reordered.append(page)
         # the findings on this page were about the old order: they go, with any fix made from them
         for f in [f for f in self.check_findings
                   if getattr(self.document.block(f.block_id.split("~")[0]), "page", page) == page]:
@@ -195,6 +221,8 @@ class Session:
 
     def undo_reorder(self, page: int, settings: FormatSettings) -> None:
         """Read a page in the app's own order again (after an order from the AI)."""
+        if page in self.check_reordered:
+            self.check_reordered.remove(page)
         if self.layout_orders.pop(page, None) is not None:
             self._rebuild(settings)
 
