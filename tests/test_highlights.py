@@ -189,7 +189,7 @@ def test_page_tints_ruler_and_note_signs():
     plain = preview.render_highlight(pdf, 0, 300, [], [])
     darkest = lambda png: Image.open(io.BytesIO(png)).convert("L").crop((30, 40, 150, 56)).getextrema()[0]  # noqa
     assert darkest(ink) > darkest(plain) + 60  # is faded
-    assert preview.render_highlight(pdf, 0, 300, [], [], notes=[(100.0, 90.0)], picked=[(72, 90, 120, 102)])
+    assert preview.render_highlight(pdf, 0, 300, [], [], notes=[(100.0, 90.0)])
 
 
 def test_sentence_and_paragraph_spans():

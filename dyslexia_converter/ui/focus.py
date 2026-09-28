@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Iterable, Optional
 
 import flet as ft
 
@@ -350,11 +350,15 @@ class FocusMode:
         self._toc_starts = await app.in_thread(self._heading_starts)
         self._lines = {}
         page_bg = TINT_COLOURS.get(self.tint, TINT_COLOURS["white"])[0]
-        self.images, self.frames, self.detectors = [], [], []
+        self.images, self.frames, self.detectors, self.overlays = [], [], [], []
         for i, (pw, ph) in enumerate(self.sizes):
             img = ft.Image(src=_blank(), fit=ft.BoxFit.FILL, gapless_playback=True, expand=True)
+            # the selection and the picked word are drawn as a few shapes over the picture: moving them while
+            # dragging is instant, where drawing them into the picture meant rendering the whole page again
+            overlay = ft.Stack([])
             # a mouse or pen selects by dragging; a finger scrolls (and selects with press-and-hold)
-            pen = ft.GestureDetector(content=img, data=i, allowed_devices=[
+            pen = ft.GestureDetector(content=ft.Stack([img, overlay], fit=ft.StackFit.EXPAND), data=i,
+                                     allowed_devices=[
                 ft.PointerDeviceType.MOUSE, ft.PointerDeviceType.STYLUS, ft.PointerDeviceType.INVERTED_STYLUS],
                 on_pan_start=self.on_pen_start, on_pan_update=self.on_pen_move, on_pan_end=self.on_pen_end)
             det = ft.GestureDetector(content=pen, data=i, on_double_tap_down=self.on_double_tap, on_tap_up=self.on_tap,  # up: holding is not a tap
@@ -366,6 +370,7 @@ class FocusMode:
             frame = ft.Container(det, width=w, height=w * ph / pw, bgcolor=page_bg,
                                  shadow=ft.BoxShadow(blur_radius=10, color="#33000000"))
             self.images.append(img)
+            self.overlays.append(overlay)
             self.detectors.append(det)
             self.frames.append(frame)
         self.current = min(self.current, n - 1)
@@ -396,6 +401,9 @@ class FocusMode:
         for i, (frame, (pw, ph)) in enumerate(zip(self.frames, self.sizes)):
             w = self._page_w(i)
             frame.width, frame.height = w, w * ph / pw
+        for i in self._marked_pages():  # the selection's shapes are in pixels: place them for the new size
+            if 0 <= i < len(self.overlays):
+                self.overlays[i].controls = self._selection_shapes(i)
         if update:
             self.app.page.update()
 
@@ -470,18 +478,10 @@ class FocusMode:
             lines = self._lines_of(i)
             if lines:
                 ruler = lines[min(self.ruler[1], len(lines) - 1)]
-        picked = ()
-        if self.card_mode == "word" and self.card_word and self.card_word[0] == i \
-                and 0 <= self.card_word[1] < len(self.words):
-            picked = self.words[self.card_word[1]][2]
-        selection = []
-        if self.sel and self.card_mode in ("drag", "selection", "note") and self._exact(*self.sel) is None:
-            # (a highlight tapped keeps its own colour; its toolbar shows it is chosen)
-            selection = hl.bands([r for p, _, rs in self.words[self.sel[0]:self.sel[1] + 1] if p == i for r in rs])
+        # (the selection and the picked word are shapes over the picture: see _paint_selection)
         return preview.render_highlight(self.app.converted_pdf, i, width, list(sentence), list(word),
                                         marks=marks, tint=self.tint, ruler=ruler,
-                                        notes=hl.note_marks(self.highlights, self.words, i), picked=list(picked),
-                                        selection=selection)
+                                        notes=hl.note_marks(self.highlights, self.words, i))
 
     def _start_rendering(self) -> None:
         """(Re)start rendering all pages in the background (after a zoom, colour or layout change)."""
@@ -764,11 +764,57 @@ class FocusMode:
         return {self.words[k][0] for k in range(span[0], span[1] + 1) if 0 <= k < len(self.words)}
 
     async def _show_selection(self, span: Optional[tuple[int, int]]) -> None:
-        """Select words a..b (or nothing) and redraw the pages involved."""
+        """Select words a..b (or nothing) and show it on the pages involved."""
         old = self._pages_of(self.sel)
         self.sel = (min(span), max(span)) if span else None
-        for page in sorted(old | self._pages_of(self.sel)):
-            await self.redraw(page)
+        self._paint_selection(old | self._pages_of(self.sel))
+
+    def _marked_pages(self) -> set[int]:
+        """The pages with a selection or a picked word on them now."""
+        return self._pages_of(self.sel) | ({self.card_word[0]} if self.card_word else set())
+
+    def _paint_selection(self, pages: Iterable[int]) -> None:
+        """Draw the selection (light blue bands with a handle at each end) and the word on the word card (an
+        outline) over these pages: a few shapes, so it keeps up with the pointer."""
+        for i in pages:
+            if 0 <= i < len(self.overlays):
+                self.overlays[i].controls = self._selection_shapes(i)
+                try:
+                    self.overlays[i].update()
+                except Exception:  # not on screen (page by page)
+                    pass
+
+    def _selection_shapes(self, i: int) -> list[ft.Control]:
+        """The shapes for page ``i``: the selected bands and handles, and the picked word's outline, placed in
+        screen pixels for the page's current size."""
+        if i >= len(self.sizes):
+            return []
+        s = self._page_w(i) / self.sizes[i][0]  # screen pixels per PDF point
+        edge = "#E66E82" if self.tint == "dark" else "#7A2E3A"
+        shapes: list[ft.Control] = []
+        if self.card_mode == "word" and self.card_word and self.card_word[0] == i \
+                and 0 <= self.card_word[1] < len(self.words):
+            for x0, y0, x1, y1 in self.words[self.card_word[1]][2]:
+                shapes.append(ft.Container(left=x0 * s - 4, top=y0 * s - 3, width=(x1 - x0) * s + 8,
+                                           height=(y1 - y0) * s + 6, border_radius=5,
+                                           border=ft.Border.all(2.5, edge)))
+        # a highlight tapped keeps its own colour (its toolbar shows it is chosen)
+        if self.sel and self.card_mode in ("drag", "selection", "note") and self._exact(*self.sel) is None:
+            bands = hl.bands([r for p, _, rs in self.words[self.sel[0]:self.sel[1] + 1] if p == i for r in rs])
+            for x0, y0, x1, y1 in bands:
+                shapes.append(ft.Container(left=x0 * s - 2, top=y0 * s - 1, width=(x1 - x0) * s + 4,
+                                           height=(y1 - y0) * s + 3, bgcolor="#5A5096FF"))
+            if bands:
+                blue, r = "#1565C0", 5 * s
+                (sx, sy0, _, sy1), (_, ey0, ex, ey1) = bands[0], bands[-1]
+                shapes += [  # the start handle: a bar with a dot on top; the end handle: a dot below
+                    ft.Container(left=sx * s - 4, top=sy0 * s - 2, width=2, height=(sy1 - sy0) * s + 4, bgcolor=blue),
+                    ft.Container(left=sx * s - 3 - r, top=sy0 * s - 2 - 2 * r, width=2 * r, height=2 * r,
+                                 border_radius=r, bgcolor=blue),
+                    ft.Container(left=ex * s + 2, top=ey0 * s - 2, width=2, height=(ey1 - ey0) * s + 4, bgcolor=blue),
+                    ft.Container(left=ex * s + 3 - r, top=ey1 * s + 2, width=2 * r, height=2 * r,
+                                 border_radius=r, bgcolor=blue)]
+        return shapes
 
     async def _start_selection(self, i: int, x: float, y: float) -> None:
         """Start selecting at the word under (x, y) on page picture ``i``."""
@@ -897,21 +943,19 @@ class FocusMode:
             a, b, k = self._target(n)
             await self.open_note(a, b)
             return
-        old = self._pages_of(self.sel) | ({self.card_word[0]} if self.card_word else set())
+        old = self._marked_pages()
         self.sel, self.card_word = None, (page, n)
         language = app.session.document.language if app.session else "en"
         entry = await app.in_thread(dictionary.lookup, self.words[n][1], language)
         self._show_card(self._word_card(n, entry, language), "word")
-        for p in sorted(old | {page}):
-            await self.redraw(p)
+        self._paint_selection(old | {page})
 
     async def open_selection(self, a: int, b: int) -> None:
         """Show the card for the words a..b (selected by dragging, by sentence or paragraph, or from the notes
         list)."""
-        old = self._pages_of(self.sel) | ({self.card_word[0]} if self.card_word else set())
+        old = self._marked_pages()
         self.card_word, self.card_mode, self.sel = None, "selection", (a, b)
-        for p in sorted(old | self._pages_of(self.sel)):
-            await self.redraw(p)
+        self._paint_selection(old | self._pages_of(self.sel))
         self._show_card(self._selection_card(a, b), "selection")
 
     async def close_card(self, e=None) -> None:
@@ -920,11 +964,10 @@ class FocusMode:
         self.card_layer.visible = False
         self.card_layer.content = None
         self.card_mode = None
-        pages = self._pages_of(self.sel) | ({self.card_word[0]} if self.card_word else set())
+        pages = self._marked_pages()
         self.sel, self.card_word = None, None
+        self._paint_selection(pages)
         self.app.page.update()
-        for p in sorted(pages):
-            await self.redraw(p)
 
     def _card_box(self, rows: list[ft.Control], bgcolor=None) -> ft.Control:
         """A card of these rows, as wide as fits (at most 480 pixels)."""
