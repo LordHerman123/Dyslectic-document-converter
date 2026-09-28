@@ -126,6 +126,12 @@ class ConverterApp:
         """Room below the last control of a scrolling tab, so it does not sit against the window edge."""
         return ft.Container(height=56)
 
+    @staticmethod
+    def start_space() -> ft.Control:
+        """Room above the first control of a scrolling list, so it does not sit against the top edge (it scrolls
+        away with the list)."""
+        return ft.Container(height=16)
+
     def text(self, value: str, size: float = 15, **kw) -> ft.Text:
         """A Text control in the scaled font size."""
         return ft.Text(value, size=self.fs(size), **kw)
@@ -250,11 +256,11 @@ class ConverterApp:
         settings_panel, preview_panel = self.build_convert_tab()
         if narrow:  # phones: layout settings and preview get their own tabs
             convert = [(t("Layout"), ft.Icons.TUNE, ft.Container(settings_panel, padding=ft.Padding.only(
-                left=12, right=12, top=16), expand=True)),
+                left=12, right=12), expand=True)),
                        (t("Preview"), ft.Icons.PREVIEW, ft.Container(preview_panel, padding=8, expand=True))]
         else:
             convert = [(t("Convert"), ft.Icons.TUNE, ft.Row([
-                ft.Container(settings_panel, width=400, padding=ft.Padding.only(left=16, right=8, top=16)),
+                ft.Container(settings_panel, width=400, padding=ft.Padding.only(left=16, right=8)),
                 ft.VerticalDivider(width=1),
                 ft.Container(preview_panel, expand=True, padding=ft.Padding.only(left=12, right=12, top=16,
                                                                                  bottom=8))], expand=True,
@@ -423,6 +429,7 @@ class ConverterApp:
         ], spacing=8), padding=ft.Padding.only(left=12, right=12, top=10, bottom=12), border_radius=12,
             bgcolor=ft.Colors.SURFACE_CONTAINER_LOW)
         settings_col = ft.Column([
+            self.start_space(),
             start_card,
             section(t("Text"), [
                 ft.Row([self.dropdown("font", t("Font"), [(f, f) for f in FONT_CHOICES])]),
@@ -1173,7 +1180,8 @@ class ConverterApp:
             lines.append(ft.Text(label, size=self.fs(13), weight=ft.FontWeight.BOLD))
             lines.append(ft.Container(ft.Text(r.prompt, size=self.fs(12), selectable=True),
                                       padding=8, border_radius=6, bgcolor=ft.Colors.SURFACE_CONTAINER_LOW))
-        return ft.Container(ft.Column(lines, spacing=8, scroll=ft.ScrollMode.AUTO), width=640, height=420)
+        return ft.Container(ft.Column([ft.Container(height=4)] + lines + [ft.Container(height=16)], spacing=8,
+                                      scroll=ft.ScrollMode.AUTO), width=640, height=420)
 
     # ---------------------------------------------------------------- settings tab
     def card(self, title: str, controls: list[ft.Control], icon=None) -> ft.Control:
@@ -1191,9 +1199,10 @@ class ConverterApp:
                           self.text(intro, 14, color=self.pal["muted"]) if intro else ft.Container(),
                           ft.Container(height=4)] + controls, spacing=12,
                          col={"xs": 12, "md": 11, "lg": 9, "xl": 7}, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)
-        return ft.Container(ft.Column([ft.ResponsiveRow([body], alignment=ft.MainAxisAlignment.CENTER),
+        return ft.Container(ft.Column([self.start_space(),
+                                       ft.ResponsiveRow([body], alignment=ft.MainAxisAlignment.CENTER),
                                        self.end_space()], scroll=ft.ScrollMode.AUTO, expand=True),
-                            padding=ft.Padding.only(left=16, right=16, top=20), expand=True)
+                            padding=ft.Padding.only(left=16, right=16, top=4), expand=True)
 
     def build_settings_tab(self) -> ft.Control:
         """The Settings tab: app language, text size, dark mode, high contrast, where data is kept and saved OCR
@@ -1469,9 +1478,10 @@ class ConverterApp:
                 self.text(PROJECT_URL, 12, selectable=True, color=ft.Colors.ON_SURFACE_VARIANT)],
                 ft.Icons.SYSTEM_UPDATE_ALT),
         ], spacing=12, col={"xs": 12, "md": 11, "lg": 9, "xl": 7}, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)
-        return ft.Container(ft.Column([ft.ResponsiveRow([body], alignment=ft.MainAxisAlignment.CENTER),
+        return ft.Container(ft.Column([self.start_space(),
+                                       ft.ResponsiveRow([body], alignment=ft.MainAxisAlignment.CENTER),
                                        self.end_space()], scroll=ft.ScrollMode.AUTO, expand=True),
-                            padding=ft.Padding.only(left=16, right=16, top=20), expand=True)
+                            padding=ft.Padding.only(left=16, right=16, top=4), expand=True)
 
     # ================================================================ dialogs
     def show_start_notice(self) -> None:

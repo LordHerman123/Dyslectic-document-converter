@@ -1486,7 +1486,8 @@ class FocusMode:
                               on_click=lambda e: app.say_word(text)),
                 ft.TextButton(t("Save as note"), icon=ft.Icons.STICKY_NOTE_2_OUTLINED,
                               on_click=lambda e: app.page.run_task(self.save_summary_note))], spacing=0, wrap=True))
-        return ft.Column(rows, spacing=10, scroll=ft.ScrollMode.AUTO, expand=True)
+        return ft.Column([ft.Container(height=4)] + rows + [ft.Container(height=40)], spacing=10,
+                         scroll=ft.ScrollMode.AUTO, expand=True)
 
     def _ai_warning(self) -> ft.Control:
         """The notice on every summary that AI can make mistakes: amber card with an accent bar and an icon."""
@@ -1707,7 +1708,7 @@ class FocusMode:
     def _notes_panel(self) -> ft.Control:
         """The panel: filters (all / with notes / colour), the list, and export."""
         app, t = self.app, self.app.t
-        self.notes_list = ft.ListView(spacing=8, expand=True)
+        self.notes_list = ft.ListView(spacing=8, expand=True, padding=ft.Padding.only(top=4, bottom=40))
         self.filter_notes = ft.Chip(label=ft.Text(t("With notes")), selected=self._notes_only,
                                     on_select=self.on_notes_filter)
         colour_dots = [ft.Container(width=18, height=18, border_radius=9, bgcolor=SWATCHES[name], data=name,
