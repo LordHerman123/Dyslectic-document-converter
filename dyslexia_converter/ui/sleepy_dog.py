@@ -1,4 +1,4 @@
-"""The little sleeping dog shown while focus mode prepares its pages and before a PDF is open.
+"""Bobby, the little sleeping labradoodle shown while focus mode prepares its pages and before a PDF is open.
 
 The animation is ``assets/sleepy_dog.webp`` (drawn by ``tools/make_sleepy_dog.py``); its background is transparent,
 so it suits the light and the dark theme.
@@ -27,4 +27,4 @@ def sleepy_dog(width: float = 240) -> ft.Control:
     if not data:
         return ft.Container(width=0, height=0)
     return ft.Image(src=data, width=width, height=width * 170 / 240, fit=ft.BoxFit.CONTAIN,
-                    semantics_label="A little dog asleep on a cushion")
+                    semantics_label="Bobby the labradoodle, asleep")
