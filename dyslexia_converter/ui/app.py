@@ -26,6 +26,7 @@ from ..settings import PRESET_DISCLAIMER, PRESETS, FormatSettings, SettingsStore
 from ..transform.spelling import CustomWords
 from .check_panel import CheckPanel
 from .focus import FocusMode
+from .reflow import ReflowMode
 from .sleepy_dog import sleepy_dog
 from .i18n import LANGUAGES, Translator, system_language
 from .theme import make_theme, palette
@@ -105,6 +106,7 @@ class ConverterApp:
         self.doc_key: Optional[str] = None
         self.hl_items: list = []  # ("Include my highlights" divider, menu item) of each export menu
         self.focus = FocusMode(self)
+        self.reflow = ReflowMode(self)  # the reading view: the text itself, flowing to fit the window
         self.checker = CheckPanel(self)  # the whole-document AI check
         self._read_units: Optional[list] = None  # sentences of the converted PDF, made when reading starts
         self._read_pos: Optional[int] = None  # sentence being read (kept when paused)
@@ -1651,7 +1653,7 @@ class ConverterApp:
         self.pages_row.visible, self.empty_state.visible = True, False
         self.orig_count = preview.page_count(self.original_view)
         self.orig_page = (self._page_range() or (1, 1))[0] - 1
-        self.conv_page = 0
+        self.conv_page = int(self.reading_position("focus", 0))  # where this document was left last time
         self.busy(False, self.doc_status())
         self._update_doc_language_option()
         self._notices = [("warning", w, None) for w in d.warnings]
@@ -1777,10 +1779,15 @@ class ConverterApp:
                                                 tooltip=t("Show or hide the read-aloud controls"))
         self.focus_btn = ft.OutlinedButton(t("Focus mode"), icon=ft.Icons.FULLSCREEN, on_click=self.on_focus,
                                            tooltip=t("Read the converted document in the whole window"))
+        self.reflow_btn = ft.OutlinedButton(t("Reading view"), icon=ft.Icons.CHROME_READER_MODE_OUTLINED,
+                                            on_click=self.on_reflow,
+                                            tooltip=t("Read the text itself, flowing to fit the window: change "
+                                                      "the size and spacing at once"))
         self.hl_items = []
         self.export_menu = self.build_export_menu()
         return ft.Row([self.view_seg, self.read_toggle, ft.Container(expand=True), self.checker.button(),
-                       self.focus_btn, self.export_menu], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+                       self.reflow_btn, self.focus_btn, self.export_menu], spacing=10,
+                      vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
     def build_export_menu(self, compact: bool = False) -> ft.PopupMenuButton:
         """One "Export" button; the formats (and whether to include highlights) are in its menu."""
@@ -1849,6 +1856,32 @@ class ConverterApp:
     async def on_focus(self, e):
         """The Focus mode button."""
         await self.focus.open()
+
+    async def on_reflow(self, e):
+        """The Reading view button."""
+        await self.reflow.open()
+
+    # ---------------------------------------------------------------- where each document was left
+    POSITIONS_KEPT = 200
+
+    def reading_position(self, kind: str, default=0):
+        """Where the open document was left in ``kind`` ("focus": a page, "reflow": a paragraph)."""
+        if not self.doc_key:
+            return default
+        return self.ui.get("positions", {}).get(self.doc_key, {}).get(kind, default)
+
+    def save_reading_position(self, kind: str, value) -> None:
+        """Remember where the open document was left (kept on this device, for the last 200 documents)."""
+        if not self.doc_key:
+            return
+        positions = dict(self.ui.get("positions", {}))
+        entry = dict(positions.pop(self.doc_key, {}))
+        entry[kind] = value
+        positions[self.doc_key] = entry  # the most recent last
+        while len(positions) > self.POSITIONS_KEPT:
+            positions.pop(next(iter(positions)))
+        self.ui["positions"] = positions
+        self.store.save_ui(self.ui)
 
     def _speech_allowed(self) -> bool:
         """Speech plays on the computer running the app: in the web version that is the server, not the reader."""

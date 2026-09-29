@@ -313,6 +313,8 @@ class FocusMode:
         app.page.controls.clear()
         app.page.controls.extend(self._saved)
         app.conv_page = min(self.current, max(0, app.conv_count - 1))
+        if self.source == "converted":
+            app.save_reading_position("focus", app.conv_page)
         if app.view_mode == "side":
             app._original_follows(1)
         app.sync_controls()  # settings changed in focus mode show in the Convert tab too
