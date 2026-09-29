@@ -85,3 +85,59 @@ def test_formula_pictures_are_read_as_their_text(paper):
     r.result.inline_images = {"": ImageData(b"", "png", 10, 10, kind="equation", alt="x^2")}
     item = RItem("paragraph", [Run("area  grows")])
     assert r.plain(item) == "area  x^2  grows"
+
+
+def test_colour_help_marks_every_other_syllable_or_sentence(paper):
+    """Colour help: the second colour goes on every other syllable of longer words, or on every other sentence;
+    the text itself is unchanged (the spans put together are the paragraph)."""
+    from dyslexia_converter.render.compose import RItem, Run
+
+    app = _app_with(paper)
+    r = app.reflow
+    r.result = app.session.compose(app.settings)
+    item = RItem("paragraph", [Run("Reading "), Run("wonderful", bold=True), Run(" stories. It helps. Dr. Smith agrees.")])
+    r.items = [item]
+    text = r.plain(item)
+
+    app.ui["reflow_colours"] = "syllables"
+    r._marks = {}
+    marks = r._colour_marks(0, item)
+    assert text[marks[0][0]:marks[0][1]] == "ing"  # Read-ing: the second syllable
+    assert all(text[a:b].isalpha() for a, b in marks)
+    spans = r._spans(0, item)
+    assert "".join(s.text for s in spans) == text
+    assert any(s.style.color for s in spans) and any(not s.style.color for s in spans)
+    assert "".join(s.text for s in spans if s.style.weight) == "wonderful"  # bold stays on its run
+
+    app.ui["reflow_colours"] = "sentences"
+    r._marks = {}
+    marks = r._colour_marks(0, item)
+    assert [text[a:b] for a, b in marks] == ["It helps."]  # "Dr." does not end a sentence
+
+    app.ui["reflow_colours"] = "off"
+    r._marks = {}
+    assert not any(s.style.color for s in r._spans(0, item))
+
+
+def test_reading_along_marks_sentence_and_word(paper):
+    from dyslexia_converter.render.compose import RItem, Run
+
+    app = _app_with(paper)
+    r = app.reflow
+    r.result = app.session.compose(app.settings)
+    item = RItem("paragraph", [Run("One two three. Four five.")])
+    r.items = [item]
+    spans = r._spans(0, item, lit=(4, 7), sentence=(0, 14))
+    by_text = {s.text: s.style.bgcolor for s in spans}
+    assert by_text["two"] and by_text["One "] and by_text["two"] != by_text["One "]
+    assert by_text[" Four five."] is None
+
+
+def test_reading_speed_is_kept_per_document(paper):
+    app = _app_with(paper)
+    app.ui["read_speed"] = 1.25
+    assert app.reflow.speed == 1.25  # the app's speed until one is chosen for the document
+    app.save_reading_position("speed", 0.75)
+    assert app.reflow.speed == 0.75
+    app.doc_key = "doc-2"
+    assert app.reflow.speed == 1.25

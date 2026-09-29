@@ -2,13 +2,19 @@
 
 Text size, line spacing, column width and page colour change at once, without converting or drawing any page,
 and the text fits any screen, including a phone. The content is the composed document (the same the exports use),
-so OCR corrections, bold word starts, moved citations and list markers are all there. Reading aloud goes sentence
-by sentence and highlights the word being said. Where you were is remembered per document.
+so OCR corrections, bold word starts, moved citations and list markers are all there. Where you were is
+remembered per document.
+
+Colour help (optional) gives every other syllable of a word, or every other sentence, a second colour, so the eye
+finds where a word or sentence changes. Reading along: read aloud from any paragraph, the sentence being read is
+lightly marked and the word being said more strongly, and the text scrolls smoothly to keep them in view. The
+reading speed is kept per document.
 """
 from __future__ import annotations
 
 import asyncio
 import bisect
+import functools
 import re
 from typing import TYPE_CHECKING, Optional
 
@@ -27,6 +33,13 @@ PAPER = {"white": ("#FFFFFF", "#1A1A1A"), "cream": ("#FAF1D6", "#1A1A1A"), "blue
 FONT_FAMILIES = {"Atkinson Hyperlegible": "Atkinson", "OpenDyslexic": "OpenDyslexic", "DejaVu Sans": "DejaVu",
                  "Verdana": "DejaVu", "Tahoma": "DejaVu", "Arial": "Liberation", "Liberation Sans": "Liberation"}
 WIDTHS = {"narrow": 560, "medium": 720, "wide": 960}
+# colour help: the second colour (every other syllable or sentence) on light pages and on the dark page
+COLOUR_HELP = ("off", "syllables", "sentences")
+SECOND_COLOUR = {"syllables": ("#1D5FA8", "#8FBFFF"), "sentences": ("#8A3B12", "#F2B27A")}
+# reading along: the sentence being read (light) and the word being said (stronger), light / dark page
+SENTENCE_BG = ("#2EFFC83C", "#40D8B45A")
+WORD_BG = ("#8CFFD65A", "#A08A6A20")
+SPEEDS = (0.5, 0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0)
 SPACING = 12  # between items, in pixels (plus each item's own space below)
 TOP_PAD = 28  # room above the first item
 
@@ -50,6 +63,8 @@ class ReflowMode:
         self._reading = False
         self._read_pos: Optional[int] = None
         self._lit: Optional[int] = None  # item with a highlighted word
+        self._marks: dict[int, list[tuple[int, int]]] = {}  # item -> parts in the second colour (colour help)
+        self._viewport = 600.0  # height of the visible text, from the scroll events
 
     # ------------------------------------------------------------------ settings kept between sessions
     def _get(self, key: str, default):
@@ -81,6 +96,17 @@ class ReflowMode:
     def family(self) -> Optional[str]:
         return FONT_FAMILIES.get(self.app.settings.font)
 
+    @property
+    def colour_help(self) -> str:
+        """"off", "syllables" or "sentences"."""
+        mode = self._get("reflow_colours", "off")
+        return mode if mode in COLOUR_HELP else "off"
+
+    @property
+    def speed(self) -> float:
+        """Reading speed for this document (the app's reading speed until one is chosen here)."""
+        return float(self.app.reading_position("speed", self.app.ui.get("read_speed", 1.0)))
+
     # ------------------------------------------------------------------ open / close
     async def open(self) -> None:
         """Show the reading view of the converted document, at the place it was left last time."""
@@ -96,10 +122,25 @@ class ReflowMode:
         self.current = min(self.current, max(0, len(self.items) - 1))
         self._units, self._unit_spans = [], []
         self._reading, self._read_pos, self._lit = False, None, None
+        self._marks = {}
 
         self.progress = app.text("", 13, color=ft.Colors.ON_SURFACE_VARIANT)
         self.read_btn = ft.IconButton(ft.Icons.PLAY_ARROW_ROUNDED, tooltip=t("Read aloud"), on_click=self.on_read,
                                       visible=app._speech_allowed())
+        self.stop_btn = ft.IconButton(ft.Icons.STOP_ROUNDED, tooltip=t("Stop"), on_click=self.on_stop,
+                                      visible=False)
+        self.speed_menu = ft.PopupMenuButton(
+            content=ft.Container(app.text(self._speed_label(), 13, weight=ft.FontWeight.BOLD),
+                                 padding=ft.Padding.symmetric(horizontal=8, vertical=6)),
+            tooltip=t("Reading speed (kept for this document)"), visible=app._speech_allowed(),
+            items=[ft.PopupMenuItem(self._speed_text(v), data=v, checked=abs(v - self.speed) < 0.01,
+                                    on_click=self.on_speed) for v in SPEEDS])
+        labels = {"off": t("No colour help"), "syllables": t("Colour syllables"),
+                  "sentences": t("Colour sentences")}
+        self.colour_menu = ft.PopupMenuButton(
+            icon=ft.Icons.PALETTE_OUTLINED, tooltip=t("Colour help: syllables or sentences in two colours"),
+            items=[ft.PopupMenuItem(labels[m], data=m, checked=m == self.colour_help, on_click=self.on_colour_help)
+                   for m in COLOUR_HELP])
         bar = ft.Row([
             ft.IconButton(ft.Icons.CLOSE, tooltip=t("Leave the reading view"), on_click=self.on_close),
             ft.IconButton(ft.Icons.TEXT_DECREASE, tooltip=t("Smaller text"), on_click=lambda e: self._size_by(-2)),
@@ -110,7 +151,11 @@ class ReflowMode:
                           on_click=lambda e: self._line_by(-0.15)),
             ft.IconButton(ft.Icons.WIDTH_NORMAL, tooltip=t("Column width"), on_click=self.on_width),
             self._tint_row(),
+            self.colour_menu,
+            ft.VerticalDivider(width=10),
             self.read_btn,
+            self.stop_btn,
+            self.speed_menu,
             ft.IconButton(ft.Icons.AUTO_STORIES_OUTLINED, tooltip=t("Show the pages (focus mode)"),
                           on_click=self.on_pages),
             ft.Container(expand=True),
@@ -200,32 +245,100 @@ class ReflowMode:
         controls = []
         for i, it in enumerate(self.items):
             c = self._item_control(i, it)
-            controls.append(ft.Container(c, key=f"item-{i}", data=i, on_size_change=self.on_item_size,
+            controls.append(ft.Container(c, data=i, on_size_change=self.on_item_size,
                                          on_click=self.on_item_click, border_radius=6,
                                          padding=ft.Padding.symmetric(horizontal=4, vertical=0)))
         self.column.controls = controls
 
-    def _spans(self, i: int, it: RItem, lit: Optional[tuple[int, int]] = None) -> list[ft.TextSpan]:
-        """The runs of an item as styled spans; ``lit`` (start, end) is the word being read aloud."""
+    def _spans(self, i: int, it: RItem, lit: Optional[tuple[int, int]] = None,
+               sentence: Optional[tuple[int, int]] = None) -> list[ft.TextSpan]:
+        """The runs of an item as styled spans. ``lit`` (start, end) is the word being read aloud, ``sentence`` the
+        sentence it is in; with colour help, every other syllable or sentence is in the second colour."""
+        dark = 1 if self.tint == "dark" else 0
+        runs = self._runs(it)
+        marks = self._colour_marks(i, it) if self.colour_help != "off" else []
+        second = SECOND_COLOUR.get(self.colour_help, ("", ""))[dark]
+        cuts = {0}
+        pos = 0
+        for r in runs:
+            pos += len(r.text)
+            cuts.add(pos)
+        for rng in [lit, sentence] + marks:
+            if rng:
+                cuts.update(rng)
+        cuts = sorted(c for c in cuts if 0 <= c <= pos)
         spans, pos = [], 0
-        mark_bg = "#69FFD65A" if self.tint != "dark" else "#8A6A5A20"
-        for r in self._runs(it):
-            text = r.text
-            parts = [(0, len(text), False)]
-            if lit and pos < lit[1] and lit[0] < pos + len(text):
-                a, b = max(0, lit[0] - pos), min(len(text), lit[1] - pos)
-                parts = [(0, a, False), (a, b, True), (b, len(text), False)]
-            for a, b, on in parts:
-                if b <= a:
+        mi = 0
+        for r in runs:
+            end_run = pos + len(r.text)
+            for a, b in zip(cuts, cuts[1:]):
+                if b <= pos or a >= end_run:
                     continue
+                while mi < len(marks) and marks[mi][1] <= a:
+                    mi += 1
+                coloured = mi < len(marks) and marks[mi][0] <= a < marks[mi][1]
+                if lit and lit[0] <= a < lit[1]:
+                    bg = WORD_BG[dark]
+                elif sentence and sentence[0] <= a < sentence[1]:
+                    bg = SENTENCE_BG[dark]
+                else:
+                    bg = None
                 style = ft.TextStyle(weight=ft.FontWeight.BOLD if r.bold else None,
-                                     italic=r.italic or None,
-                                     bgcolor=mark_bg if on else None,
+                                     italic=r.italic or None, bgcolor=bg,
+                                     color=second if coloured else None,
                                      font_family="Liberation" if r.math else None,
                                      size=self.size * 0.7 if (r.superscript or r.subscript) else None)
-                spans.append(ft.TextSpan(text[a:b], style=style))
-            pos += len(text)
+                spans.append(ft.TextSpan(r.text[a - pos:b - pos], style=style))
+            pos = end_run
         return spans
+
+    def _colour_marks(self, i: int, it: RItem) -> list[tuple[int, int]]:
+        """Parts of item ``i`` in the second colour: every other syllable of each word (starting with the second),
+        or every other sentence of the paragraph (starting with the second). Kept until the text changes."""
+        if i in self._marks:
+            return self._marks[i]
+        if it.kind == "about":  # the converter's own note at the end stays plain
+            return []
+        text = self.plain(it)
+        out: list[tuple[int, int]] = []
+        if self.colour_help == "syllables":
+            lang = getattr(self.app.session.document, "language", "en") if self.app.session else "en"
+            for m in re.finditer(r"[^\W\d_]{4,}", text):  # short words are one syllable anyway
+                pos = m.start()
+                for k, part in enumerate(_syllables(m.group(), lang or "en")):
+                    if k % 2:
+                        out.append((pos, pos + len(part)))
+                    pos += len(part)
+        elif self.colour_help == "sentences":
+            words = list(re.finditer(r"\S+", text))
+            start, n = 0, 0
+            for k, m in enumerate(words):
+                nxt = words[k + 1].group() if k + 1 < len(words) else None
+                if speech._ends_sentence(m.group(), nxt) or nxt is None:
+                    if n % 2:
+                        out.append((start, m.end()))
+                    n += 1
+                    start = words[k + 1].start() if nxt is not None else m.end()
+        self._marks[i] = out
+        return out
+
+    def on_colour_help(self, e) -> None:
+        """Colour help chosen: no colours, syllables or sentences."""
+        ft.context.disable_auto_update()
+        self._save("reflow_colours", e.control.data)
+        for item in self.colour_menu.items:
+            item.checked = item.data == self.colour_help
+        self._marks = {}
+        self._respan()
+        self.app.page.update()
+
+    def _respan(self) -> None:
+        """Styled text again for every paragraph (after the colour help or the page colour changed)."""
+        for i, text in self.texts.items():
+            text.spans = self._spans(i, self.items[i])
+        self._lit = None
+        if self._reading and self._read_pos is not None:
+            self._mark_reading(self._read_pos, 0)
 
     def _runs(self, it: RItem) -> list[Run]:
         """The item's runs, with small formula pictures written as their text (a picture cannot sit in a line)."""
@@ -323,6 +436,7 @@ class ReflowMode:
         """Rebuild the text after a size or spacing change and keep the place."""
         ft.context.disable_auto_update()  # one update below is enough
         keep = self.current
+        self._lit = None
         self._build_items()
         self._apply_look()
         self.app.page.update()
@@ -382,8 +496,8 @@ class ReflowMode:
             on = dot.data == self.tint
             dot.border = ft.Border.all(2 if on else 1, ft.Colors.PRIMARY if on else ft.Colors.OUTLINE)
         self._apply_look()
-        if self._lit is not None:
-            self._highlight(self._lit, None)
+        if self.colour_help != "off" or self._lit is not None:  # the colours of marks follow the page colour
+            self._respan()
         self.app.page.update()
 
     # ------------------------------------------------------------------ where the reader is
@@ -397,6 +511,8 @@ class ReflowMode:
         """Follow scrolling: the paragraph at the top is where the reader is (only the percentage is updated)."""
         ft.context.disable_auto_update()
         self._scroll_px = e.pixels
+        if e.viewport_dimension:
+            self._viewport = float(e.viewport_dimension)
         tops, y = [], float(TOP_PAD)
         for i in range(len(self.items)):
             tops.append(y)
@@ -438,7 +554,7 @@ class ReflowMode:
         if self._reading:
             self._stop_reading(keep=True)
             self._update_read_btn()
-            self._safe_update(self.read_btn)
+            self._safe_update(self.top)
             return
         if not self._units:
             self._sentences()
@@ -449,16 +565,48 @@ class ReflowMode:
             start = next((k for k, u in enumerate(self._units) if u.page >= self.current), 0)
         self._start_reading(start)
 
-    def on_item_click(self, e) -> None:
-        """Clicking a paragraph while reading aloud moves the reading there."""
+    async def on_stop(self, e) -> None:
+        """Stop reading aloud; the next start is from the paragraph at the top."""
         ft.context.disable_auto_update()
-        if not self._reading:
+        self._stop_reading()
+        if self._lit is not None:
+            self._highlight(self._lit, None)
+        self._update_read_btn()
+        self._safe_update(self.top)
+
+    def on_item_click(self, e) -> None:
+        """Clicking a paragraph while reading aloud (or paused, or with "tap to read" on) reads from there."""
+        ft.context.disable_auto_update()
+        if not (self._reading or self._read_pos is not None or self.app.ui.get("tap_to_read", False)):
+            return
+        if not self.app._speech_allowed():
             return
         if not self._units:
             self._sentences()
         start = next((k for k, u in enumerate(self._units) if u.page >= e.control.data), None)
         if start is not None:
+            if self._lit is not None:
+                self._highlight(self._lit, None)
             self._start_reading(start)
+
+    def on_speed(self, e) -> None:
+        """A new reading speed, kept for this document; while reading, the current sentence starts again at it."""
+        ft.context.disable_auto_update()
+        self.app.save_reading_position("speed", float(e.control.data))
+        for item in self.speed_menu.items:
+            item.checked = abs(item.data - self.speed) < 0.01
+        self.speed_menu.content.content.value = self._speed_label()
+        self._safe_update(self.speed_menu)
+        if self._reading and self._read_pos is not None:
+            self._start_reading(self._read_pos)
+
+    def _speed_label(self) -> str:
+        return self._speed_text(self.speed)
+
+    @staticmethod
+    def _speed_text(v: float) -> str:
+        text = f"{v:.2f}".rstrip("0").rstrip(".")
+        return text + "×"
 
     def _start_reading(self, start: int) -> None:
         app = self.app
@@ -473,8 +621,8 @@ class ReflowMode:
         self._reading = True
         self._read_pos = start
         self._update_read_btn()
-        self._safe_update(self.read_btn)
-        app.speaker.start(self._units, start, float(app.ui.get("read_speed", 1.0)), app._voice(),
+        self._safe_update(self.top)
+        app.speaker.start(self._units, start, self.speed, app._voice(),
                           on_word=lambda si, wi: post(self._show_word(si, wi)),
                           on_sentence=lambda si: post(self._show_word(si, 0)),
                           on_done=lambda finished: post(self._read_done(finished)))
@@ -483,23 +631,42 @@ class ReflowMode:
         if not self._reading or si >= len(self._units):
             return
         self._read_pos = si
+        self._mark_reading(si, wi)
+
+    def _mark_reading(self, si: int, wi: int) -> None:
+        """Mark sentence ``si`` and its word ``wi`` and keep them in view (scrolling smoothly when the reading
+        gets near the bottom of the window, or is out of view)."""
         item = self._units[si].page
-        span = self._unit_spans[si][min(wi, len(self._unit_spans[si]) - 1)]
+        spans = self._unit_spans[si]
+        span = spans[min(wi, len(spans) - 1)]
         if self._lit is not None and self._lit != item:
             self._highlight(self._lit, None)
-        self._highlight(item, span)
-        if item != self.current:  # follow the reading
+        self._highlight(item, span, (spans[0][0], spans[-1][1]))
+        if item != self.current:
             self.current = item
             self._update_progress()
             self._safe_update(self.progress)
-            self.app.page.run_task(self._back_to, item, 300, 0)
+        # where the word is: its paragraph's top plus the part of the paragraph before it (an estimate)
+        length = max(1, len(self.plain(self.items[item])))
+        y = self._top_of(item) + self.heights.get(item, self.size * 3) * span[0] / length
+        view = self._viewport
+        if not (self._scroll_px + view * 0.12 <= y <= self._scroll_px + view * 0.7):
+            self._scroll_px = max(0.0, y - view * 0.3)  # the reading line about a third from the top
+            self.app.page.run_task(self._scroll_smoothly, self._scroll_px)
 
-    def _highlight(self, item: int, span: Optional[tuple[int, int]]) -> None:
+    async def _scroll_smoothly(self, offset: float) -> None:
+        try:
+            await asyncio.wait_for(self.body.scroll_to(offset=offset, duration=450), 3)
+        except Exception:
+            pass
+
+    def _highlight(self, item: int, span: Optional[tuple[int, int]],
+                   sentence: Optional[tuple[int, int]] = None) -> None:
         """Mark the word being said in paragraph ``item`` (None: no mark); only that paragraph is sent again."""
         text = self.texts.get(item)
         if text is None:
             return
-        text.spans = self._spans(item, self.items[item], span)
+        text.spans = self._spans(item, self.items[item], span, sentence)
         self._lit = item if span else None
         self._safe_update(text)
 
@@ -517,7 +684,7 @@ class ReflowMode:
         if self._lit is not None:
             self._highlight(self._lit, None)
         self._update_read_btn()
-        self._safe_update(self.read_btn)
+        self._safe_update(self.top)
 
     def _stop_reading(self, keep: bool = False) -> None:
         self._reading = False
@@ -532,3 +699,12 @@ class ReflowMode:
         else:
             self.read_btn.icon = ft.Icons.PLAY_ARROW_ROUNDED
             self.read_btn.tooltip = t("Continue") if self._read_pos is not None else t("Read aloud")
+        self.stop_btn.visible = self._reading or self._read_pos is not None
+
+
+@functools.lru_cache(maxsize=20000)
+def _syllables(word: str, language: str) -> tuple[str, ...]:
+    """A word's syllables (kept: the same words come back often in a text)."""
+    from ..dictionary import syllables
+
+    return tuple(syllables(word, language))

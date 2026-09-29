@@ -131,11 +131,17 @@ def _text(el) -> str:
 
 
 def _title(root) -> str:
+    """The article's title: the page's own title for sharing, else its <title> without the site's name
+    ("Foxes | Daily News" -> "Foxes" when the article's heading says "Foxes"), else the first heading."""
+    heading = re.sub(r"\s+", " ", " ".join(root.xpath("(//h1)[1]//text()"))).strip()
     for xp in ("//meta[@property='og:title']/@content", "//meta[@name='twitter:title']/@content",
                "//title/text()", "//h1//text()"):
         found = [t.strip() for t in root.xpath(xp) if t and t.strip()]
         if found:
-            return re.sub(r"\s+", " ", found[0])
+            title = re.sub(r"\s+", " ", found[0])
+            if xp.startswith("//title") and heading and title.startswith(heading) and title != heading:
+                return heading
+            return title
     return ""
 
 

@@ -70,6 +70,53 @@ async def _settle(seconds=0.5):
     await asyncio.sleep(seconds)
 
 
+class FakeSpeaker:
+    """Says every word at once (no sound), reporting words as a speech engine does."""
+
+    def __init__(self):
+        self.speeds = []
+
+    def start(self, units, index, speed, voice, on_word, on_sentence, on_done):
+        self.speeds.append(speed)
+        for si in range(index, min(index + 3, len(units))):
+            on_sentence(si)
+            for wi in range(len(units[si].words)):
+                on_word(si, wi)
+        on_done(False)
+
+    def stop(self):
+        pass
+
+    def voices(self):
+        return []
+
+    def voice_for(self, language):
+        return None
+
+
+async def _read_along(r):
+    """Reading along in the reading view: start, change the speed, tap a paragraph, stop."""
+    app = r.app
+    speaker, allowed = app.speaker, app._speech_allowed
+    app.speaker = FakeSpeaker()
+    app._speech_allowed = lambda: True
+    try:
+        await r.on_read(None)
+        await _settle(0.2)
+        class S:
+            control = type("C", (), {"data": 1.5})()
+        r.on_speed(S())
+        assert r.speed == 1.5 and app.speaker.speeds[-1] in (1.0, 1.5)
+        class Tap:
+            control = type("C", (), {"data": min(5, len(r.items) - 1)})()
+        r.on_item_click(Tap())  # paused after the fake speech: a tap reads from there
+        await _settle(0.2)
+        await r.on_stop(None)
+        assert r._read_pos is None and not r.stop_btn.visible
+    finally:
+        app.speaker, app._speech_allowed = speaker, allowed
+
+
 async def _read_everywhere(app, path):
     """Open a document and go through focus mode and the reading view like a reader would."""
     app.source_path = str(path)
@@ -130,6 +177,12 @@ async def _read_everywhere(app, path):
         control = type("C", (), {"data": "green"})()
     r.on_tint(T())
     await _settle(0.3)
+    for mode in ("syllables", "sentences", "off"):  # colour help
+        class M:
+            control = type("C", (), {"data": mode})()
+        r.on_colour_help(M())
+        await _settle(0.1)
+    await _read_along(r)
     await r.on_pages()
     assert app.focus.active and not r.active
     await app.focus.close()
