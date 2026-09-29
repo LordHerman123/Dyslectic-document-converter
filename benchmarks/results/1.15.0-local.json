@@ -1,0 +1,788 @@
+{
+ "version": "1.15.0",
+ "date": "2026-09-29",
+ "ai_provider": null,
+ "documents": {
+  "kitchin": {
+   "group": "Journal papers",
+   "title": "kitchin",
+   "local": {
+    "pages": 12,
+    "pdf_type": "text",
+    "language": "en",
+    "seconds": 4.0,
+    "content_kept": 0.9980824544582934,
+    "nothing_added": 0.9960663406336381,
+    "sentences_intact": 0.9869977619098369,
+    "clutter_removed": 1.0,
+    "real_words": 1.0,
+    "headings_found": null,
+    "overall": 0.9962293114003536
+   }
+  },
+  "bradie": {
+   "group": "Journal papers",
+   "title": "bradie",
+   "local": {
+    "pages": 6,
+    "pdf_type": "text",
+    "language": "en",
+    "seconds": 1.5,
+    "content_kept": 0.998925020155872,
+    "nothing_added": 0.9978523489932886,
+    "sentences_intact": 0.994619316653215,
+    "clutter_removed": 0.9,
+    "real_words": 1.0,
+    "headings_found": null,
+    "overall": 0.978279337160475
+   }
+  },
+  "cej": {
+   "group": "Journal papers",
+   "title": "cej",
+   "local": {
+    "pages": 7,
+    "pdf_type": "text",
+    "language": "en",
+    "seconds": 2.6,
+    "content_kept": 0.9877522856649992,
+    "nothing_added": 0.9963459196102314,
+    "sentences_intact": 0.9661660624892111,
+    "clutter_removed": 1.0,
+    "real_words": 1.0,
+    "headings_found": 0.9473684210526315,
+    "overall": 0.9829387814695122
+   }
+  },
+  "jgp": {
+   "group": "Journal papers",
+   "title": "jgp",
+   "local": {
+    "pages": 38,
+    "pdf_type": "text",
+    "language": "en",
+    "seconds": 12.8,
+    "content_kept": 0.9466730232241367,
+    "nothing_added": 0.9781155442966716,
+    "sentences_intact": 0.8462429320798419,
+    "clutter_removed": 0.9743589743589743,
+    "real_words": 0.9889253844451752,
+    "headings_found": 0.8857142857142857,
+    "overall": 0.9366716906865142
+   }
+  },
+  "tpa": {
+   "group": "Journal papers",
+   "title": "tpa",
+   "local": {
+    "pages": 46,
+    "pdf_type": "text",
+    "language": "en",
+    "seconds": 20.4,
+    "content_kept": 0.9723699630397548,
+    "nothing_added": 0.9855185015989036,
+    "sentences_intact": 0.9160580650978271,
+    "clutter_removed": 1.0,
+    "real_words": 0.9924718107621394,
+    "headings_found": 0.9772727272727273,
+    "overall": 0.9739485112952253
+   }
+  },
+  "nature": {
+   "group": "Journal papers",
+   "title": "nature",
+   "local": {
+    "pages": 4,
+    "pdf_type": "text",
+    "language": "en",
+    "seconds": 3.7,
+    "content_kept": 0.9712823429058857,
+    "nothing_added": 0.9921580017426663,
+    "sentences_intact": 0.9473384571591232,
+    "clutter_removed": 1.0,
+    "real_words": 1.0,
+    "headings_found": 0.6666666666666666,
+    "overall": 0.9295742447457237
+   }
+  },
+  "plos": {
+   "group": "Journal papers",
+   "title": "plos",
+   "local": {
+    "pages": 15,
+    "pdf_type": "text",
+    "language": "en",
+    "seconds": 4.0,
+    "content_kept": 0.9987405541561712,
+    "nothing_added": 0.9973448854108441,
+    "sentences_intact": 0.9840380845701484,
+    "clutter_removed": 1.0,
+    "real_words": 1.0,
+    "headings_found": null,
+    "overall": 0.9960247048274328
+   }
+  },
+  "bobbio": {
+   "group": "Journal papers",
+   "title": "bobbio",
+   "local": {
+    "pages": 17,
+    "pdf_type": "text",
+    "language": "en",
+    "seconds": 3.7,
+    "content_kept": 0.9579030085316569,
+    "nothing_added": 0.9957988096627378,
+    "sentences_intact": 0.9383423180592992,
+    "clutter_removed": 1.0,
+    "real_words": 1.0,
+    "headings_found": 1.0,
+    "overall": 0.9820073560422823
+   }
+  },
+  "epstein": {
+   "group": "Journal papers",
+   "title": "epstein",
+   "local": {
+    "pages": 31,
+    "pdf_type": "mixed",
+    "language": "en",
+    "seconds": 33.9,
+    "clutter_removed": 1.0,
+    "real_words": 0.959633526850508,
+    "headings_found": null,
+    "overall": 0.9798167634252539
+   }
+  },
+  "n520429a": {
+   "group": "Journal papers",
+   "title": "n520429a",
+   "local": {
+    "pages": 3,
+    "pdf_type": "text",
+    "language": "en",
+    "seconds": 2.0,
+    "content_kept": 0.9782135076252724,
+    "nothing_added": 0.9790667248146533,
+    "sentences_intact": 0.870362287210825,
+    "clutter_removed": 0.875,
+    "real_words": 1.0,
+    "headings_found": 0.5,
+    "overall": 0.8671070866084585
+   }
+  },
+  "stilgoe": {
+   "group": "Journal papers",
+   "title": "stilgoe",
+   "local": {
+    "pages": 13,
+    "pdf_type": "text",
+    "language": "en",
+    "seconds": 9.3,
+    "content_kept": 0.9876410531972059,
+    "nothing_added": 0.994185260311021,
+    "sentences_intact": 0.9611663531308788,
+    "clutter_removed": 1.0,
+    "real_words": 0.9974243108589712,
+    "headings_found": 0.9444444444444444,
+    "overall": 0.9808102369904201
+   }
+  },
+  "wynne": {
+   "group": "Journal papers",
+   "title": "wynne",
+   "local": {
+    "pages": 24,
+    "pdf_type": "scanned",
+    "language": "en",
+    "seconds": 27.9,
+    "clutter_removed": 0.8666666666666667,
+    "real_words": 0.9713118938233792,
+    "headings_found": null,
+    "overall": 0.918989280245023
+   }
+  },
+  "sample_scanned": {
+   "group": "Scans",
+   "title": "sample_scanned",
+   "local": {
+    "pages": 2,
+    "pdf_type": "scanned",
+    "language": "en",
+    "seconds": 4.3,
+    "content_kept": 0.9876760563380281,
+    "nothing_added": 0.9842105263157894,
+    "sentences_intact": 0.9397163120567376,
+    "clutter_removed": 1.0,
+    "real_words": 1.0,
+    "headings_found": null,
+    "overall": 0.982320578942111
+   }
+  },
+  "scott": {
+   "group": "Scans",
+   "title": "scott",
+   "local": {
+    "pages": 21,
+    "pdf_type": "scanned",
+    "language": "en",
+    "seconds": 53.0,
+    "clutter_removed": 1.0,
+    "real_words": 0.9888470233609645,
+    "headings_found": null,
+    "overall": 0.9944235116804823
+   }
+  },
+  "barker": {
+   "group": "Scans",
+   "title": "barker",
+   "local": {
+    "pages": 16,
+    "pdf_type": "scanned",
+    "language": "en",
+    "seconds": 38.2,
+    "clutter_removed": 1.0,
+    "real_words": 0.9919235693883581,
+    "headings_found": null,
+    "overall": 0.9959617846941791
+   }
+  },
+  "bier": {
+   "group": "Scans",
+   "title": "bier",
+   "local": {
+    "pages": 4,
+    "pdf_type": "scanned",
+    "language": "en",
+    "seconds": 16.1,
+    "clutter_removed": null,
+    "real_words": 0.9898941289701636,
+    "headings_found": null,
+    "overall": 0.9898941289701636
+   }
+  },
+  "s5_scan": {
+   "group": "Scans",
+   "title": "s5_scan",
+   "local": {
+    "pages": 2,
+    "pdf_type": "scanned",
+    "language": "en",
+    "seconds": 3.0,
+    "clutter_removed": null,
+    "real_words": 0.9583333333333334,
+    "headings_found": null,
+    "overall": 0.9583333333333334
+   }
+  },
+  "sample_spread": {
+   "group": "Scans",
+   "title": "sample_spread",
+   "local": {
+    "pages": 1,
+    "pdf_type": "scanned",
+    "language": "en",
+    "seconds": 3.5,
+    "clutter_removed": null,
+    "real_words": 1.0,
+    "headings_found": null,
+    "overall": 1.0
+   }
+  },
+  "user_conv": {
+   "group": "Test documents",
+   "title": "Earlier converter output (84 pages)",
+   "local": {
+    "pages": 84,
+    "pdf_type": "mixed",
+    "language": "en",
+    "seconds": 18.0,
+    "clutter_removed": 1.0,
+    "real_words": 0.977961432506887,
+    "headings_found": 0.12857142857142856,
+    "overall": 0.7021776203594386
+   }
+  },
+  "web_bg": {
+   "group": "Printed web pages",
+   "title": "web_bg",
+   "local": {
+    "pages": 3,
+    "pdf_type": "text",
+    "language": "en",
+    "seconds": 0.4,
+    "content_kept": 1.0,
+    "nothing_added": 1.0,
+    "sentences_intact": 1.0,
+    "clutter_removed": 1.0,
+    "real_words": 1.0,
+    "headings_found": null,
+    "overall": 1.0
+   }
+  },
+  "web_nobg": {
+   "group": "Printed web pages",
+   "title": "web_nobg",
+   "local": {
+    "pages": 3,
+    "pdf_type": "text",
+    "language": "en",
+    "seconds": 0.4,
+    "content_kept": 1.0,
+    "nothing_added": 1.0,
+    "sentences_intact": 1.0,
+    "clutter_removed": 1.0,
+    "real_words": 1.0,
+    "headings_found": null,
+    "overall": 1.0
+   }
+  },
+  "web_reader": {
+   "group": "Printed web pages",
+   "title": "web_reader",
+   "local": {
+    "pages": 2,
+    "pdf_type": "text",
+    "language": "en",
+    "seconds": 0.2,
+    "content_kept": 1.0,
+    "nothing_added": 1.0,
+    "sentences_intact": 1.0,
+    "clutter_removed": 1.0,
+    "real_words": 1.0,
+    "headings_found": null,
+    "overall": 1.0
+   }
+  },
+  "sample_paper": {
+   "group": "Test documents",
+   "title": "sample_paper",
+   "local": {
+    "pages": 2,
+    "pdf_type": "text",
+    "language": "en",
+    "seconds": 0.2,
+    "content_kept": 0.9964664310954063,
+    "nothing_added": 0.9842931937172775,
+    "sentences_intact": 0.9679715302491103,
+    "clutter_removed": 1.0,
+    "real_words": 1.0,
+    "headings_found": null,
+    "overall": 0.9897462310123588
+   }
+  },
+  "s1_math": {
+   "group": "Test documents",
+   "title": "s1_math",
+   "local": {
+    "pages": 2,
+    "pdf_type": "text",
+    "language": "en",
+    "seconds": 0.4,
+    "content_kept": 0.8823529411764706,
+    "nothing_added": 0.9745762711864406,
+    "sentences_intact": 0.6589147286821705,
+    "clutter_removed": 1.0,
+    "real_words": 1.0,
+    "headings_found": null,
+    "overall": 0.9031687882090165
+   }
+  },
+  "s2_twocol": {
+   "group": "Test documents",
+   "title": "s2_twocol",
+   "local": {
+    "pages": 2,
+    "pdf_type": "text",
+    "language": "en",
+    "seconds": 0.4,
+    "content_kept": 0.9914163090128756,
+    "nothing_added": 0.9935483870967742,
+    "sentences_intact": 0.9545454545454546,
+    "clutter_removed": 1.0,
+    "real_words": 1.0,
+    "headings_found": null,
+    "overall": 0.987902030131021
+   }
+  },
+  "s3_figtab": {
+   "group": "Test documents",
+   "title": "s3_figtab",
+   "local": {
+    "pages": 4,
+    "pdf_type": "text",
+    "language": "en",
+    "seconds": 0.7,
+    "content_kept": 0.9760479041916168,
+    "nothing_added": 1.0,
+    "sentences_intact": 0.9517102615694165,
+    "clutter_removed": 1.0,
+    "real_words": 0.9991475305024243,
+    "headings_found": null,
+    "overall": 0.9853811392526914
+   }
+  },
+  "s4_times": {
+   "group": "Test documents",
+   "title": "s4_times",
+   "local": {
+    "pages": 1,
+    "pdf_type": "text",
+    "language": "en",
+    "seconds": 0.1,
+    "content_kept": 0.9316770186335404,
+    "nothing_added": 0.9493670886075949,
+    "sentences_intact": 0.7070063694267515,
+    "clutter_removed": 1.0,
+    "real_words": 1.0,
+    "headings_found": null,
+    "overall": 0.9176100953335773
+   }
+  }
+ },
+ "ocr_test": {
+  "kitchin": {
+   "group": "Journal papers",
+   "local": {
+    "pages": 3,
+    "pdf_type": "scanned",
+    "language": "en",
+    "seconds": 8.6,
+    "content_kept": 0.9925685090571296,
+    "nothing_added": 0.9911873840445269,
+    "sentences_intact": 0.9543973941368078,
+    "clutter_removed": null,
+    "real_words": 1.0,
+    "overall": 0.9845383218096161
+   }
+  },
+  "bradie": {
+   "group": "Journal papers",
+   "local": {
+    "pages": 3,
+    "pdf_type": "scanned",
+    "language": "en",
+    "seconds": 7.1,
+    "content_kept": 0.9973273942093541,
+    "nothing_added": 0.9964396973742768,
+    "sentences_intact": 0.9883980365908077,
+    "clutter_removed": 0.8333333333333334,
+    "real_words": 1.0,
+    "overall": 0.9630996923015545
+   }
+  },
+  "cej": {
+   "group": "Journal papers",
+   "local": {
+    "pages": 3,
+    "pdf_type": "scanned",
+    "language": "en",
+    "seconds": 10.0,
+    "content_kept": 0.9375273044997816,
+    "nothing_added": 0.9597495527728086,
+    "sentences_intact": 0.8113785557986871,
+    "clutter_removed": 1.0,
+    "real_words": 0.9982174171512339,
+    "overall": 0.9413745660445023
+   }
+  },
+  "jgp": {
+   "group": "Journal papers",
+   "local": {
+    "pages": 3,
+    "pdf_type": "scanned",
+    "language": "en",
+    "seconds": 7.1,
+    "content_kept": 0.8780487804878049,
+    "nothing_added": 0.7821835958718087,
+    "sentences_intact": 0.6815403422982885,
+    "clutter_removed": 1.0,
+    "real_words": 0.8482427089317698,
+    "overall": 0.8380030855179343
+   }
+  },
+  "tpa": {
+   "group": "Journal papers",
+   "local": {
+    "pages": 3,
+    "pdf_type": "scanned",
+    "language": "en",
+    "seconds": 6.5,
+    "content_kept": 0.8882211538461539,
+    "nothing_added": 0.9336702463676564,
+    "sentences_intact": 0.7572289156626506,
+    "clutter_removed": 1.0,
+    "real_words": 1.0,
+    "overall": 0.9158240631752921
+   }
+  },
+  "nature": {
+   "group": "Journal papers",
+   "local": {
+    "pages": 3,
+    "pdf_type": "scanned",
+    "language": "en",
+    "seconds": 8.5,
+    "content_kept": 0.9628195197521301,
+    "nothing_added": 0.9833860759493671,
+    "sentences_intact": 0.852211016291699,
+    "clutter_removed": 1.0,
+    "real_words": 0.9988135072985905,
+    "overall": 0.9594460238583574
+   }
+  },
+  "plos": {
+   "group": "Journal papers",
+   "local": {
+    "pages": 3,
+    "pdf_type": "scanned",
+    "language": "en",
+    "seconds": 7.1,
+    "content_kept": 0.9905808477237049,
+    "nothing_added": 0.9828660436137072,
+    "sentences_intact": 0.955951756685894,
+    "clutter_removed": 1.0,
+    "real_words": 0.9979067408620561,
+    "overall": 0.9854610777770724
+   }
+  },
+  "bobbio": {
+   "group": "Journal papers",
+   "local": {
+    "pages": 3,
+    "pdf_type": "scanned",
+    "language": "en",
+    "seconds": 7.2,
+    "content_kept": 0.9553140096618358,
+    "nothing_added": 0.9535864978902954,
+    "sentences_intact": 0.9164648910411622,
+    "clutter_removed": null,
+    "real_words": 0.9899413243922882,
+    "overall": 0.9538266807463953
+   }
+  },
+  "n520429a": {
+   "group": "Journal papers",
+   "local": {
+    "pages": 3,
+    "pdf_type": "scanned",
+    "language": "en",
+    "seconds": 10.5,
+    "content_kept": 0.9334965320277437,
+    "nothing_added": 0.9769427839453458,
+    "sentences_intact": 0.8214139762975071,
+    "clutter_removed": 1.0,
+    "real_words": 1.0,
+    "overall": 0.9463706584541193
+   }
+  },
+  "stilgoe": {
+   "group": "Journal papers",
+   "local": {
+    "pages": 3,
+    "pdf_type": "scanned",
+    "language": "en",
+    "seconds": 8.9,
+    "content_kept": 0.9687184661957619,
+    "nothing_added": 0.9913941480206541,
+    "sentences_intact": 0.9097339171438195,
+    "clutter_removed": null,
+    "real_words": 1.0,
+    "overall": 0.9674616328400589
+   }
+  },
+  "web_bg": {
+   "group": "Printed web pages",
+   "local": {
+    "pages": 3,
+    "pdf_type": "scanned",
+    "language": "en",
+    "seconds": 5.4,
+    "content_kept": 0.9944690265486725,
+    "nothing_added": 0.986827661909989,
+    "sentences_intact": 0.9477777777777778,
+    "clutter_removed": 1.0,
+    "real_words": 0.9972815265007878,
+    "overall": 0.9852711985474455
+   }
+  },
+  "web_nobg": {
+   "group": "Printed web pages",
+   "local": {
+    "pages": 3,
+    "pdf_type": "scanned",
+    "language": "en",
+    "seconds": 5.5,
+    "content_kept": 0.9845132743362832,
+    "nothing_added": 0.9910913140311804,
+    "sentences_intact": 0.9455555555555556,
+    "clutter_removed": 1.0,
+    "real_words": 0.9998224899394711,
+    "overall": 0.984196526772498
+   }
+  },
+  "web_reader": {
+   "group": "Printed web pages",
+   "local": {
+    "pages": 2,
+    "pdf_type": "scanned",
+    "language": "en",
+    "seconds": 4.4,
+    "content_kept": 1.0,
+    "nothing_added": 1.0,
+    "sentences_intact": 1.0,
+    "clutter_removed": 1.0,
+    "real_words": 1.0,
+    "overall": 1.0
+   }
+  },
+  "sample_paper": {
+   "group": "Test documents",
+   "local": {
+    "pages": 2,
+    "pdf_type": "scanned",
+    "language": "en",
+    "seconds": 5.1,
+    "content_kept": 0.9806338028169014,
+    "nothing_added": 0.9858407079646018,
+    "sentences_intact": 0.9326241134751773,
+    "clutter_removed": 1.0,
+    "real_words": 1.0,
+    "overall": 0.9798197248513361
+   }
+  },
+  "s1_math": {
+   "group": "Test documents",
+   "local": {
+    "pages": 2,
+    "pdf_type": "scanned",
+    "language": "en",
+    "seconds": 3.9,
+    "content_kept": 0.6342412451361867,
+    "nothing_added": 0.8739946380697051,
+    "sentences_intact": 0.25882352941176473,
+    "clutter_removed": 1.0,
+    "real_words": 0.9950857807502181,
+    "overall": 0.752429038673575
+   }
+  },
+  "s2_twocol": {
+   "group": "Test documents",
+   "local": {
+    "pages": 2,
+    "pdf_type": "scanned",
+    "language": "en",
+    "seconds": 4.2,
+    "content_kept": 0.8480565371024735,
+    "nothing_added": 0.935672514619883,
+    "sentences_intact": 0.604982206405694,
+    "clutter_removed": 0.75,
+    "real_words": 0.990168330105765,
+    "overall": 0.825775917646763
+   }
+  },
+  "s3_figtab": {
+   "group": "Test documents",
+   "local": {
+    "pages": 3,
+    "pdf_type": "scanned",
+    "language": "en",
+    "seconds": 3.6,
+    "content_kept": 0.7636054421768708,
+    "nothing_added": 0.9238683127572016,
+    "sentences_intact": 0.5256849315068494,
+    "clutter_removed": 1.0,
+    "real_words": 0.9950022716946842,
+    "overall": 0.8416321916271212
+   }
+  },
+  "s4_times": {
+   "group": "Test documents",
+   "local": {
+    "pages": 1,
+    "pdf_type": "scanned",
+    "language": "en",
+    "seconds": 2.8,
+    "content_kept": 0.7,
+    "nothing_added": 0.8926174496644296,
+    "sentences_intact": 0.44623655913978494,
+    "clutter_removed": 1.0,
+    "real_words": 0.9807872539831303,
+    "overall": 0.8039282525574689
+   }
+  }
+ },
+ "web": {
+  "news_foxes": {
+   "title": "News article (test page)",
+   "real_page": false,
+   "local": {
+    "article_kept": 1.0,
+    "clutter_removed": 1.0,
+    "seconds": 0.0,
+    "real_words": 1.0,
+    "headings_found": 1.0,
+    "overall": 1.0
+   }
+  },
+  "city_foxes": {
+   "title": "News article with site header (test page)",
+   "real_page": false,
+   "local": {
+    "article_kept": 1.0,
+    "clutter_removed": 1.0,
+    "seconds": 0.0,
+    "real_words": 1.0,
+    "headings_found": 1.0,
+    "overall": 1.0
+   }
+  },
+  "science_news": {
+   "title": "Journal news feature (test page)",
+   "real_page": false,
+   "local": {
+    "article_kept": 1.0,
+    "clutter_removed": 1.0,
+    "seconds": 0.0,
+    "real_words": 0.9855305466237942,
+    "headings_found": 1.0,
+    "overall": 0.9963826366559485
+   }
+  },
+  "wikipedia_api": {
+   "title": "Wikipedia article, article interface (test page)",
+   "real_page": false,
+   "local": {
+    "article_kept": 1.0,
+    "clutter_removed": 1.0,
+    "seconds": 0.0,
+    "real_words": 0.9431818181818182,
+    "headings_found": 1.0,
+    "overall": 0.9857954545454546
+   }
+  },
+  "wikipedia_page": {
+   "title": "Wikipedia article, full page (test page)",
+   "real_page": false,
+   "local": {
+    "article_kept": 1.0,
+    "clutter_removed": 1.0,
+    "seconds": 0.0,
+    "real_words": 0.9431818181818182,
+    "headings_found": 1.0,
+    "overall": 0.9857954545454546
+   }
+  },
+  "fivethirtyeight": {
+   "title": "FiveThirtyEight politics article (real saved page)",
+   "real_page": true,
+   "local": {
+    "article_kept": 1.0,
+    "clutter_removed": 0.8888888888888888,
+    "seconds": 0.1,
+    "real_words": 0.9485714285714286,
+    "headings_found": 1.0,
+    "overall": 0.9593650793650794
+   }
+  }
+ }
+}

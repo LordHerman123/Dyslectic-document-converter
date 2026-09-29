@@ -1,0 +1,116 @@
+[
+ {
+  "name": "news_foxes",
+  "file": "news_foxes.html",
+  "title": "News article (test page)",
+  "keep": [
+   "Foxes have learned to live in cities, where they find food in"
+  ],
+  "headings": [
+   "Foxes in the city",
+   "Where they live"
+  ],
+  "drop": [
+   "We use cookies. Accept all?",
+   "Share on social media",
+   "Related: Cats in the city",
+   "Copyright Daily News",
+   "Home News"
+  ]
+ },
+ {
+  "name": "city_foxes",
+  "file": "city_foxes.html",
+  "title": "News article with site header (test page)",
+  "keep": [
+   "Red foxes first moved into British cities in the 1930s, when new",
+   "City foxes eat a surprisingly varied diet. Scavenged food makes up about",
+   "Scientists comparing skulls found that urban foxes have shorter snouts and smaller",
+   "Foxes are mostly active at dusk and during the night. In winter,"
+  ],
+  "headings": [
+   "Why city foxes are thriving",
+   "A different kind of fox"
+  ],
+  "drop": [
+   "We use cookies to improve your experience",
+   "Share on Facebook",
+   "Related: Badgers under threat",
+   "Home World Science"
+  ]
+ },
+ {
+  "name": "science_news",
+  "file": "science_news.html",
+  "title": "Journal news feature (test page)",
+  "keep": [
+   "A test of peer review at hundreds of open access journals",
+   "By A. Reporter · 4 Oct 2013 · Vol 342, Issue 6154",
+   "Every year, thousands of new journals appear that promise fast publication in",
+   "To find out, we wrote a scientific paper with obvious errors in",
+   "We then sent versions of the paper to more than three hundred",
+   "More than half of the journals accepted the paper. In many cases",
+   "The results suggest that the label 'peer reviewed' is not always a",
+   "J. Smith, Journal of Examples 12, 34 (2012).",
+   "K. Jones, Publishing Today 5, 6 (2011)."
+  ],
+  "headings": [
+   "Who checks the checkers?",
+   "A paper designed to fail",
+   "What the editors said"
+  ],
+  "drop": [
+   "Current Issue First release papers",
+   "We use cookies",
+   "Open access: the true cost of science publishing",
+   "Get the latest news, commentary, and research",
+   "American Association for the Advancement of Science"
+  ]
+ },
+ {
+  "name": "wikipedia_api",
+  "file": "wikipedia_api.html",
+  "title": "Wikipedia article, article interface (test page)",
+  "keep": [
+   "The red fox (Vulpes vulpes) is the largest of the true foxes",
+   "Carl Linnaeus named the species in 1758, in the tenth edition of",
+   "Red foxes are usually together in pairs or small groups consisting of"
+  ],
+  "headings": [
+   "Taxonomy",
+   "Behaviour"
+  ],
+  "drop": [
+   "Species of carnivore",
+   "For other uses, see",
+   "Carnivora: Felidae"
+  ]
+ },
+ {
+  "name": "wikipedia_page",
+  "file": "wikipedia_page.html",
+  "title": "Wikipedia article, full page (test page)",
+  "keep": [
+   "The red fox (Vulpes vulpes) is the largest of the true foxes",
+   "Carl Linnaeus named the species in 1758, in the tenth edition of",
+   "Red foxes are usually together in pairs or small groups consisting of"
+  ],
+  "headings": [
+   "Red fox",
+   "Taxonomy",
+   "Behaviour"
+  ],
+  "drop": [
+   "Jump to content",
+   "Main page Contents Current events",
+   "150 languages",
+   "Afrikaans",
+   "View history",
+   "From Wikipedia, the free encyclopedia",
+   "Species of carnivore",
+   "For other uses",
+   "Categories: Vulpes",
+   "This page was last edited"
+  ]
+ }
+]

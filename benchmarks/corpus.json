@@ -1,0 +1,183 @@
+{
+ "documents": [
+  {
+   "name": "kitchin",
+   "file": "kitchin.pdf",
+   "group": "Journal papers"
+  },
+  {
+   "name": "bradie",
+   "file": "bradie.pdf",
+   "group": "Journal papers"
+  },
+  {
+   "name": "cej",
+   "file": "cej.pdf",
+   "group": "Journal papers"
+  },
+  {
+   "name": "jgp",
+   "file": "jgp.pdf",
+   "group": "Journal papers"
+  },
+  {
+   "name": "tpa",
+   "file": "tpa.pdf",
+   "group": "Journal papers"
+  },
+  {
+   "name": "nature",
+   "file": "nature.pdf",
+   "group": "Journal papers"
+  },
+  {
+   "name": "plos",
+   "file": "plos.pdf",
+   "group": "Journal papers"
+  },
+  {
+   "name": "bobbio",
+   "file": "bobbio.pdf",
+   "group": "Journal papers"
+  },
+  {
+   "name": "epstein",
+   "file": "epstein.pdf",
+   "group": "Journal papers"
+  },
+  {
+   "name": "n520429a",
+   "file": "n520429a.pdf",
+   "group": "Journal papers"
+  },
+  {
+   "name": "stilgoe",
+   "file": "stilgoe.pdf",
+   "group": "Journal papers"
+  },
+  {
+   "name": "wynne",
+   "file": "wynne.pdf",
+   "group": "Journal papers"
+  },
+  {
+   "name": "sample_scanned",
+   "file": "sample_scanned.pdf",
+   "group": "Scans",
+   "scan": true,
+   "reference": "sample_paper.pdf"
+  },
+  {
+   "name": "scott",
+   "file": "scott.pdf",
+   "group": "Scans",
+   "scan": true
+  },
+  {
+   "name": "barker",
+   "file": "barker.pdf",
+   "group": "Scans",
+   "scan": true
+  },
+  {
+   "name": "bier",
+   "file": "bier.pdf",
+   "group": "Scans",
+   "scan": true
+  },
+  {
+   "name": "s5_scan",
+   "file": "s5_scan.pdf",
+   "group": "Scans",
+   "scan": true
+  },
+  {
+   "name": "sample_spread",
+   "file": "sample_spread.pdf",
+   "group": "Scans",
+   "scan": true
+  },
+  {
+   "name": "user_conv",
+   "file": "user_conv.pdf",
+   "group": "Test documents",
+   "title": "Earlier converter output (84 pages)"
+  },
+  {
+   "name": "web_bg",
+   "file": "web_bg.pdf",
+   "group": "Printed web pages"
+  },
+  {
+   "name": "web_nobg",
+   "file": "web_nobg.pdf",
+   "group": "Printed web pages"
+  },
+  {
+   "name": "web_reader",
+   "file": "web_reader.pdf",
+   "group": "Printed web pages"
+  },
+  {
+   "name": "sample_paper",
+   "file": "sample_paper.pdf",
+   "group": "Test documents"
+  },
+  {
+   "name": "s1_math",
+   "file": "s1_math.pdf",
+   "group": "Test documents"
+  },
+  {
+   "name": "s2_twocol",
+   "file": "s2_twocol.pdf",
+   "group": "Test documents"
+  },
+  {
+   "name": "s3_figtab",
+   "file": "s3_figtab.pdf",
+   "group": "Test documents"
+  },
+  {
+   "name": "s4_times",
+   "file": "s4_times.pdf",
+   "group": "Test documents"
+  }
+ ],
+ "web": [
+  {
+   "name": "fivethirtyeight",
+   "file": "fivethirtyeight.html",
+   "real": true,
+   "url": "https://fivethirtyeight.com/",
+   "title": "FiveThirtyEight politics article (real saved page)",
+   "keep": [
+    "Sen. Joe Manchin told reporters Wednesday that suggestions he would leave the",
+    "A Manchin exit would undoubtedly scramble the status quo — Democrats control",
+    "For starters, party switches are actually rare. Since 1951, just 34 sitting",
+    "Electoral calculations seem to have guided many of these members’ decisions to",
+    "That said, Manchin might be better off if he left the Democratic",
+    "So there’s clearly some appeal for Manchin to run as an independent,",
+    "Yet while one can make a fairly convincing electoral case for why",
+    "Granted, if Manchin were part of a 51-member Republican caucus, he would",
+    "It’s possible Manchin could leave the Democratic Party while continuing to caucus",
+    "All this sounds like a much greater headache than using his current",
+    "Long story short, Manchin could switch parties, but it’s unlikely that he"
+   ],
+   "headings": [
+    "Could Manchin Actually Leave The Democratic Party?"
+   ],
+   "drop": [
+    "Politics Sports Science Podcasts Video ABC News",
+    "Latest Videos",
+    "Get our weekly most popular stories newsletter",
+    "Store Newsletter Twitter Facebook",
+    "Americans Don’t Trust Their Congressional Maps",
+    "Can you guess what Americans think about the Democrats",
+    "Adam Schiff Says",
+    "Polls Show A Close Governor",
+    "Masthead"
+   ]
+  }
+ ]
+}
