@@ -406,6 +406,7 @@ class FocusMode:
             self.ruler = None
         for i in range(n):
             self.marks[i].controls = self._mark_shapes(i)
+        self._apply_tint()  # the new page pictures take the page colour
         self._set_tool_gestures()
         self._update_label()
 
@@ -557,7 +558,13 @@ class FocusMode:
         """PNG of page ``i`` with everything drawn on it: highlights, note signs, the sentence and word being
         read, the reading ruler, the word on the word card, in the page colour.
         """
-        return preview.render_page_cached(self._pdf, self._doc_key, i, self._render_width(i), self.tint)
+        return preview.render_page_cached(self._pdf, self._doc_key, i, self._render_width(i), self._drawn_tint)
+
+    @property
+    def _drawn_tint(self) -> str:
+        """The page colour drawn into the pictures: only "dark" (light text on a dark page) is; the light colours
+        are laid over a white picture by the app (see :meth:`_apply_tint`), so switching between them is instant."""
+        return "dark" if self.tint == "dark" else "white"
 
     def _render_width(self, i: int) -> int:
         """How many pixels wide page ``i`` is drawn: the size it is shown at, a quarter more for sharp text on
@@ -568,7 +575,7 @@ class FocusMode:
 
     def _is_cached(self, pages: list[int]) -> bool:
         """Whether the pictures of these pages were all drawn before and kept on disk."""
-        return all(preview.cached_page_path(self._doc_key, i, self._render_width(i), self.tint).exists()
+        return all(preview.cached_page_path(self._doc_key, i, self._render_width(i), self._drawn_tint).exists()
                    for i in pages)
 
     def _mark_shapes(self, i: int) -> list[ft.Control]:
@@ -635,8 +642,13 @@ class FocusMode:
         """
         order = sorted(range(len(self.images)), key=lambda i: abs(i - self.current))
         ready = min(len(order), self.READY_PAGES)
-        waiting = self._preparing and not await self.app.in_thread(self._is_cached, order[:ready])
+        # a drawing restarted while the loading screen is up (a zoom, a colour) carries on behind it
+        preparing = self._preparing or self.loading.visible
+        waiting = preparing and not await self.app.in_thread(self._is_cached, order[:ready])
         self._preparing = False
+        if preparing and not waiting and self.loading.visible:
+            self.loading.visible = False
+            self.app.page.update()
         if waiting:
             self._show_loading(0, ready, len(order))
         for n, i in enumerate(order):
@@ -2072,16 +2084,23 @@ class FocusMode:
         self.body.bgcolor = around
         for frame in self.frames:
             frame.bgcolor = page_bg
+        light = self.tint not in ("white", "dark")
+        for img in self.images:  # a light colour multiplies the white page: the paper takes it, the text stays black
+            img.color = page_bg if light else None
+            img.color_blend_mode = ft.BlendMode.MULTIPLY if light else None
 
     def on_tint(self, e) -> None:
-        """A page colour button: use it for all pages."""
+        """A page colour button: use it for all pages. Between the light colours this is instant; to or from dark
+        the pages are drawn again (or taken from the disk)."""
+        drawn = self._drawn_tint
         self._save("focus_tint", e.control.data)
         self._apply_tint()
         for i, marks in enumerate(self.marks):  # the ruler and the reading box follow the page colour
             marks.controls = self._mark_shapes(i)
         self._refresh_view_row()
         self.app.page.update()
-        self._start_rendering()
+        if self._drawn_tint != drawn:
+            self._start_rendering()
 
     async def on_layout(self, e) -> None:
         """The layout button: switch between one scrolling column and one page at a time."""
