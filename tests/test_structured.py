@@ -121,6 +121,77 @@ def test_epub_book_is_read_in_reading_order(tmp_path):
     assert s.original_pdf and s.export("pdf", FormatSettings())
 
 
+def _with_extra(src, dst, extra: dict, rename: dict | None = None):
+    """A copy of an EPUB with extra files (and chapters renamed)."""
+    with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dst, "w") as zout:
+        for n in zin.namelist():
+            data = zin.read(n)
+            for old, new in (rename or {}).items():
+                data = data.replace(old.encode(), new.encode())
+                n = n.replace(old.replace("%20", " "), new.replace("%20", " "))
+            zout.writestr(n, data)
+        for n, data in extra.items():
+            zout.writestr(n, data)
+
+
+def test_copy_protected_books_are_named_as_such(tmp_path):
+    """A shop's DRM (Adobe, Apple) cannot be read: the reader is told why, instead of a technical error."""
+    import pytest
+
+    from dyslexia_converter.extract.structured import ProtectedFile, protection
+
+    book = tmp_path / "book.epub"
+    _epub(book)
+    adobe = tmp_path / "adobe.epub"
+    _with_extra(book, adobe, {"META-INF/rights.xml": "<adept:rights xmlns:adept='http://ns.adobe.com/adept'/>"})
+    enc = ("<encryption xmlns='urn:oasis:names:tc:opendocument:xmlns:container'><EncryptedData "
+           "xmlns='http://www.w3.org/2001/04/xmlenc#'><EncryptionMethod Algorithm='{alg}'/><CipherData>"
+           "<CipherReference URI='{uri}'/></CipherData></EncryptedData></encryption>")
+    locked = tmp_path / "locked.epub"
+    _with_extra(book, locked, {"META-INF/encryption.xml": enc.format(
+        alg="http://www.w3.org/2001/04/xmlenc#aes128-cbc", uri="OEBPS/c1.xhtml")})
+    fonts = tmp_path / "fonts.epub"  # only the fonts are scrambled (common in DRM-free books): readable
+    _with_extra(book, fonts, {"META-INF/encryption.xml": enc.format(
+        alg="http://www.idpf.org/2008/embedding", uri="OEBPS/fonts/a.otf")})
+    assert protection(adobe) == "Adobe DRM" and protection(locked) == "DRM"
+    assert protection(fonts) is None and protection(book) is None
+    for path in (adobe, locked):
+        with pytest.raises(ProtectedFile) as err:
+            pipeline.load(path, FormatSettings())
+        assert err.value.kind == "drm"
+    assert pipeline.load(fonts, FormatSettings()).document.blocks
+    word = tmp_path / "secret.docx"
+    word.write_bytes(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\0" * 600)  # a Word file saved with a password
+    with pytest.raises(ProtectedFile) as err:
+        pipeline.load(word, FormatSettings())
+    assert err.value.kind == "password"
+
+
+def test_a_book_the_layout_engine_cannot_open_still_reads(tmp_path, monkeypatch):
+    """When PyMuPDF cannot lay out an (unprotected) book, the Original view shows its text in plain pages."""
+    from dyslexia_converter.extract import structured
+
+    book = tmp_path / "book.epub"
+    _epub(book)
+
+    def refuse(path):
+        raise RuntimeError("Failed to open file as type epub")
+
+    monkeypatch.setattr(structured, "original_pdf", refuse)
+    s = pipeline.load(book, FormatSettings())
+    assert s.original_pdf and preview.page_count(s.original_pdf) >= 1
+    assert any(b.text == "Chapter One" for b in s.document.blocks)
+
+
+def test_chapter_names_with_spaces_are_found(tmp_path):
+    """Chapters listed as "c%201.xhtml" are the file "c 1.xhtml"."""
+    book, spaced = tmp_path / "book.epub", tmp_path / "spaced.epub"
+    _epub(book)
+    _with_extra(book, spaced, {}, rename={"c1.xhtml": "c%201.xhtml"})
+    s = pipeline.load(spaced, FormatSettings())
+    assert any(b.text == "Chapter One" for b in s.document.blocks)
+
+
 def test_pdf_loading_is_unchanged(paper):
     """A PDF still goes through the PDF reader, and is shown as itself."""
     s = pipeline.load(paper, FormatSettings())

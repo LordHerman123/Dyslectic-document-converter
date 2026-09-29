@@ -126,6 +126,22 @@ def test_app_check_pdf(headless, paper):
     headless(lambda app: _read_everywhere(app, paper))
 
 
+def test_app_check_protected_book(headless, tmp_path):
+    """A shop's copy-protected e-book: the app says it is protected (DRM) and carries on, nothing crashes."""
+    from test_structured import _epub, _with_extra
+
+    book, locked = tmp_path / "book.epub", tmp_path / "locked.epub"
+    _epub(book)
+    _with_extra(book, locked, {"META-INF/rights.xml": "<adept:rights xmlns:adept='http://ns.adobe.com/adept'/>"})
+
+    async def scenario(app):
+        app.source_path = str(locked)
+        await app.load_document()
+        assert app.session is None
+        assert any("DRM" in msg for _, msg, _ in app._notices)
+    headless(scenario)
+
+
 def test_app_check_word_and_epub(headless, tmp_path):
     from test_structured import _docx, _epub
 

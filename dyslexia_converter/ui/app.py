@@ -20,6 +20,7 @@ from ..ai.keystore import ENV_VARS, KeyStore, install_log_redaction, redact
 from ..ai.providers import PROVIDERS, AIError
 from .. import DONATE_URL, PROJECT_URL, __version__
 from ..extract.ocr import default_engine, find_tesseract
+from ..extract.structured import ProtectedFile
 from ..fonts import FONT_CHOICES, get_family
 from ..render import preview
 from ..settings import PRESET_DISCLAIMER, PRESETS, FormatSettings, SettingsStore
@@ -1679,9 +1680,21 @@ class ConverterApp:
             self.session = await self.in_thread(
                 lambda: pipeline.load(self.source_path, self.settings, progress=progress,
                                       custom_words=self.custom_words, pages=self._page_range()))
+        except ProtectedFile as ex:  # copy protection or a password: say what it is and what to do
+            self.busy(False, self.t("Could not read {name}.", name=name))
+            if ex.kind == "password":
+                msg = self.t("This Word file is protected with a password. Open it in Word, remove the password "
+                             "(File > Info > Protect Document), save it, and open it here again.")
+            else:
+                msg = self.t("This e-book is copy-protected (DRM) by the shop it came from, so only that shop's "
+                             "reading app can open it. The converter cannot read protected books. Books without "
+                             "DRM work: many shops sell them, and libraries such as Project Gutenberg and "
+                             "Standard Ebooks are free.")
+            self.notify(msg, error=True)
+            return
         except Exception as ex:
             self.busy(False, self.t("Could not read {name}.", name=name))
-            self.notify(self.t("Could not read this PDF:") + " " + redact(str(ex)), error=True)
+            self.notify(self.t("Could not read this file:") + " " + redact(str(ex)), error=True)
             return
         d = self.session.document
         if self.checker.open:  # the findings were about the previous document

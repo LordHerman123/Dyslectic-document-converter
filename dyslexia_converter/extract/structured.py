@@ -17,6 +17,7 @@ import zipfile
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Optional
+from urllib.parse import unquote
 from xml.etree import ElementTree as ET
 
 from ..model import Block, BlockKind, Document, ImageData, PageInfo, StyleRange, TableData
@@ -29,13 +30,80 @@ def is_structured(path: str | Path) -> bool:
     return Path(str(path)).suffix.lower() in STRUCTURED_TYPES
 
 
-def read_structured(path: str | Path) -> tuple[Document, bytes]:
-    """The structured document of a Word or EPUB file, and the original laid out as a PDF (for the Original view)."""
+class ProtectedFile(ValueError):
+    """The file is copy-protected (DRM) or has a password, so its text cannot be read. ``kind`` is "drm" (an e-book
+    from a shop, locked to its reading app) or "password" (a Word file that needs a password)."""
+
+    def __init__(self, kind: str, detail: str = ""):
+        self.kind = kind
+        super().__init__(f"The file is protected ({kind}{': ' + detail if detail else ''}) and cannot be read")
+
+
+# encryption.xml also lists fonts that are only scrambled so they cannot be copied out; the text is readable then
+_FONT_OBFUSCATION = ("http://www.idpf.org/2008/embedding", "http://ns.adobe.com/pdf/enc#RC")
+
+
+def protection(path: str | Path) -> Optional[str]:
+    """What locks the file, if anything: "Adobe DRM", "Apple DRM", "DRM", "password" (Word), or None."""
     path = str(path)
+    with open(path, "rb") as f:
+        head = f.read(8)
+    if head.startswith(b"\xd0\xcf\x11\xe0"):  # a Word file saved with a password is an encrypted container
+        return "password" if path.lower().endswith(".docx") else None
+    try:
+        z = zipfile.ZipFile(path)
+    except zipfile.BadZipFile:
+        return None
+    names = set(z.namelist())
+    if "META-INF/rights.xml" in names:
+        return "Adobe DRM"  # Adobe Digital Editions (ADEPT)
+    if "META-INF/sinf.xml" in names:
+        return "Apple DRM"  # Apple Books (FairPlay)
+    if "META-INF/encryption.xml" in names:
+        try:
+            enc = ET.fromstring(z.read("META-INF/encryption.xml"))
+        except ET.ParseError:
+            return "DRM"
+        for data in (el for el in enc.iter() if el.tag.endswith("EncryptedData")):
+            method = next((m.get("Algorithm", "") for m in data.iter() if m.tag.endswith("EncryptionMethod")), "")
+            target = next((r.get("URI", "") for r in data.iter() if r.tag.endswith("CipherReference")), "")
+            if method not in _FONT_OBFUSCATION and not re.search(r"\.(otf|ttf|woff2?)$", target, re.I):
+                return "DRM"  # the text itself is encrypted
+    return None
+
+
+def read_structured(path: str | Path) -> tuple[Document, bytes]:
+    """The structured document of a Word or EPUB file, and the original laid out as a PDF (for the Original view).
+
+    A copy-protected e-book or a Word file with a password raises :class:`ProtectedFile`. When PyMuPDF cannot lay
+    out the original (an unusual but readable book), the text read from the file is shown in plain pages instead.
+    """
+    path = str(path)
+    lock = protection(path)
+    if lock:
+        raise ProtectedFile("password" if lock == "password" else "drm", lock)
     doc = _read_docx(path) if path.lower().endswith(".docx") else _read_epub(path)
-    pdf = original_pdf(path)
+    if not any(b.text.strip() or b.image or b.table for b in doc.blocks):
+        raise ValueError("No readable text was found in this file")
+    try:
+        pdf = original_pdf(path)
+    except Exception:  # PyMuPDF cannot lay this file out: show the text we read, in plain pages
+        pdf = _plain_pages(doc)
     _place_on_pages(doc, pdf)
     return doc, pdf
+
+
+def _plain_pages(doc: Document) -> bytes:
+    """The document's own text as plain pages (a stand-in for the original when it cannot be laid out)."""
+    import copy
+
+    from ..pipeline import Session
+    from ..settings import FormatSettings
+    from ..transform.spelling import CustomWords
+
+    plain = FormatSettings()
+    plain.bionic = False
+    return Session(copy.deepcopy(doc), CustomWords()).export("pdf", plain)
 
 
 def original_pdf(path: str) -> bytes:
@@ -260,18 +328,26 @@ def _read_epub(path: str) -> Document:
     base = posixpath.dirname(opf_path)
     items = {}
     for it in opf.iterfind(".//opf:manifest/opf:item", ns):
-        items[it.get("id")] = (posixpath.normpath(posixpath.join(base, it.get("href", ""))),
+        href = unquote(it.get("href", ""))  # "Text/chapter%201.xhtml" is the file "Text/chapter 1.xhtml"
+        items[it.get("id")] = (posixpath.normpath(posixpath.join(base, href)),
                                it.get("media-type", ""), it.get("properties", "") or "")
+    by_lower = {n.lower(): n for n in z.namelist()}  # some books spell a file name differently in the list
     b = _Builder()
     for ref in opf.iterfind(".//opf:spine/opf:itemref", ns):
         href, media, props = items.get(ref.get("idref"), ("", "", ""))
-        if not href or "nav" in props.split() or "html" not in media:
+        if not href or "nav" in props.split() or ("html" not in media and not href.lower().endswith(
+                (".xhtml", ".html", ".htm"))):
             continue
+        name = href if href in z.namelist() else by_lower.get(href.lower())
+        if not name:
+            continue
+        raw = z.read(name)
+        m = re.search(rb'encoding=["\']([\w-]+)', raw[:200])
         try:
-            html = z.read(href).decode("utf-8", errors="replace")
-        except KeyError:
-            continue
-        _EpubPage(z, href, b).feed(html)
+            html = raw.decode(m.group(1).decode() if m else "utf-8", errors="replace")
+        except LookupError:
+            html = raw.decode("utf-8", errors="replace")
+        _EpubPage(z, name, b).feed(html)
     title = opf.findtext(".//dc:title", "", ns).strip()
     author = opf.findtext(".//dc:creator", "", ns).strip()
     lang = (opf.findtext(".//dc:language", "", ns) or "en")[:2].lower()
