@@ -126,6 +126,36 @@ def test_app_check_pdf(headless, paper):
     headless(lambda app: _read_everywhere(app, paper))
 
 
+def test_app_check_dropping_a_file(headless, tmp_path, monkeypatch, paper):
+    """With the drop extension built in, dropping a file on the window opens it (also from focus mode); other
+    files are refused with a hint. Without it, the window is exactly as before."""
+    pytest.importorskip("flet_dropzone")
+    monkeypatch.setenv("DYSLEXIA_CONVERTER_DROP", "1")
+    note = tmp_path / "notes.txt"
+    note.write_text("x")
+
+    class File:
+        def __init__(self, path):
+            self.path, self.name = str(path), path.name
+
+    class Dropped:
+        def __init__(self, *paths):
+            self.files = [File(p) for p in paths]
+
+    async def scenario(app):
+        assert app.drop_hint is not None
+        app._drop_hover(True)()
+        assert app.drop_hint.visible
+        await app.on_file_dropped(Dropped(note))
+        assert app.session is None and not app.drop_hint.visible
+        await app.on_file_dropped(Dropped(note, paper))  # the first document among the files dropped
+        assert app.session is not None and app.source_path == str(paper)
+        await app.focus.open()
+        await app.on_file_dropped(Dropped(paper))
+        assert not app.focus.active and app.session is not None
+    headless(scenario)
+
+
 def test_app_check_protected_book(headless, tmp_path):
     """A shop's copy-protected e-book: the app says it is protected (DRM) and carries on, nothing crashes."""
     from test_structured import _epub, _with_extra

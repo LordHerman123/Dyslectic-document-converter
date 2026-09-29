@@ -289,9 +289,59 @@ class ConverterApp:
                 ft.TabBar(tabs=[ft.Tab(label=label, icon=i) for label, i, _ in tabs], scrollable=True),
                 ft.TabBarView(controls=[c for _, _, c in tabs], expand=True),
             ], expand=True, spacing=0))
-        p.add(ft.Column([header, ft.Container(ft.Column([self.status, self.progress, self.notices], spacing=4),
-                                              padding=ft.Padding.symmetric(horizontal=16)),
-                         self.tabs], expand=True, spacing=4))
+        body = ft.Column([header, ft.Container(ft.Column([self.status, self.progress, self.notices], spacing=4),
+                                               padding=ft.Padding.symmetric(horizontal=16)),
+                          self.tabs], expand=True, spacing=4)
+        p.add(self._with_file_drop(body))
+
+    # ---------------------------------------------------------------- dropping a file on the window
+    def _with_file_drop(self, body: ft.Control) -> ft.Control:
+        """The window's content, which also takes a PDF, Word or EPUB file dropped on it from the file explorer.
+
+        Dropping needs the flet-dropzone extension, which only an app built with `flet build` has (the build puts
+        ``assets/dropzone.enabled`` next to the app); otherwise the content is returned as it is and files are
+        opened with the Open button, or by dropping them on the app's icon.
+        """
+        zone = file_drop_support()
+        if zone is None:
+            return body
+        t = self.t
+        self.drop_hint = ft.Container(
+            ft.Column([ft.Icon(ft.Icons.FILE_DOWNLOAD_OUTLINED, size=self.fs(64), color=ft.Colors.PRIMARY),
+                       self.text(t("Drop the file to open it"), 22, weight=ft.FontWeight.BOLD),
+                       self.text(t("PDF, Word (.docx) or EPUB"), 14, color=self.pal["muted"])],
+                      horizontal_alignment=ft.CrossAxisAlignment.CENTER, alignment=ft.MainAxisAlignment.CENTER,
+                      tight=True, spacing=8),
+            alignment=ft.Alignment.CENTER, bgcolor=ft.Colors.with_opacity(0.92, ft.Colors.SURFACE),
+            border=ft.Border.all(3, ft.Colors.PRIMARY), border_radius=16, margin=12,
+            left=0, top=0, right=0, bottom=0, visible=False)
+        return zone.Dropzone(content=ft.Stack([body, self.drop_hint], expand=True), expand=True,
+                             allowed_file_types=[ext.lstrip(".") for ext in OPENABLE],
+                             on_dropped=self.on_file_dropped, on_entered=self._drop_hover(True),
+                             on_exited=self._drop_hover(False))
+
+    def _drop_hover(self, on: bool):
+        def handler(e=None):
+            self.drop_hint.visible = on
+            self.drop_hint.update()
+        return handler
+
+    async def on_file_dropped(self, e) -> None:
+        """A file was dropped on the window: open it (the first PDF, Word or EPUB file among those dropped)."""
+        self.drop_hint.visible = False
+        self.drop_hint.update()
+        paths = [f.path for f in getattr(e, "files", []) if f.path]
+        path = file_from_args(paths)
+        if not path:
+            self.notify(self.t("Drop a PDF, Word (.docx) or EPUB file to open it."))
+            return
+        if self.focus.active:
+            await self.focus.close()
+        if self.reflow.active:
+            await self.reflow.close()
+        self.tabs.selected_index = 0
+        self.source_path = path
+        await self.load_document()
 
     async def rebuild(self, tab: Optional[int] = None) -> None:
         """Build the whole window again (after changing the app language or text size), keeping the document."""
@@ -580,6 +630,8 @@ class ConverterApp:
                             style=ft.ButtonStyle(padding=ft.Padding.symmetric(horizontal=28, vertical=18))),
             self.text(t("PDFs (articles, book chapters, scans), Word files and EPUB books all work. Change the layout on the left at any time."),
                       13, text_align=ft.TextAlign.CENTER, color=self.pal["muted"]),
+            self.text(t("Or drop a file anywhere in this window."), 13, text_align=ft.TextAlign.CENTER,
+                      color=self.pal["muted"], visible=file_drop_support() is not None),
         ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=12, tight=True, width=460),
             alignment=ft.Alignment.CENTER, expand=True, visible=self.session is None, border_radius=16,
             bgcolor=ft.Colors.SURFACE_CONTAINER_LOW)
@@ -2338,6 +2390,22 @@ def main(page: ft.Page) -> None:
 
 
 OPENABLE = (".pdf", ".docx", ".epub")
+
+
+def file_drop_support():
+    """The flet-dropzone module when this app can take files dropped on its window, else None: the extension must
+    be installed and built into the app (`flet build` with the marker file ``assets/dropzone.enabled``, or the
+    environment variable DYSLEXIA_CONVERTER_DROP=1 when running such a build from source)."""
+    import os
+
+    marker = Path(__file__).resolve().parent.parent / "assets" / "dropzone.enabled"
+    if not (marker.is_file() or os.environ.get("DYSLEXIA_CONVERTER_DROP") == "1"):
+        return None
+    try:
+        import flet_dropzone
+    except ImportError:
+        return None
+    return flet_dropzone
 
 
 def file_from_args(args: list[str]) -> Optional[str]:
