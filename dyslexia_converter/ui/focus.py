@@ -79,6 +79,8 @@ class FocusMode:
         self.images: list[ft.Image] = []
         self.frames: list[ft.Container] = []
         self.detectors: list[ft.GestureDetector] = []
+        self.overlays: list[ft.Stack] = []  # the selection's shapes over each page
+        self.marks: list[ft.Stack] = []  # highlights, note signs, the ruler and read-aloud marks over each page
         self.sizes: list[tuple[float, float]] = []
         self.boxes: dict[int, tuple[float, float]] = {}
         self.body_size: tuple[float, float] = (0.0, 0.0)

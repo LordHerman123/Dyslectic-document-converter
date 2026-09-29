@@ -27,3 +27,15 @@ def test_every_app_font_is_bundled():
 
     for family, file, _, _ in APP_FONTS.values():
         assert (Path(ASSETS_DIR) / "fonts" / file).is_file(), file
+
+
+def test_focus_mode_resizes_before_its_pages_are_built(isolated_home):
+    """The window can report its size while focus mode is still reading the document: nothing is placed yet,
+    and that is not an error (it was: 'FocusMode' object has no attribute 'marks')."""
+    import asyncio
+
+    app = ConverterApp(page=None)
+    focus = app.focus
+    focus.sizes = [(595.0, 842.0)]
+    focus._resize(update=False)
+    asyncio.run(focus.redraw(0))
