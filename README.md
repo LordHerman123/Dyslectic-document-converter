@@ -13,7 +13,7 @@ At start a short notice says what to expect: the converter changes how a documen
 Everything works **locally and without AI**. AI is an optional extra that you turn on with your own
 API key. When it's on, it only sees small snippets that the local rules couldn't decide.
 
-## Download for Windows (version 1.12)
+## Download for Windows (version 1.14)
 
 Get `DyslexiaConverter-1.14.0-setup.exe` (installer) or `DyslexiaConverter-1.14.0-windows.zip` (unzip and
 double-click `DyslexiaConverter.exe`) from the repository's **Releases** page. Text recognition (Tesseract)
