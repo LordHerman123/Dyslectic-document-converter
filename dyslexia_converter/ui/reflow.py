@@ -28,6 +28,7 @@ FONT_FAMILIES = {"Atkinson Hyperlegible": "Atkinson", "OpenDyslexic": "OpenDysle
                  "Verdana": "DejaVu", "Tahoma": "DejaVu", "Arial": "Liberation", "Liberation Sans": "Liberation"}
 WIDTHS = {"narrow": 560, "medium": 720, "wide": 960}
 SPACING = 12  # between items, in pixels (plus each item's own space below)
+TOP_PAD = 28  # room above the first item
 
 
 class ReflowMode:
@@ -119,7 +120,7 @@ class ReflowMode:
                                 bgcolor=ft.Colors.SURFACE_CONTAINER_LOW,
                                 border=ft.Border.only(bottom=ft.BorderSide(1, ft.Colors.OUTLINE_VARIANT)))
         self.column = ft.Column([], spacing=SPACING, tight=True)
-        self.body = ft.Column([ft.Container(self.column, padding=ft.Padding.only(left=20, right=20, top=28,
+        self.body = ft.Column([ft.Container(self.column, padding=ft.Padding.only(left=20, right=20, top=TOP_PAD,
                                                                                   bottom=120),
                                             alignment=ft.Alignment.TOP_CENTER)],
                               scroll=ft.ScrollMode.AUTO, expand=True, on_scroll=self.on_scroll, scroll_interval=150,
@@ -133,14 +134,10 @@ class ReflowMode:
         app.page.add(self.root)
         self._prev_keys = app.page.on_keyboard_event
         app.page.on_keyboard_event = self.on_key
+        self._update_progress()
         app.page.update()
         if self.current:
-            await asyncio.sleep(0.3)  # the text is laid out first
-            try:
-                await self.body.scroll_to(scroll_key=f"item-{self.current}", duration=0)
-            except Exception:
-                pass
-        self._update_progress()
+            app.page.run_task(self._back_to, self.current)  # back to where reading stopped last time
 
     async def close(self) -> None:
         """Back to the app, remembering where reading stopped."""
@@ -251,8 +248,9 @@ class ReflowMode:
         s = self.size
         if k == "image" or (k == "equation" and it.image is not None):
             img = it.image
-            w = min(float(WIDTHS.get(self.width, 720)), max(80.0, img.width * (0.75 if k == "image" else 0.5)))
-            return ft.Container(ft.Image(src=img.data, width=w, fit=ft.BoxFit.CONTAIN),
+            w = min(float(WIDTHS.get(self.width, 720)) - 40, max(80.0, img.width * (0.75 if k == "image" else 0.5)))
+            h = w * img.height / max(1, img.width)  # its height from the start: the text below never jumps
+            return ft.Container(ft.Image(src=img.data, width=w, height=h, fit=ft.BoxFit.CONTAIN),
                                 alignment=ft.Alignment.CENTER, padding=ft.Padding.symmetric(vertical=6))
         if k == "table" and it.table is not None:
             return self._table(it)
@@ -323,16 +321,30 @@ class ReflowMode:
 
     def _relayout(self) -> None:
         """Rebuild the text after a size or spacing change and keep the place."""
+        ft.context.disable_auto_update()  # one update below is enough
         keep = self.current
         self._build_items()
         self._apply_look()
         self.app.page.update()
         self.app.page.run_task(self._back_to, keep)
 
-    async def _back_to(self, index: int) -> None:
-        await asyncio.sleep(0.2)
+    def _top_of(self, index: int) -> float:
+        """Where paragraph ``index`` starts in the scrolling text, in pixels (from the measured heights)."""
+        y = TOP_PAD
+        for i in range(min(index, len(self.items))):
+            y += self.heights.get(i, self.size * 3) + SPACING
+        return y
+
+    async def _back_to(self, index: int, duration: int = 0, wait: float = 0.2) -> None:
+        """Scroll so paragraph ``index`` is at the top (once the paragraphs before it have been measured)."""
+        await asyncio.sleep(wait)
+        for _ in range(30):  # the window reports the height of every paragraph once it is laid out
+            if all(i in self.heights for i in range(min(index, len(self.items)))):
+                break
+            await asyncio.sleep(0.1)
         try:
-            await self.body.scroll_to(scroll_key=f"item-{index}", duration=0)
+            await asyncio.wait_for(self.body.scroll_to(offset=max(0.0, self._top_of(index) - 8),
+                                                       duration=duration), 3)
         except Exception:
             pass
 
@@ -345,6 +357,7 @@ class ReflowMode:
         self._relayout()
 
     def on_width(self, e) -> None:
+        ft.context.disable_auto_update()
         order = list(WIDTHS)
         self._save("reflow_width", order[(order.index(self.width) + 1) % len(order)] if self.width in order
                    else "medium")
@@ -363,6 +376,7 @@ class ReflowMode:
         return ft.Container(self.tint_row, padding=ft.Padding.symmetric(horizontal=6))
 
     def on_tint(self, e) -> None:
+        ft.context.disable_auto_update()
         self._save("focus_tint", e.control.data)
         for dot in self.tint_row.controls:
             on = dot.data == self.tint
@@ -374,11 +388,16 @@ class ReflowMode:
 
     # ------------------------------------------------------------------ where the reader is
     def on_item_size(self, e) -> None:
+        """A paragraph reports its height (every paragraph does once it is laid out): only remembered. No update
+        of the window follows, which for a whole book would mean comparing every paragraph a thousand times."""
+        ft.context.disable_auto_update()
         self.heights[e.control.data] = e.height
 
     def on_scroll(self, e: ft.OnScrollEvent) -> None:
+        """Follow scrolling: the paragraph at the top is where the reader is (only the percentage is updated)."""
+        ft.context.disable_auto_update()
         self._scroll_px = e.pixels
-        tops, y = [], 28.0
+        tops, y = [], float(TOP_PAD)
         for i in range(len(self.items)):
             tops.append(y)
             y += self.heights.get(i, self.size * 3) + SPACING
@@ -414,10 +433,12 @@ class ReflowMode:
         self._units, self._unit_spans = units, spans
 
     async def on_read(self, e) -> None:
+        """The play / pause button: read aloud from the paragraph at the top, or from where it paused."""
+        ft.context.disable_auto_update()
         if self._reading:
             self._stop_reading(keep=True)
             self._update_read_btn()
-            self.app.page.update()
+            self._safe_update(self.read_btn)
             return
         if not self._units:
             self._sentences()
@@ -430,6 +451,7 @@ class ReflowMode:
 
     def on_item_click(self, e) -> None:
         """Clicking a paragraph while reading aloud moves the reading there."""
+        ft.context.disable_auto_update()
         if not self._reading:
             return
         if not self._units:
@@ -451,7 +473,7 @@ class ReflowMode:
         self._reading = True
         self._read_pos = start
         self._update_read_btn()
-        app.page.update()
+        self._safe_update(self.read_btn)
         app.speaker.start(self._units, start, float(app.ui.get("read_speed", 1.0)), app._voice(),
                           on_word=lambda si, wi: post(self._show_word(si, wi)),
                           on_sentence=lambda si: post(self._show_word(si, 0)),
@@ -466,21 +488,27 @@ class ReflowMode:
         if self._lit is not None and self._lit != item:
             self._highlight(self._lit, None)
         self._highlight(item, span)
-        self.app.page.update()
         if item != self.current:  # follow the reading
             self.current = item
             self._update_progress()
-            try:
-                await self.body.scroll_to(scroll_key=f"item-{item}", duration=300)
-            except Exception:
-                pass
+            self._safe_update(self.progress)
+            self.app.page.run_task(self._back_to, item, 300, 0)
 
     def _highlight(self, item: int, span: Optional[tuple[int, int]]) -> None:
+        """Mark the word being said in paragraph ``item`` (None: no mark); only that paragraph is sent again."""
         text = self.texts.get(item)
         if text is None:
             return
         text.spans = self._spans(item, self.items[item], span)
         self._lit = item if span else None
+        self._safe_update(text)
+
+    @staticmethod
+    def _safe_update(control: ft.Control) -> None:
+        try:
+            control.update()
+        except Exception:  # not on the screen (the reading view was closed)
+            pass
 
     async def _read_done(self, finished: bool) -> None:
         self._reading = False
@@ -489,7 +517,7 @@ class ReflowMode:
         if self._lit is not None:
             self._highlight(self._lit, None)
         self._update_read_btn()
-        self.app.page.update()
+        self._safe_update(self.read_btn)
 
     def _stop_reading(self, keep: bool = False) -> None:
         self._reading = False
