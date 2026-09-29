@@ -48,6 +48,7 @@ python -m dyslexia_converter chapter.pdf --pages 3-18 --move-citations -f printa
 |---|---|
 | PDF input | Checks each page for selectable text, scanned images, or both. Reports whether OCR was used. Password-protected PDFs get a clear error. Optional page range. |
 | Word and EPUB input | Word files (.docx) and EPUB books open too. Their own structure is read directly (title, headings, bullet and numbered lists, quotes, tables, pictures, footnotes, bold and italic), so nothing has to be guessed from positions on a page; the book's own table of contents and printed page numbers are left out. The Original view shows the file laid out as pages, and it follows the converted version. |
+| Web articles | *Web page* (next to *Open file*) opens an article from a web address. Only the article is kept, the way a browser's reader view does it: menus, headers and footers, adverts, cookie banners, share buttons, comments and "related" boxes are left out; links become plain text. Its pictures are stored inside the copy, which is saved on this device (as .html, so it can be opened again later with *Open file*) and then converted like a Word or EPUB file. The page is only requested from its own site. Pages behind a login or paywall cannot be opened. |
 | Reading view | *Reading view* shows the converted text itself, flowing to fit the window, instead of page pictures: text size, line spacing, column width and page colour change at once, and it fits a phone screen. Read aloud goes sentence by sentence and marks the word being said; clicking a paragraph while reading moves there. *Show the pages* switches to focus mode at the same place. |
 | Where you were | Each document opens again where you left it: the page in focus mode and the Convert tab, and the paragraph in the reading view (kept on this device for the last 200 documents). |
 | Study sheet | In focus mode's notes panel, *Study sheet* gathers your highlights and notes under the headings they are in (with pages, and how often each colour was used) as a Word document to study from. |
@@ -179,6 +180,8 @@ dyslexia_converter/
     scan.py             scan clean-up: spreads, shadows, borders, skew, curled lines
     ocr.py              OcrEngine interface + Tesseract engine (swap for Android ML Kit)
     layout.py           multi-column reading order (XY-cut)
+    structured.py       Word, EPUB and saved web page input (their own structure)
+    web.py              web page import: article only (reader view), pictures stored inside
   structure/detector.py deterministic structure detection
   transform/
     spelling.py         dictionary OCR correction, custom words, language detection

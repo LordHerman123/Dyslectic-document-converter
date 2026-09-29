@@ -21,6 +21,7 @@ from ..ai.keystore import ENV_VARS, KeyStore, install_log_redaction, redact
 from ..ai.providers import PROVIDERS, AIError
 from .. import DONATE_URL, PROJECT_URL, __version__
 from ..extract.ocr import default_engine, find_tesseract
+from ..extract import web
 from ..extract.structured import ProtectedFile
 from ..fonts import FONT_CHOICES, get_family
 from ..render import preview
@@ -251,9 +252,11 @@ class ConverterApp:
                         filter_quality=ft.FilterQuality.HIGH)
         open_btn = ft.FilledButton(t("Open file"), icon=ft.Icons.FOLDER_OPEN, on_click=self.on_open,
                                    tooltip=t("Choose a PDF to convert"))
+        web_btn = ft.OutlinedButton(t("Web page"), icon=ft.Icons.LANGUAGE, on_click=self.on_open_web,
+                                    tooltip=t("Open an article from a web page"))
         header = ft.Container(
             ft.Row([
-                ft.Row([logo, self.text("Dyslexia Converter", 22, weight=ft.FontWeight.BOLD), open_btn,
+                ft.Row([logo, self.text("Dyslexia Converter", 22, weight=ft.FontWeight.BOLD), open_btn, web_btn,
                         self.coffee_button()], spacing=12, wrap=True, expand=True,
                        vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 self.mode_chip,  # pushed to the far right
@@ -626,9 +629,13 @@ class ConverterApp:
                         "Your original file is never changed."), 15, text_align=ft.TextAlign.CENTER,
                       color=self.pal["muted"]),
             ft.Container(height=6),
-            ft.FilledButton(t("Open file"), icon=ft.Icons.FOLDER_OPEN, on_click=self.on_open,
-                            style=ft.ButtonStyle(padding=ft.Padding.symmetric(horizontal=28, vertical=18))),
-            self.text(t("PDFs (articles, book chapters, scans), Word files and EPUB books all work. Change the layout on the left at any time."),
+            ft.Row([
+                ft.FilledButton(t("Open file"), icon=ft.Icons.FOLDER_OPEN, on_click=self.on_open,
+                                style=ft.ButtonStyle(padding=ft.Padding.symmetric(horizontal=28, vertical=18))),
+                ft.OutlinedButton(t("Web page"), icon=ft.Icons.LANGUAGE, on_click=self.on_open_web,
+                                  style=ft.ButtonStyle(padding=ft.Padding.symmetric(horizontal=22, vertical=18))),
+            ], alignment=ft.MainAxisAlignment.CENTER, spacing=10, wrap=True),
+            self.text(t("PDFs (articles, book chapters, scans), Word files, EPUB books and web articles all work. Change the layout on the left at any time."),
                       13, text_align=ft.TextAlign.CENTER, color=self.pal["muted"]),
             self.text(t("Or drop a file anywhere in this window."), 13, text_align=ft.TextAlign.CENTER,
                       color=self.pal["muted"], visible=file_drop_support() is not None),
@@ -1657,7 +1664,7 @@ class ConverterApp:
     async def on_open(self, e):
         """Open PDF: choose a file (in the web version it is uploaded to a private working copy) and load it."""
         files = await self.file_picker.pick_files(dialog_title=self.t("Choose a PDF, Word or EPUB file"),
-                                                  allowed_extensions=["pdf", "docx", "epub"],
+                                                  allowed_extensions=[x.lstrip(".") for x in OPENABLE],
                                                   file_type=ft.FilePickerFileType.CUSTOM,
                                                   with_data=self.page.web)
         if not files:
@@ -1671,6 +1678,49 @@ class ConverterApp:
             path = str(tmp / Path(f.name).name)
             Path(path).write_bytes(f.bytes)
         self.source_path = path
+        await self.load_document()
+
+    async def on_open_web(self, e):
+        """Open a web page: ask for its address, download the article (without menus, adverts and the like) and
+        open it like a document. The page is only requested from its own site; a copy is kept on this device."""
+        t = self.t
+        field = ft.TextField(label=t("Address of the page"), hint_text="https://", autofocus=True,
+                             keyboard_type=ft.KeyboardType.URL, text_size=self.fs(15), width=self.fs(460))
+        fut: asyncio.Future = asyncio.get_running_loop().create_future()
+
+        def close(result):
+            """A handler that closes the dialog with the typed address (or None for Cancel)."""
+            def handler(_):
+                """Close the dialog and give the answer."""
+                self.page.pop_dialog()
+                if not fut.done():
+                    fut.set_result(field.value if result else None)
+            return handler
+
+        field.on_submit = close(True)
+        self.page.show_dialog(ft.AlertDialog(
+            modal=True, title=self.text(t("Open a web page"), 18, weight=ft.FontWeight.BOLD),
+            content=ft.Column([
+                self.text(t("Paste the address of an article. Only the article is kept: menus, adverts and "
+                            "comments are left out. Pages behind a login or paywall cannot be opened."), 13),
+                field], tight=True, spacing=12),
+            actions=[ft.TextButton(t("Cancel"), on_click=close(False)),
+                     ft.FilledButton(t("Open"), icon=ft.Icons.DOWNLOAD, on_click=close(True))]))
+        address = await fut
+        if not address or not address.strip():
+            return
+        self.busy(True, t("Downloading the web page..."))
+        try:
+            path = await self.in_thread(web.save_article, address)
+        except web.WebPageError as ex:
+            self.busy(False, t("Could not open the web page."))
+            self.notify(t(str(ex)), error=True)
+            return
+        except Exception as ex:
+            self.busy(False, t("Could not open the web page."))
+            self.notify(t("Could not open the web page.") + " " + redact(str(ex)), error=True)
+            return
+        self.source_path = str(path)
         await self.load_document()
 
     @property
@@ -1704,7 +1754,9 @@ class ConverterApp:
         name = Path(self.source_path).name
         scanner_text = any(p.text_source == "scanner" for p in d.pages)
         if self.session.original_pdf:  # a Word or EPUB file: its text and structure are read directly
-            kind = t("an EPUB book") if name.lower().endswith(".epub") else t("a Word document")
+            low = name.lower()
+            kind = t("an EPUB book") if low.endswith(".epub") else t("a web page") \
+                if low.endswith((".html", ".htm")) else t("a Word document")
             return t("{name}: {kind}. Language: {language}.", name=name, kind=kind,
                      language=self.lang_name(d.language))
         kind = {"text": t("selectable text"),
@@ -2417,7 +2469,7 @@ def main(page: ft.Page) -> None:
         page.run_task(app.load_document)
 
 
-OPENABLE = (".pdf", ".docx", ".epub")
+OPENABLE = (".pdf", ".docx", ".epub", ".html", ".htm")
 
 
 def file_drop_support():

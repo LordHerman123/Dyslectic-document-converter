@@ -233,3 +233,46 @@ def test_app_check_word_and_epub(headless, tmp_path):
         assert app.reflow.current == 3
         await app.reflow.close()
     headless(scenario)
+
+
+def test_app_check_web_page(headless, tmp_path, monkeypatch):
+    """Open a web page from the app: type the address in the dialog, the article opens like a document; a page
+    without an article gives a message and nothing crashes."""
+    import functools
+
+    import httpx
+    from test_web import ARTICLE, NO_ARTICLE, _png  # the same small site
+
+    from dyslexia_converter.extract import web
+
+    pages = {"/article.html": ("text/html", ARTICLE.encode()), "/login.html": ("text/html", NO_ARTICLE.encode()),
+             "/fox.png": ("image/png", _png())}
+
+    def answer(request):
+        kind, body = pages.get(request.url.path, ("text/html", b""))
+        return httpx.Response(200 if request.url.path in pages else 404, headers={"content-type": kind},
+                              content=body)
+
+    client = httpx.Client(transport=httpx.MockTransport(answer), follow_redirects=True)
+    monkeypatch.setattr(web, "save_article", functools.partial(web.save_article, client=client, folder=tmp_path))
+
+    async def type_address(app, address):
+        dialogs = []
+        app.page.show_dialog = dialogs.append
+        app.page.pop_dialog = lambda: None
+        task = asyncio.ensure_future(app.on_open_web(None))
+        await _settle(0.1)
+        dlg = dialogs[-1]
+        dlg.content.controls[-1].value = address
+        dlg.actions[-1].on_click(None)
+        await task
+
+    async def scenario(app):
+        await type_address(app, "news.example.org/login.html")
+        assert app.session is None
+        assert any("No article text" in msg for _, msg, _ in app._notices)
+        await type_address(app, "news.example.org/article.html")
+        assert app.session is not None and app.session.document.title == "Foxes in the city"
+        assert "web page" in app.doc_status()
+        await _read_everywhere(app, app.source_path)
+    headless(scenario)

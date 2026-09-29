@@ -1,4 +1,4 @@
-"""Reading Word (.docx) and EPUB files.
+"""Reading Word (.docx), EPUB and web page (.html) files.
 
 These formats say what every part is (a heading of level 2, a bulleted list, a table), so their structure is read
 directly instead of guessed from positions on a page as for a PDF. The result is the same :class:`Document` the PDF
@@ -22,11 +22,11 @@ from xml.etree import ElementTree as ET
 
 from ..model import Block, BlockKind, Document, ImageData, PageInfo, StyleRange, TableData
 
-STRUCTURED_TYPES = (".docx", ".epub")
+STRUCTURED_TYPES = (".docx", ".epub", ".html", ".htm")
 
 
 def is_structured(path: str | Path) -> bool:
-    """Whether the file is a Word or EPUB file (read by this module) rather than a PDF."""
+    """Whether the file is a Word, EPUB or web page file (read by this module) rather than a PDF."""
     return Path(str(path)).suffix.lower() in STRUCTURED_TYPES
 
 
@@ -82,7 +82,9 @@ def read_structured(path: str | Path) -> tuple[Document, bytes]:
     lock = protection(path)
     if lock:
         raise ProtectedFile("password" if lock == "password" else "drm", lock)
-    doc = _read_docx(path) if path.lower().endswith(".docx") else _read_epub(path)
+    low = path.lower()
+    doc = _read_docx(path) if low.endswith(".docx") else _read_html(path) if low.endswith((".html", ".htm")) \
+        else _read_epub(path)
     if not any(b.text.strip() or b.image or b.table for b in doc.blocks):
         raise ValueError("No readable text was found in this file")
     try:
@@ -317,6 +319,8 @@ def _docx_pictures(p, d) -> list[ImageData]:
 _BLOCK_TAGS = {"p", "div", "li", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "figcaption", "caption", "dt",
                "dd", "pre", "td", "th", "aside", "section", "article", "header", "footer", "table", "tr", "ul", "ol",
                "figure", "br", "hr", "body", "nav"}
+_VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track",
+              "wbr"}
 _SKIP_TAGS = {"script", "style", "head", "title", "svg", "math", "noscript"}
 
 
@@ -352,6 +356,25 @@ def _read_epub(path: str) -> Document:
     author = opf.findtext(".//dc:creator", "", ns).strip()
     lang = (opf.findtext(".//dc:language", "", ns) or "en")[:2].lower()
     return Document(source_path=path, blocks=b.blocks, title=title, author=author, language=lang)
+
+
+def _read_html(path: str) -> Document:
+    """A saved web page (see :mod:`.web`): read like one part of a book; its pictures are stored inside it."""
+    raw = Path(path).read_bytes()
+    m = re.search(rb'charset=["\']?([\w-]+)', raw[:2000])
+    try:
+        html = raw.decode(m.group(1).decode() if m else "utf-8", errors="replace")
+    except LookupError:
+        html = raw.decode("utf-8", errors="replace")
+    b = _Builder()
+    _EpubPage(None, "", b).feed(html)
+    t = re.search(r"<title[^>]*>(.*?)</title>", html, re.I | re.S)
+    import html as _html
+
+    title = re.sub(r"\s+", " ", _html.unescape(t.group(1))).strip() if t else ""
+    lang = re.search(r"<html[^>]*\blang=[\"']?([a-zA-Z]{2})", html)
+    return Document(source_path=path, blocks=b.blocks, title=title,
+                    language=(lang.group(1).lower() if lang else "en"))
 
 
 def _opf_path(z: zipfile.ZipFile) -> str:
@@ -401,7 +424,7 @@ class _EpubPage(HTMLParser):
         a = dict(attrs)
         kind_attr = (a.get("epub:type", "") + " " + a.get("role", "")).lower()
         if self.skip or tag in _SKIP_TAGS or "pagebreak" in kind_attr:
-            if tag not in ("br", "img", "hr"):  # an empty tag has no end tag to wait for
+            if tag not in _VOID_TAGS:  # an empty tag has no end tag to wait for
                 self.skip += 1
                 self.hidden.append(tag)
             return
@@ -484,7 +507,21 @@ class _EpubPage(HTMLParser):
             self.text += data
 
     def _image(self, src: str) -> None:
-        if not src or src.startswith(("http:", "https:", "data:")):
+        if src.startswith("data:image/"):  # a picture stored inside the page (a saved web page)
+            import base64
+            import binascii
+
+            head, _, body = src.partition(",")
+            try:
+                data = base64.b64decode(body) if head.endswith(";base64") else unquote(body).encode()
+            except (binascii.Error, ValueError):
+                return
+            self._flush()
+            pic = _picture(data, "picture." + head[11:].split(";")[0].replace("jpeg", "jpg"))
+            if pic:
+                self.b.add(BlockKind.IMAGE, "", image=pic)
+            return
+        if not src or self.z is None or src.startswith(("http:", "https:", "data:")):
             return
         self._flush()
         name = posixpath.normpath(posixpath.join(self.dir, src.split("#")[0]))
