@@ -184,6 +184,9 @@ class ConverterApp:
         """The close button of a notice."""
         idx = e.control.data
         if 0 <= idx < len(getattr(self, "_notices", [])):
+            action = self._notices[idx][2]
+            if action and action[0] == self.t("Download") and getattr(self, "_update_dismiss", None):
+                self._update_dismiss()  # not shown again for this version
             del self._notices[idx]
         self._render_notices()
         self.page.update()
@@ -244,7 +247,7 @@ class ConverterApp:
                                 tooltip=t("Where your document content is processed"))
         logo = ft.Image(src="logo_small.png", width=self.fs(38), height=self.fs(38), semantics_label="Logo",
                         filter_quality=ft.FilterQuality.HIGH)
-        open_btn = ft.FilledButton(t("Open PDF"), icon=ft.Icons.FOLDER_OPEN, on_click=self.on_open,
+        open_btn = ft.FilledButton(t("Open file"), icon=ft.Icons.FOLDER_OPEN, on_click=self.on_open,
                                    tooltip=t("Choose a PDF to convert"))
         header = ft.Container(
             ft.Row([
@@ -566,12 +569,12 @@ class ConverterApp:
                                 vertical_alignment=ft.CrossAxisAlignment.START, visible=self.session is not None)
         self.empty_state = ft.Container(ft.Column([
             sleepy_dog(self.fs(200)),
-            self.text(t("Open a PDF to start"), 22, weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER),
+            self.text(t("Open a document to start"), 22, weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER),
             self.text(t("The converted version appears here next to the original, so you can compare them. "
                         "Your original file is never changed."), 15, text_align=ft.TextAlign.CENTER,
                       color=self.pal["muted"]),
             ft.Container(height=6),
-            ft.FilledButton(t("Open PDF"), icon=ft.Icons.FOLDER_OPEN, on_click=self.on_open,
+            ft.FilledButton(t("Open file"), icon=ft.Icons.FOLDER_OPEN, on_click=self.on_open,
                             style=ft.ButtonStyle(padding=ft.Padding.symmetric(horizontal=28, vertical=18))),
             self.text(t("PDFs (articles, book chapters, scans), Word files and EPUB books all work. Change the layout on the left at any time."),
                       13, text_align=ft.TextAlign.CENTER, color=self.pal["muted"]),
@@ -1251,7 +1254,11 @@ class ConverterApp:
                 self.text(t("Focus mode keeps the pages it has drawn there too, so a document you open again "
                             "shows at once."), 13),
                 ft.Row([ft.OutlinedButton(t("Clear saved page pictures"), icon=ft.Icons.DELETE_OUTLINE,
-                                          on_click=self.on_clear_page_cache)])], ft.Icons.LOCK_OUTLINE),
+                                          on_click=self.on_clear_page_cache)]),
+                ft.Switch(label=t("Tell me when a new version is out"), value=bool(self.ui.get("check_updates", True)),
+                          on_change=self.on_check_updates, label_text_style=ft.TextStyle(size=self.fs(14))),
+                self.text(t("The app asks GitHub once a day which version is the newest. Nothing about you or your "
+                            "documents is sent."), 12, color=ft.Colors.ON_SURFACE_VARIANT)], ft.Icons.LOCK_OUTLINE),
             self.card(t("Support"), [
                 self.text(t("The app is free. If it helps you, you can buy the maker a coffee. This is "
                             "completely optional and changes nothing in the app."), 13),
@@ -1327,6 +1334,11 @@ class ConverterApp:
         """Delete the saved OCR results (scanned documents are then read again when opened)."""
         n = await self.in_thread(pipeline.clear_ocr_cache)
         self.notify(self.t("Saved OCR results cleared ({n} document(s)).", n=n))
+
+    def on_check_updates(self, e):
+        """Switch the daily check for a new version on or off."""
+        self.ui["check_updates"] = bool(e.control.value)
+        self.store.save_ui(self.ui)
 
     async def on_clear_page_cache(self, e):
         """Delete the page pictures focus mode kept (they are drawn again when needed)."""
@@ -1494,6 +1506,36 @@ class ConverterApp:
                                        ft.ResponsiveRow([body], alignment=ft.MainAxisAlignment.CENTER),
                                        self.end_space()], scroll=ft.ScrollMode.AUTO, expand=True),
                             padding=ft.Padding.only(left=16, right=16, top=4), expand=True)
+
+    # ================================================================ updates
+    async def check_for_update(self) -> None:
+        """Tell the reader when a newer version is out (asks GitHub at most once a day, in the background; see
+        :mod:`..updates`). The notice has a download button and can be dismissed for that version."""
+        from .. import updates
+
+        found = await self.in_thread(updates.check, self.ui)
+        self.store.save_ui(self.ui)  # when it last asked
+        if not found:
+            return
+        version, url = found
+
+        async def download(e):
+            """Open the release page in the web browser."""
+            try:
+                await ft.UrlLauncher().launch_url(url)
+            except Exception:
+                self.notify(url)
+
+        def dismiss(e=None):
+            self.ui["update_dismissed"] = version
+            self.store.save_ui(self.ui)
+
+        msg = self.t("Version {version} is available (you have {current}). Download it from the project page.",
+                     version=version, current=__version__)
+        self._notices = [("info", msg, (self.t("Download"), download))] + getattr(self, "_notices", [])
+        self._update_dismiss = dismiss
+        self._render_notices()
+        self.page.update()
 
     # ================================================================ dialogs
     def show_start_notice(self) -> None:
@@ -2274,6 +2316,7 @@ def main(page: ft.Page) -> None:
     app.build()
     page.update()
     app.show_start_notice()
+    page.run_task(app.check_for_update)
 
 
 ASSETS_DIR = str(Path(__file__).resolve().parent.parent / "assets")
