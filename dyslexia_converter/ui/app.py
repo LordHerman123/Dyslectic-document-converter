@@ -1928,11 +1928,13 @@ class ConverterApp:
             t("Read along"), icon=ft.Icons.CHROME_READER_MODE_OUTLINED, on_click=self.on_reflow,
             tooltip=t("Read the text itself, flowing to fit the window, with the sentence and word being read "
                       "marked; size, spacing and colours change at once"))
-        self.read_row = ft.Row([
+        controls = ft.Row([
             self.read_btn, self.stop_btn, self.tap_btn, ft.Container(width=6),
             self.text(t("Speed"), 13), self.speed_slider, self.speed_label, self.voice_dd, self.follow_cb,
-            self.read_along_btn,
-        ], wrap=True, spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+        ], wrap=True, spacing=6, expand=True, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+        # Read along on the right of the first line (the controls wrap under themselves, not under it)
+        self.read_row = ft.Row([controls, ft.Container(self.read_along_btn, padding=ft.Padding.only(top=8))],
+                               spacing=8, vertical_alignment=ft.CrossAxisAlignment.START)
         self.read_panel = ft.Container(self.read_row, padding=ft.Padding.symmetric(horizontal=8, vertical=2),
                                        border_radius=10, bgcolor=ft.Colors.SURFACE_CONTAINER_LOW,
                                        visible=self._speech_allowed() and bool(self.ui.get("read_panel_open", False)))
