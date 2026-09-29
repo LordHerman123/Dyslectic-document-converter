@@ -67,7 +67,8 @@ jobs:
           Write-Host "Starting $($exe.FullName)"
           $p = Start-Process -FilePath $exe.FullName -PassThru
           $waited = 0
-          while (-not (Select-String -Path "selftest\ready.txt" -Pattern "ready|error" -Quiet -ErrorAction SilentlyContinue) -and $waited -lt 240) {
+          function Reported { (Test-Path "selftest\ready.txt") -and (Select-String -Path "selftest\ready.txt" -Pattern "ready|error" -Quiet) }
+          while (-not (Reported) -and $waited -lt 240) {
             if ($p.HasExited) { throw "the app closed by itself (exit code $($p.ExitCode))" }
             Start-Sleep -Seconds 5; $waited += 5
           }
