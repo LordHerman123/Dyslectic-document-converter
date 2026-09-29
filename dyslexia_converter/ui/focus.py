@@ -502,7 +502,7 @@ class FocusMode:
     @property
     def _pdf(self):
         """The pages focus mode shows: the converted document, or the original when reading only that."""
-        return self.app.source_path if self.source == "original" else self.app.converted_pdf
+        return self.app.original_view if self.source == "original" else self.app.converted_pdf
 
     async def on_read_original(self, e=None) -> None:
         """Read only the original: its own pages in focus mode (zoom, page colour, pages and rotation still
@@ -1816,16 +1816,16 @@ class FocusMode:
     async def _show_original(self, index: int) -> None:
         """Show page ``index`` of the original (rendered sharp enough to zoom in)."""
         app = self.app
-        total = preview.page_count(app.source_path) if app.source_path else 0
+        total = preview.page_count(app.original_view) if app.source_path else 0
         if not total or self._side_mode != "original":
             return
         index = max(0, min(total - 1, index))
         self._orig_idx = index
         self.orig_label.value = app.t("page {n} of {total}", n=index + 1, total=total)
-        w, h = await app.in_thread(preview.page_size, app.source_path, index)
+        w, h = await app.in_thread(preview.page_size, app.original_view, index)
         self._orig_aspect = h / w if w else 1.414
         self._orig_px = 3000 if self._orig_zoom > 2 else 1600
-        self.orig_image.src = await app.in_thread(preview.render_page, app.source_path, index, self._orig_px)
+        self.orig_image.src = await app.in_thread(preview.render_page, app.original_view, index, self._orig_px)
         self._size_original()
         try:
             self.side.update()

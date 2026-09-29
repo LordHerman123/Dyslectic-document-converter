@@ -571,7 +571,7 @@ class ConverterApp:
             ft.Container(height=6),
             ft.FilledButton(t("Open PDF"), icon=ft.Icons.FOLDER_OPEN, on_click=self.on_open,
                             style=ft.ButtonStyle(padding=ft.Padding.symmetric(horizontal=28, vertical=18))),
-            self.text(t("Articles, book chapters and scans all work. Change the layout on the left at any time."),
+            self.text(t("PDFs (articles, book chapters, scans), Word files and EPUB books all work. Change the layout on the left at any time."),
                       13, text_align=ft.TextAlign.CENTER, color=self.pal["muted"]),
         ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=12, tight=True, width=460),
             alignment=ft.Alignment.CENTER, expand=True, visible=self.session is None, border_radius=16,
@@ -1558,7 +1558,8 @@ class ConverterApp:
     # ================================================================ events
     async def on_open(self, e):
         """Open PDF: choose a file (in the web version it is uploaded to a private working copy) and load it."""
-        files = await self.file_picker.pick_files(dialog_title=self.t("Choose a PDF"), allowed_extensions=["pdf"],
+        files = await self.file_picker.pick_files(dialog_title=self.t("Choose a PDF, Word or EPUB file"),
+                                                  allowed_extensions=["pdf", "docx", "epub"],
                                                   file_type=ft.FilePickerFileType.CUSTOM,
                                                   with_data=self.page.web)
         if not files:
@@ -1573,6 +1574,13 @@ class ConverterApp:
             Path(path).write_bytes(f.bytes)
         self.source_path = path
         await self.load_document()
+
+    @property
+    def original_view(self):
+        """The original as pages for the Original view: the PDF itself, or a Word or EPUB file laid out as a PDF."""
+        if self.session is not None and self.session.original_pdf:
+            return self.session.original_pdf
+        return self.source_path
 
     async def on_page_range(self, e):
         """The page range changed: load the document again with it."""
@@ -1597,6 +1605,10 @@ class ConverterApp:
         d = self.session.document
         name = Path(self.source_path).name
         scanner_text = any(p.text_source == "scanner" for p in d.pages)
+        if self.session.original_pdf:  # a Word or EPUB file: its text and structure are read directly
+            kind = t("an EPUB book") if name.lower().endswith(".epub") else t("a Word document")
+            return t("{name}: {kind}. Language: {language}.", name=name, kind=kind,
+                     language=self.lang_name(d.language))
         kind = {"text": t("selectable text"),
                 "scanned": t("scanned pages (the scanner's stored text was used)") if scanner_text
                 else t("scanned pages (text read with OCR)"),
@@ -1637,7 +1649,7 @@ class ConverterApp:
             self.doc_key = None
         self.update_highlight_option()
         self.pages_row.visible, self.empty_state.visible = True, False
-        self.orig_count = preview.page_count(self.source_path)
+        self.orig_count = preview.page_count(self.original_view)
         self.orig_page = (self._page_range() or (1, 1))[0] - 1
         self.conv_page = 0
         self.busy(False, self.doc_status())
@@ -1991,7 +2003,7 @@ class ConverterApp:
                         before = self.orig_page
                         self._original_follows(1)
                         if self.orig_page != before and self.source_path:
-                            self.orig_img.src = await self.in_thread(preview.render_page, self.source_path,
+                            self.orig_img.src = await self.in_thread(preview.render_page, self.original_view,
                                                                      self.orig_page, 800)
                             self.orig_label.value = f"{self.t('Original')} {self.orig_page + 1} / {self.orig_count}"
                 rects = [r for w in sentence.words if w.page == page for r in w.rects]
@@ -2076,7 +2088,7 @@ class ConverterApp:
     async def show_pages(self) -> None:
         """Render and show the current original and converted pages in the preview."""
         if self.source_path:
-            self.orig_img.src = await self.in_thread(preview.render_page, self.source_path, self.orig_page, 800)
+            self.orig_img.src = await self.in_thread(preview.render_page, self.original_view, self.orig_page, 800)
             self.orig_label.value = f"{self.t('Original')} {self.orig_page + 1} / {self.orig_count}"
         if self.converted_pdf:
             self.conv_img.src = await self.in_thread(preview.render_page, self.converted_pdf, self.conv_page, 800)

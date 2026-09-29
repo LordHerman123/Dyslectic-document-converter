@@ -1607,6 +1607,10 @@ T: dict[str, dict[str, str]] = {
                                            "de": "Gespeicherte Seitenbilder gelöscht ({n}).",
                                            "es": "Imágenes de páginas guardadas borradas ({n}).",
                                            "it": "Immagini delle pagine salvate cancellate ({n})."},
+    'Choose a PDF, Word or EPUB file': {'nl': 'Kies een pdf-, Word- of EPUB-bestand', 'fr': 'Choisissez un fichier PDF, Word ou EPUB', 'de': 'Wählen Sie eine PDF-, Word- oder EPUB-Datei', 'es': 'Elige un archivo PDF, Word o EPUB', 'it': 'Scegli un file PDF, Word o EPUB'},
+    'an EPUB book': {'nl': 'een EPUB-boek', 'fr': 'un livre EPUB', 'de': 'ein EPUB-Buch', 'es': 'un libro EPUB', 'it': 'un libro EPUB'},
+    'a Word document': {'nl': 'een Word-document', 'fr': 'un document Word', 'de': 'ein Word-Dokument', 'es': 'un documento de Word', 'it': 'un documento Word'},
+    'PDFs (articles, book chapters, scans), Word files and EPUB books all work. Change the layout on the left at any time.': {'nl': "Pdf's (artikels, boekhoofdstukken, scans), Word-bestanden en EPUB-boeken werken allemaal. Pas de opmaak links op elk moment aan.", 'fr': 'Les PDF (articles, chapitres de livres, scans), les fichiers Word et les livres EPUB fonctionnent tous. Modifiez la mise en page à gauche à tout moment.', 'de': 'PDFs (Artikel, Buchkapitel, Scans), Word-Dateien und EPUB-Bücher funktionieren alle. Ändern Sie das Layout links jederzeit.', 'es': 'Los PDF (artículos, capítulos de libros, escaneos), los archivos de Word y los libros EPUB funcionan todos. Cambia el diseño a la izquierda cuando quieras.', 'it': "PDF (articoli, capitoli di libri, scansioni), file Word e libri EPUB funzionano tutti. Cambia l'impaginazione a sinistra quando vuoi."},
 }
 
 # messages from the processing core, matched in i18n.MESSAGE_PATTERNS; {0}, {1}... are the parts found

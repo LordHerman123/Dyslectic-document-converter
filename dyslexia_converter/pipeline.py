@@ -18,6 +18,7 @@ from typing import Callable, Iterable, Optional
 from . import check
 from .extract.ocr import OcrEngine, default_engine
 from .extract.pdf_reader import read_pdf
+from .extract.structured import is_structured, read_structured
 from .model import Correction, Document
 from .render.compose import ComposeResult, compose
 from .settings import FormatSettings
@@ -61,6 +62,8 @@ class Session:
     check_run: bool = False  # whether the AI check ran on this document
     # how to build the document again with a reading order from the AI, and the pieces of unusual pages
     _build: Optional[Callable] = field(default=None, repr=False)
+    # a Word or EPUB file laid out as pages (PDF) for the Original view; None for a PDF (shown as it is)
+    original_pdf: Optional[bytes] = field(default=None, repr=False)
     _layout_pieces: dict = field(default_factory=dict, repr=False)
 
     # ------------------------------------------------------------ the whole-document AI check
@@ -642,12 +645,33 @@ def _text_layer_sample(path: str, max_pages: int = 6) -> str:
         return ""
 
 
+def _load_structured(path: str, settings: FormatSettings, progress: Optional[ProgressFn],
+                     custom_words: Optional[CustomWords]) -> Session:
+    """A Word or EPUB file: its own structure is read directly (no text recognition or layout guessing needed)."""
+    if progress:
+        progress("Reading the document", 0.2)
+    doc, original = read_structured(path)
+    if settings.ocr_language != "auto":
+        doc.language = settings.ocr_language
+    else:
+        sample = " ".join(b.text for b in doc.blocks[:80] if b.text)
+        if len(sample) > 200:
+            doc.language = detect_language(sample)
+    session = Session(doc, custom_words or CustomWords(), original_pdf=original)
+    session._build = lambda orders=None, extra=(): (doc, {})  # the reading order is the file's own
+    if progress:
+        progress("Done", 1.0)
+    return session
+
+
 def load(path: str | Path, settings: Optional[FormatSettings] = None, ocr_engine: Optional[OcrEngine] = None,
          progress: Optional[ProgressFn] = None, custom_words: Optional[CustomWords] = None,
          use_ocr: bool = True, pages: Optional[tuple[int, int]] = None) -> Session:
-    """Extract and structure a PDF. The source file is only read, never written."""
+    """Extract and structure a PDF, Word (.docx) or EPUB file. The source file is only read, never written."""
     settings = settings or FormatSettings()
     path = str(path)
+    if is_structured(path):
+        return _load_structured(path, settings, progress, custom_words)
     engine = (ocr_engine or default_engine()) if use_ocr else None
     ocr_langs = ["en", "nl"] if settings.ocr_language == "auto" else [settings.ocr_language]
     if settings.ocr_language == "auto":
