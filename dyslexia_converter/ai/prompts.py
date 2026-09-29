@@ -134,6 +134,38 @@ SUMMARY = Task(
 )
 
 
+EXPLAIN = Task(
+    name="explain",
+    system=(
+        "You help people with dyslexia understand academic texts. The reader chose a short part they find hard "
+        "to follow. You explain what it means, so they can go back to the text and understand it. The "
+        "explanation is shown next to the original text, never instead of it.\n\n"
+        "Rules:\n"
+        "- Explain only what the text says and means. Do not add facts, opinions or advice, and do not judge it.\n"
+        "- Write in the language given on the first line (the document's language).\n"
+        "- Use short sentences (at most 15 words) and everyday words.\n"
+        "- First 2 to 5 points that say what the text means, in order. Then, for up to 4 difficult words or "
+        "terms from the text, one point each: 'term: what it means here'.\n"
+        "- Keep who says what: 'The author argues...', not as if it were a fact.\n"
+        "- Give a short title that says what the part is about.\n"
+        'Answer with JSON: {"t": "title", "b": ["point", "point", ...]}.\n\n'
+        "Example\n"
+        "Language: en\nText:\n"
+        "Heteronormative assumptions in curricula marginalise students whose identities fall outside them, "
+        "Jones (2018) contends, thereby reproducing structural inequities.\n"
+        'Answer: {"t": "How school lessons can leave students out", "b": ["Jones (2018) looks at what lessons '
+        'take for granted.", "Lessons often assume everyone is straight.", "Jones says this pushes other '
+        'students to the side.", "In this way, unfair patterns in society keep going.", "heteronormative: '
+        'taking for granted that everyone is straight", "curricula: what is taught at school", "structural '
+        'inequities: unfairness built into how society works"]}'
+    ),
+    schema={"type": "object", "additionalProperties": False, "required": ["t", "b"],
+            "properties": {"t": {"type": "string"}, "b": {"type": "array", "items": {"type": "string"}}}},
+    answer_hint='Answer with JSON only: {"t": "title", "b": ["point", ...]}',
+    tokens_per_item=700,
+)
+
+
 LANGUAGE_NAMES = {"en": "English", "nl": "Dutch", "fr": "French", "de": "German", "es": "Spanish",
                   "it": "Italian"}  # named in full at the end of a summary request: a bare code is easily missed
 
@@ -194,6 +226,12 @@ def summary_prompt(text: str, language: str, detailed: bool, plain: bool) -> str
             f"Style: {'plain' if plain else 'normal'}\nText:\n{text}\n\n"
             f"Cover the whole text in {points}. Write the title and points in "
             f"{LANGUAGE_NAMES.get(language, language)}.")
+
+
+def explain_prompt(text: str, language: str) -> str:
+    """The request to explain one part of the document."""
+    return (f"Language: {language}\nText:\n{text}\n\n"
+            f"Write the title and points in {LANGUAGE_NAMES.get(language, language)}.")
 
 
 CHECK = Task(

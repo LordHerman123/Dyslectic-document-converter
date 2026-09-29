@@ -326,6 +326,33 @@ def test_ai_summary_refused_without_consent(isolated_home, monkeypatch):
     assert FakeProvider.calls == 0
 
 
+def test_ai_explanation_is_short_masked_cached_and_logged(isolated_home, monkeypatch):
+    """Explain sends only the chosen part (at most EXPLAIN_WORDS words, e-mail addresses masked), in the document's
+    language, and a second request for the same part comes from the cache."""
+    from dyslexia_converter.ai import assistant as a
+
+    answer = {"t": "What it means", "b": ["It says plants make food.", "chlorophyll: the green part"]}
+    ai = make_assistant(isolated_home, answer, monkeypatch)
+    text = "Write to me@example.org. " + "Chlorophyll absorbs light. " * 400  # 1200 words
+    s = ai.explain(text, language="fr")
+    assert s.title == "What it means" and s.points[1] == "chlorophyll: the green part"
+    assert "me@example.org" not in FakeProvider.last_prompt
+    assert FakeProvider.last_prompt.startswith("Language: fr\nText:\n")
+    assert FakeProvider.last_prompt.endswith("Write the title and points in French.")
+    assert len(FakeProvider.last_prompt.split("Text:\n")[1].split("\n\n")[0].split()) == a.EXPLAIN_WORDS
+    assert "never instead of it" in FakeProvider.last_system  # shown next to the text, never replacing it
+    assert ai.log.entries()[-1].task == "explain"
+    ai.explain(text, language="fr")
+    assert FakeProvider.calls == 1
+
+
+def test_ai_explanation_refused_without_consent(isolated_home, monkeypatch):
+    ai = make_assistant(isolated_home, {"t": "", "b": []}, monkeypatch, consent=False)
+    with pytest.raises(ConsentRequired):
+        ai.explain("Some text.")
+    assert FakeProvider.calls == 0
+
+
 def test_ai_summary_keeps_the_chosen_length(isolated_home, monkeypatch):
     many = {"t": "T", "b": [f"Point {i}." for i in range(11)]}  # a model that ignores "3 to 5 points"
     a = make_assistant(isolated_home, many, monkeypatch)

@@ -30,8 +30,8 @@ from . import keys
 from .keystore import KeyStore, redact
 from .log import LogEntry, RequestLog
 from .privacy import mask, window
-from .prompts import (CHECK, CITATIONS, LAYOUT, OCR, SUMMARY, Task, check_prompt, citation_prompt, layout_prompt,
-                      ocr_prompt, summary_prompt)
+from .prompts import (CHECK, CITATIONS, EXPLAIN, LAYOUT, OCR, SUMMARY, Task, check_prompt, citation_prompt,
+                      explain_prompt, layout_prompt, ocr_prompt, summary_prompt)
 from .providers import AIError, Busy, Reply, UnreadableAnswer, make_provider
 
 PRIVACY_NOTICE = (
@@ -44,6 +44,7 @@ PRIVACY_NOTICE = (
 CHUNK = 30  # items per request: the fixed instructions and examples are shared by more items
 SUMMARY_WORDS = 3000  # a longer text is summarised in parts, and the parts' points summarised once more
 SUMMARY_POINTS = {False: 5, True: 10}  # most points in a short / detailed summary
+EXPLAIN_WORDS = 600  # an explanation is of a short part: at most this many words are sent
 RETRY_WAITS = (2.0, 6.0)  # seconds to wait before asking a busy provider again
 CHECK_WORKERS = 3  # parts of the whole-document check sent side by side
 
@@ -395,6 +396,24 @@ class AIAssistant:
             self.usage.append(UsageEntry("summary", 1, True))
         # the length the user chose, even when a model gives more points than asked
         return Summary(hit.get("t", ""), list(hit.get("b", []))[:SUMMARY_POINTS[detailed]])
+
+    def explain(self, text: str, language: str = "en") -> Summary:
+        """An explanation in plain words of a short part the reader chose (only in AI-assisted mode, with consent):
+        what it means, and the difficult words in it. At most EXPLAIN_WORDS words are sent; answers are cached."""
+        self._provider()
+        words = mask(text).split()
+        if not words:
+            return Summary("", [])
+        prompt = explain_prompt(" ".join(words[:EXPLAIN_WORDS]), language)
+        ck = self._item_key("explain", prompt)
+        hit = self.cache.get(ck)
+        if hit is None:
+            reply = self.send(Request(EXPLAIN, prompt, [ck], [None]))
+            hit = {"t": str(reply.data.get("t", "")), "b": [str(p) for p in reply.data.get("b", []) if str(p).strip()]}
+            self.cache.put(ck, hit)
+        else:
+            self.usage.append(UsageEntry("explain", 1, True))
+        return Summary(hit.get("t", ""), list(hit.get("b", []))[:12])
 
     # ------------------------------------------------------------------ tasks
     def classify_citations(self, candidates: list[tuple[str, str, int, int]],

@@ -283,6 +283,59 @@ def notes_docx(title: str, entries: list[tuple[int, str, str, str]]) -> bytes:
     return buf.getvalue()
 
 
+def study_sheet_docx(title: str, sections: list[tuple[str, list[tuple[int, str, str, str]]]],
+                     labels: dict[str, str]) -> bytes:
+    """A study sheet: the reader's highlights and notes gathered under the headings of the document they are in.
+
+    ``sections``: (heading, entries) in reading order, each entry (page number, colour name, quote, note); the
+    heading is "" before the first heading. ``labels``: the words to use ("summary" with {highlights} and
+    {notes}, "note", "page" with {page}, "start", and one per colour name), in the app's language.
+    """
+    import io
+
+    from docx import Document as DocxDocument
+    from docx.shared import Pt, RGBColor
+
+    d = DocxDocument()
+    style = d.styles["Normal"]
+    style.font.size = Pt(12)
+    style.paragraph_format.space_after = Pt(6)
+    style.paragraph_format.line_spacing = 1.3
+    d.add_heading(title, level=1)
+    entries = [e for _, es in sections for e in es]
+    d.add_paragraph(labels["summary"].format(highlights=len(entries),
+                                             notes=sum(1 for e in entries if e[3].strip())))
+    counts: dict[str, int] = {}
+    for e in entries:
+        counts[e[1]] = counts.get(e[1], 0) + 1
+    legend = d.add_paragraph()
+    for colour, n in counts.items():  # which colour was used how often (readers often give colours a meaning)
+        r, g, b, _ = COLOURS.get(colour, COLOURS["yellow"])
+        mark = legend.add_run("■ ")
+        mark.font.color.rgb = RGBColor(r, g, b)
+        legend.add_run(f"{labels.get(colour, colour)}: {n}    ")
+    for heading, items in sections:
+        if not items:
+            continue
+        d.add_heading(heading or labels["start"], level=2)
+        for page, colour, quote, note in items:
+            r, g, b, _ = COLOURS.get(colour, COLOURS["yellow"])
+            p = d.add_paragraph(style="List Bullet")
+            mark = p.add_run("■ ")
+            mark.font.color.rgb = RGBColor(r, g, b)
+            p.add_run(f"“{quote}”").italic = True
+            ref = p.add_run("  " + labels["page"].format(page=page))
+            ref.font.size = Pt(10)
+            if note.strip():
+                n = d.add_paragraph()
+                n.paragraph_format.left_indent = Pt(28)
+                n.add_run(labels["note"] + " ").bold = True
+                n.add_run(note.strip())
+    buf = io.BytesIO()
+    d.save(buf)
+    return buf.getvalue()
+
+
 def lines_on_page(words: list[tuple[int, str, list[Rect]]], page: int) -> list[tuple[float, float]]:
     """The lines of text on a page, top to bottom, as (top, bottom) in points (for the reading ruler)."""
     lines: list[list[float]] = []

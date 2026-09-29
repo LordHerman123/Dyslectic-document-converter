@@ -47,6 +47,33 @@ def test_reading_position_is_kept_per_document(paper):
     assert app.reading_position("focus", 0) == 0
 
 
+def test_study_sheet_groups_highlights_under_their_headings():
+    """The study sheet lists the highlights under the heading they are in, with pages and notes, and counts them."""
+    import io
+
+    from docx import Document
+
+    from dyslexia_converter import highlights as hl
+
+    labels = {"summary": "{highlights} highlights, {notes} with a note", "note": "Note:", "page": "(page {page})",
+              "start": "Before the first heading", **{c: c.capitalize() for c in hl.COLOURS}}
+    sections = [("", [(1, "yellow", "An opening line", "")]),
+                ("1 Introduction", [(2, "green", "Data changes research", "Main claim"),
+                                    (3, "yellow", "as boyd argues", "")]),
+                ("2 Method", [(5, "pink", "We asked 40 people", "Small sample?")])]
+    data = hl.study_sheet_docx("Study sheet: paper", sections, labels)
+    d = Document(io.BytesIO(data))
+    text = [p.text for p in d.paragraphs]
+    assert text[0] == "Study sheet: paper"
+    assert "4 highlights, 2 with a note" in text
+    heads = [p.text for p in d.paragraphs if p.style.name.startswith("Heading 2")]
+    assert heads == ["Before the first heading", "1 Introduction", "2 Method"]
+    joined = "\n".join(text)
+    assert "“Data changes research”  (page 2)" in joined and "Note: Main claim" in joined
+    assert joined.index("Data changes research") < joined.index("We asked 40 people")
+    assert "Yellow: 2" in joined
+
+
 def test_formula_pictures_are_read_as_their_text(paper):
     """A small formula picture inside a line is shown (and read) as its text in the reading view."""
     from dyslexia_converter.model import ImageData

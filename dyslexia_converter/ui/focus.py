@@ -19,6 +19,7 @@ import flet as ft
 from .. import dictionary
 from .. import highlights as hl
 from ..fonts import FONT_CHOICES
+from ..ai.assistant import EXPLAIN_WORDS
 from ..ai.providers import PROVIDERS
 from ..render import preview
 from ..speech import sentence_at
@@ -109,10 +110,12 @@ class FocusMode:
         self._pen_drag = False  # a selection being made with a mouse or pen
         self._ai_scope = "page"  # what the AI summary is of: page, section, selection or document
         self._ai_result = None  # (summary, first word, last word)
+        self._ai_mode = "summary"  # "summary" (main points) or "explain" (what a hard part means, in plain words)
         self._ai_busy = False
         self._ai_error = ""
         self._last_sel: Optional[tuple[int, int]] = None
         self._toc_starts: list[int] = []  # first word of every heading in the converted document
+        self._toc_titles: dict[int, tuple[int, str]] = {}  # first word of a heading -> (level, title)
         self._notes_only = False
         self._colour_filter: set[str] = set()
         self.bars_hidden = False
@@ -1284,6 +1287,8 @@ class FocusMode:
             btn(ft.Icons.VOLUME_UP, t("Read"), lambda e: app.say_word(text), visible=app._speech_allowed()),
             btn(ft.Icons.SMART_TOY_OUTLINED, t("Summarise"), lambda e: app.page.run_task(self.summarise_selection, a, b),
                 visible=self._ai_on() and b - a >= 15, tip=t("AI summary of the selection")),
+            btn(ft.Icons.LIGHTBULB_OUTLINE, t("Explain"), lambda e: app.page.run_task(self.explain_selection, a, b),
+                visible=self._ai_on() and b > a, tip=t("AI explains what the selection means, in plain words")),
             btn(ft.Icons.MENU_BOOK_OUTLINED, t("Meaning"), lambda e: app.page.run_task(
                 self.open_card, self.words[a][0], a), visible=a == b),
             btn(ft.Icons.DELETE_OUTLINE, t("Remove"), lambda e: app.page.run_task(self.unmark, a, b),
@@ -1532,13 +1537,15 @@ class FocusMode:
         except Exception:
             return []
         starts = []
-        for _, title, page in toc:
+        self._toc_titles = {}
+        for level, title, page in toc:
             target = [w.lower() for w in title.split()[:3]]
             if not target:
                 continue
             for n, (p, text, _) in enumerate(self.words):
                 if p == page - 1 and [x[1].lower() for x in self.words[n:n + len(target)]] == target:
                     starts.append(n)
+                    self._toc_titles.setdefault(n, (level, title.strip()))  # for grouping the study sheet
                     break
         return sorted(set(starts))
 
@@ -1567,23 +1574,36 @@ class FocusMode:
                          disabled=key == "selection" and not (self.sel or self._last_sel))
                  for key, label in (("page", "This page"), ("section", "This section"),
                                     ("selection", "Selection"), ("document", "Whole document"))]
+        explain = self._ai_mode == "explain"
         rows: list[ft.Control] = [
             ft.Row([ft.Icon(ft.Icons.SMART_TOY_OUTLINED, color=ft.Colors.PRIMARY),
-                    ft.Text(t("AI summary"), size=app.fs(16), weight=ft.FontWeight.BOLD, expand=True),
+                    ft.Text(t("AI explanation") if explain else t("AI summary"), size=app.fs(16),
+                            weight=ft.FontWeight.BOLD, expand=True),
                     ft.IconButton(ft.Icons.CLOSE, tooltip=t("Close"), on_click=lambda e: self._open_side(None))]),
-            app.text(t("Summarise"), 12, color=ft.Colors.ON_SURFACE_VARIANT),
+            ft.SegmentedButton(segments=[
+                ft.Segment("summary", label=ft.Text(t("Summarise")), icon=ft.Icon(ft.Icons.SHORT_TEXT)),
+                ft.Segment("explain", label=ft.Text(t("Explain")), icon=ft.Icon(ft.Icons.LIGHTBULB_OUTLINE))],
+                selected=[self._ai_mode], on_change=self.on_ai_mode),
+            app.text(t("Explain what a hard part means, in plain words, with its difficult words") if explain
+                     else t("Summarise"), 12, color=ft.Colors.ON_SURFACE_VARIANT),
             ft.Row(chips, wrap=True, spacing=6),
-            ft.Row([app.text(t("Length"), 12, color=ft.Colors.ON_SURFACE_VARIANT),
-                    ft.SegmentedButton(segments=[ft.Segment("short", label=ft.Text(t("Short"))),
-                                                 ft.Segment("detailed", label=ft.Text(t("Detailed")))],
-                                       selected=["detailed" if ui.get("ai_summary_detailed") else "short"],
-                                       on_change=self.on_ai_length)], spacing=10),
-            ft.Switch(label=t("Plain language (short sentences, easy words)"),
-                      value=bool(ui.get("ai_summary_plain", True)), on_change=self.on_ai_plain,
-                      label_text_style=ft.TextStyle(size=app.fs(13))),
         ]
+        if not explain:
+            rows += [
+                ft.Row([app.text(t("Length"), 12, color=ft.Colors.ON_SURFACE_VARIANT),
+                        ft.SegmentedButton(segments=[ft.Segment("short", label=ft.Text(t("Short"))),
+                                                     ft.Segment("detailed", label=ft.Text(t("Detailed")))],
+                                           selected=["detailed" if ui.get("ai_summary_detailed") else "short"],
+                                           on_change=self.on_ai_length)], spacing=10),
+                ft.Switch(label=t("Plain language (short sentences, easy words)"),
+                          value=bool(ui.get("ai_summary_plain", True)), on_change=self.on_ai_plain,
+                          label_text_style=ft.TextStyle(size=app.fs(13)))]
         span = self._scope_span(self._ai_scope)
         words = (span[1] - span[0] + 1) if span else 0
+        if explain and words > EXPLAIN_WORDS:
+            rows.append(app.text(t("Only the first {n} words are explained. Select a shorter part to explain all "
+                                   "of it.", n=EXPLAIN_WORDS), 12, color=ft.Colors.ON_SURFACE_VARIANT))
+            words = EXPLAIN_WORDS
         provider = PROVIDERS.get(app.ai_settings.provider)
         where = f"{provider.label if provider else app.ai_settings.provider}"
         model = app.ai_settings.model or (provider.default_model if provider else "")
@@ -1593,10 +1613,12 @@ class FocusMode:
                       "privacy log.", n=words, provider=where, model=model), size=app.fs(12), expand=True,
                     color="#4A3A10")], vertical_alignment=ft.CrossAxisAlignment.START),
             bgcolor="#FFF3D6", border_radius=8, padding=10))
-        busy = ft.Row([ft.ProgressRing(width=18, height=18, stroke_width=2), app.text(t("Summarising..."), 13)],
+        busy = ft.Row([ft.ProgressRing(width=18, height=18, stroke_width=2),
+                       app.text(t("Explaining...") if explain else t("Summarising..."), 13)],
                       visible=self._ai_busy)
-        rows += [ft.FilledButton(t("Summarise"), icon=ft.Icons.SMART_TOY_OUTLINED, on_click=self.run_summary,
-                                 disabled=self._ai_busy or not words), busy]
+        rows += [ft.FilledButton(t("Explain") if explain else t("Summarise"),
+                                 icon=ft.Icons.LIGHTBULB_OUTLINE if explain else ft.Icons.SMART_TOY_OUTLINED,
+                                 on_click=self.run_summary, disabled=self._ai_busy or not words), busy]
         if self._ai_error:
             rows.append(ft.Text(self._ai_error, size=app.fs(13), color=ft.Colors.ERROR))
         if self._ai_result:
@@ -1625,7 +1647,9 @@ class FocusMode:
             ft.Container(width=4, height=40, bgcolor="#E0A100", border_radius=2),
             ft.Icon(ft.Icons.WARNING_AMBER_ROUNDED, color="#B77900", size=22),
             ft.Column([ft.Text(t("Made by AI"), size=app.fs(13), weight=ft.FontWeight.BOLD, color="#5C4200"),
-                       ft.Text(t("AI can make mistakes. Check the summary against the text before you use it."),
+                       ft.Text(t("AI can make mistakes. Check the explanation against the text before you use it.")
+                               if self._ai_mode == "explain" else
+                               t("AI can make mistakes. Check the summary against the text before you use it."),
                                size=app.fs(12), color="#5C4200")], spacing=2, tight=True, expand=True),
         ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),
             bgcolor="#FFF4D6", border=ft.Border.all(1, "#F1D48A"), border_radius=10,
@@ -1636,6 +1660,18 @@ class FocusMode:
         """A summary as plain text (title, then one point per line)."""
         lines = [summary.title] if summary.title else []
         return "\n".join(lines + [f"- {p}" for p in summary.points])
+
+    def on_ai_mode(self, e) -> None:
+        """Summarise or Explain."""
+        self._ai_mode = (e.control.selected or ["summary"])[0]
+        self._ai_result, self._ai_error = None, ""
+        self._open_side("ai")
+
+    async def explain_selection(self, a: int, b: int) -> None:
+        """"Explain" on the selection toolbar: open the AI panel in Explain mode for the selection."""
+        self._ai_mode = "explain"
+        self._ai_result, self._ai_error = None, ""
+        await self.summarise_selection(a, b)
 
     def on_ai_scope(self, e) -> None:
         """A scope chip: summarise this page, this section, the selection or the whole document."""
@@ -1671,9 +1707,12 @@ class FocusMode:
         self._ai_busy, self._ai_error = True, ""
         self._open_side("ai")
         try:
-            summary = await app.in_thread(app.assistant.summarise, hl.text_of(self.words, a, b), language,
-                                          bool(app.ui.get("ai_summary_detailed")),
-                                          bool(app.ui.get("ai_summary_plain", True)))
+            if self._ai_mode == "explain":
+                summary = await app.in_thread(app.assistant.explain, hl.text_of(self.words, a, b), language)
+            else:
+                summary = await app.in_thread(app.assistant.summarise, hl.text_of(self.words, a, b), language,
+                                              bool(app.ui.get("ai_summary_detailed")),
+                                              bool(app.ui.get("ai_summary_plain", True)))
             self._ai_result = (summary, a, b)
         except ConsentRequired:
             self._ai_error = t("AI is off. Choose 'AI-assisted' in AI settings to use it.")
@@ -1698,7 +1737,9 @@ class FocusMode:
             return
         summary, a, _ = self._ai_result
         s0, s1 = hl.span_at(self._sentences, a)
-        note = self.app.t("AI summary (check it against the text):") + "\n" + self._summary_text(summary)
+        label = self.app.t("AI explanation (check it against the text):") if self._ai_mode == "explain" \
+            else self.app.t("AI summary (check it against the text):")
+        note = label + "\n" + self._summary_text(summary)
         k = self._exact(s0, s1)
         if k is None:
             self.highlights = hl.add(self.highlights, s0, s1, "blue", self.words, note)
@@ -1850,8 +1891,14 @@ class FocusMode:
                     ft.IconButton(ft.Icons.CLOSE, tooltip=t("Close"), on_click=self.on_notes_panel)]),
             ft.Row([self.filter_notes, *colour_dots], spacing=6, wrap=True),
             self.notes_list,
-            ft.OutlinedButton(t("Export notes as a list"), icon=ft.Icons.DOWNLOAD, on_click=self.on_export_notes,
-                              tooltip=t("Save your highlights and notes as a Word document")),
+            ft.Row([
+                ft.FilledTonalButton(t("Study sheet"), icon=ft.Icons.SCHOOL_OUTLINED, on_click=self.on_study_sheet,
+                                     tooltip=t("Your highlights and notes gathered under the headings they are "
+                                               "in, as a Word document to study from")),
+                ft.OutlinedButton(t("Export notes as a list"), icon=ft.Icons.DOWNLOAD,
+                                  on_click=self.on_export_notes,
+                                  tooltip=t("Save your highlights and notes as a Word document"))],
+                wrap=True, spacing=8, run_spacing=8),
         ], spacing=10, expand=True)
 
     def _note_entries(self) -> list[tuple[int, int, int, hl.Highlight]]:
@@ -1921,6 +1968,36 @@ class FocusMode:
         stem = Path(app.source_path).stem if app.source_path else "document"
         data = await app.in_thread(hl.notes_docx, t("Notes on {name}", name=stem), entries)
         await app.save_bytes(data, f"{stem}_notes.docx", "docx")
+
+    def study_sections(self) -> list[tuple[str, list[tuple[int, str, str, str]]]]:
+        """The highlights (with the filters applied) grouped under the heading each one is in, in reading order:
+        (heading, [(page number, colour, quote, note)])."""
+        starts = sorted(self._toc_titles)
+        sections: list[tuple[str, list]] = []
+        current = None
+        for a, b, page, h in self._note_entries():
+            if (self._notes_only and not h.note) or (self._colour_filter and h.colour not in self._colour_filter):
+                continue
+            head = max([s for s in starts if s <= a], default=None)
+            if head != current or not sections:
+                current = head
+                sections.append((self._toc_titles[head][1] if head is not None else "", []))
+            sections[-1][1].append((page + 1, h.colour, hl.text_of(self.words, a, b), h.note))
+        return sections
+
+    async def on_study_sheet(self, e) -> None:
+        """Save a study sheet: the highlights and notes gathered under their headings, as a Word document."""
+        app, t = self.app, self.app.t
+        sections = self.study_sections()
+        if not any(items for _, items in sections):
+            app.notify(t("Nothing highlighted yet. Hold a word and drag to select text."))
+            return
+        stem = Path(app.source_path).stem if app.source_path else "document"
+        labels = {"summary": t("{highlights} highlights, {notes} with a note"), "note": t("Note:"),
+                  "page": t("(page {page})"), "start": t("Before the first heading"),
+                  **{c: t(c.capitalize()) for c in hl.COLOURS}}
+        data = await app.in_thread(hl.study_sheet_docx, t("Study sheet: {name}", name=stem), sections, labels)
+        await app.save_bytes(data, f"{stem}_study_sheet.docx", "docx")
 
     # ------------------------------------------------------------------ highlighter
     def _toggle_style(self) -> ft.ButtonStyle:

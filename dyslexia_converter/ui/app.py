@@ -841,7 +841,7 @@ class ConverterApp:
         import time
         t = self.t
         task = {"citations": t("Citations"), "summary": t("Summary"), "check": t("Connection check"),
-                "layout": t("Page layout")}.get(
+                "layout": t("Page layout"), "explain": t("Explanation")}.get(
             e.task, t("OCR words"))
         stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(e.when))
         title = f"{stamp} · {task} · {e.provider} / {e.model}"
