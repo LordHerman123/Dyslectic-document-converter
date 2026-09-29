@@ -1,11 +1,13 @@
 name: Windows release
 
 # Builds DyslexiaConverter for Windows with Tesseract included.
-# - pull requests / manual runs: build + self-test, files available as workflow artifacts
-# - tags v*: the same, then attached to the GitHub release for that tag
+# - pull requests / manual runs / pushes to the experimental branch: build + self-test, files available as
+#   workflow artifacts
+# - tags v* or Version-* (v1.15.0, Version-1.15): the same, then attached to the GitHub release for that tag
 on:
   push:
-    tags: ["v*"]
+    tags: ["v*", "Version-*"]
+    branches: [experimental]
   pull_request:
     paths:
       - "dyslexia_converter/**"
@@ -81,7 +83,7 @@ jobs:
           retention-days: 30
 
       - name: Attach to GitHub release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           name: Dyslexia Converter ${{ github.ref_name }}

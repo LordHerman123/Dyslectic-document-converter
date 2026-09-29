@@ -2377,10 +2377,38 @@ def _blank_png() -> bytes:
 
 
 def main(page: ft.Page) -> None:
-    """Flet entry point: build the app in the window Flet gives us."""
-    app = ConverterApp(page)
-    app.build()
-    page.update()
+    """Flet entry point: build the app in the window Flet gives us.
+
+    For checking a packaged app (see the Windows build workflows): with DYSLEXIA_CONVERTER_READY_FILE set, the app
+    writes "ready <version>" there once its window is built (or the error that stopped it); with
+    DYSLEXIA_CONVERTER_SELFTEST="input.pdf;output.pdf;report.txt" it also runs the self-test from inside the app.
+    """
+    import os
+    import traceback
+
+    ready = os.environ.get("DYSLEXIA_CONVERTER_READY_FILE")
+    try:
+        app = ConverterApp(page)
+        app.build()
+        page.update()
+    except Exception:
+        if ready:
+            Path(ready).write_text("error\n" + traceback.format_exc(), encoding="utf-8")
+        raise
+    if ready:
+        from .. import __version__ as version
+
+        check = os.environ.get("DYSLEXIA_CONVERTER_SELFTEST")
+
+        async def report():
+            code = None
+            if check:
+                from ..selftest import run as selftest
+
+                code = await asyncio.to_thread(selftest, check.split(";"))
+            Path(ready).write_text(f"ready {version}" + (f"\nselftest exit {code}" if check else ""),
+                                   encoding="utf-8")
+        page.run_task(report)
     app.show_start_notice()
     page.run_task(app.check_for_update)
     start_file = file_from_args(sys.argv[1:])

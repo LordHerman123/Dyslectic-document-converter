@@ -223,6 +223,10 @@ class FocusMode:
         self.read_panel = self._panel(app.read_row, "read_panel_open")
         # one panel for how the text and page look (read aloud keeps its own)
         self.settings_panel = self._panel(self._settings_row(), "focus_settings_open")
+        if self._is_open(self.read_panel) and self._is_open(self.settings_panel):  # one panel at a time
+            self._fold(self.settings_panel, False)
+            self.settings_toggle.selected = False
+            app.ui["focus_settings_open"] = False
         self.divider = ft.Divider(height=1)
         # the page counter follows scrolling: ten reports a second are plenty (the default sends a hundred)
         self.list = ft.ListView(expand=True, spacing=self.GAP, on_scroll=self.on_scroll, scroll_interval=100,
@@ -1762,7 +1766,11 @@ class FocusMode:
         return side.data if side is not None and side.content is not None else None
 
     def _open_side(self, mode: Optional[str]) -> None:
-        """Show the notes list, the AI summary or the original page beside the pages (or neither)."""
+        """Show the notes list, the AI summary or the original page beside the pages (or neither); the panels
+        above the pages fold away, so one panel is open at a time."""
+        if mode:
+            self._close_panels(keep=mode)
+            self.app.store.save_ui(self.app.ui)
         self.notes_toggle.selected = mode == "notes"
         self.ai_toggle.selected = mode == "ai"
         self.orig_toggle.selected = mode == "original"
@@ -2107,12 +2115,29 @@ class FocusMode:
 
     # ------------------------------------------------------------------ fold-out panels
     def on_read_panel(self, e) -> None:
-        """The read-aloud button: fold the read-aloud controls out or away."""
-        self._fold(self.read_panel, not self._is_open(self.read_panel))
-        self.read_toggle.selected = self._is_open(self.read_panel)
-        self.app.ui["read_panel_open"] = self.read_toggle.selected
+        """The read-aloud button: fold the read-aloud controls out (closing any other panel) or away."""
+        opening = not self._is_open(self.read_panel)
+        if opening:
+            self._close_panels(keep="read")
+        self._fold(self.read_panel, opening)
+        self.read_toggle.selected = opening
+        self.app.ui["read_panel_open"] = opening
         self.app.store.save_ui(self.app.ui)
         self.app.page.update()
+
+    def _close_panels(self, keep: Optional[str] = None) -> None:
+        """One panel at a time: fold away the read-aloud and settings panels and the side panel (notes, original,
+        AI), except ``keep`` ("read", "settings" or a side panel's name), so the pages keep their room."""
+        for name, panel, toggle, key in (("read", self.read_panel, self.read_toggle, "read_panel_open"),
+                                         ("settings", self.settings_panel, self.settings_toggle,
+                                          "focus_settings_open")):
+            if name != keep and self._is_open(panel):
+                self._fold(panel, False)
+                toggle.selected = False
+                self.app.ui[key] = False
+        if self._side_mode and self._side_mode != keep:
+            self.side.data, self.side.content, self.side.width, self.side.padding = None, None, 0, 0
+            self.notes_toggle.selected = self.ai_toggle.selected = self.orig_toggle.selected = False
 
     # ------------------------------------------------------------------ view: page colour, layout, rotation
     def _page_buttons(self) -> list[ft.Control]:
@@ -2247,10 +2272,13 @@ class FocusMode:
         self.app.page.update()
 
     def on_settings_panel(self, e) -> None:
-        """The reading settings button: fold the settings out or away."""
-        self._fold(self.settings_panel, not self._is_open(self.settings_panel))
-        self.settings_toggle.selected = self._is_open(self.settings_panel)
-        self.app.ui["focus_settings_open"] = self.settings_toggle.selected
+        """The reading settings button: fold the settings out (closing any other panel) or away."""
+        opening = not self._is_open(self.settings_panel)
+        if opening:
+            self._close_panels(keep="settings")
+        self._fold(self.settings_panel, opening)
+        self.settings_toggle.selected = opening
+        self.app.ui["focus_settings_open"] = opening
         self.app.store.save_ui(self.app.ui)
         self.app.page.update()
 

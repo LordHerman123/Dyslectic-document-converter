@@ -99,6 +99,19 @@ async def _read_everywhere(app, path):
             control = type("C", (), {"data": tint})()
         f.on_tint(E())
         await _settle(0.2)
+    # one panel at a time: each button closes the panel that was open
+    f.on_read_panel(None)
+    assert f._is_open(f.read_panel)
+    f.on_settings_panel(None)
+    assert f._is_open(f.settings_panel) and not f._is_open(f.read_panel) and not f.read_toggle.selected
+    f.on_notes_panel(None)
+    assert f._side_mode == "notes" and not f._is_open(f.settings_panel)
+    f.on_read_panel(None)
+    assert f._is_open(f.read_panel) and f._side_mode is None and not f.notes_toggle.selected
+    f.on_original_panel(None)
+    assert f._side_mode == "original" and not f._is_open(f.read_panel)
+    f.on_original_panel(None)
+    assert f._side_mode is None
     f._zoom_by(1.2)
     await f.on_layout(None)
     await f.turn(1)
@@ -124,6 +137,36 @@ async def _read_everywhere(app, path):
 
 def test_app_check_pdf(headless, paper):
     headless(lambda app: _read_everywhere(app, paper))
+
+
+def test_packaged_app_reports_that_it_started(monkeypatch, tmp_path, paper):
+    """The app's own start (as in a packaged build) writes the ready file and runs the self-test when asked;
+    the Windows build workflows wait for this file to know the app really runs."""
+    from dyslexia_converter import __version__
+    from dyslexia_converter.ui import app as app_mod
+
+    async def no_answer(self, control_id, method_name, args, timeout=None):
+        return None
+
+    monkeypatch.setattr(Session, "invoke_method", no_answer)
+    ready = tmp_path / "ready.txt"
+    monkeypatch.setenv("DYSLEXIA_CONVERTER_READY_FILE", str(ready))
+    monkeypatch.setenv("DYSLEXIA_CONVERTER_SELFTEST", f"{paper};{tmp_path / 'out.pdf'};{tmp_path / 'report.txt'}")
+    monkeypatch.setattr(app_mod.sys, "argv", ["DyslexiaConverter.exe"])
+
+    async def main():
+        conn = NullConnection(asyncio.get_running_loop())
+        session = Session(conn)
+        conn.encode(session.get_page_patch())
+        app_mod.main(session.page)
+        for _ in range(240):
+            await asyncio.sleep(0.25)
+            if ready.exists():
+                break
+    asyncio.run(main())
+    text = ready.read_text()
+    assert text.startswith(f"ready {__version__}") and "selftest exit 0" in text
+    assert (tmp_path / "out.pdf").exists() and (tmp_path / "report.txt").exists()
 
 
 def test_app_check_dropping_a_file(headless, tmp_path, monkeypatch, paper):
