@@ -26,6 +26,7 @@ from ..settings import PRESET_DISCLAIMER, PRESETS, FormatSettings, SettingsStore
 from ..transform.spelling import CustomWords
 from .check_panel import CheckPanel
 from .focus import FocusMode
+from .sleepy_dog import sleepy_dog
 from .i18n import LANGUAGES, Translator, system_language
 from .theme import make_theme, palette
 
@@ -562,7 +563,7 @@ class ConverterApp:
         self.pages_row = ft.Row([self.orig_panel, self.conv_panel], expand=True,
                                 vertical_alignment=ft.CrossAxisAlignment.START, visible=self.session is not None)
         self.empty_state = ft.Container(ft.Column([
-            ft.Icon(ft.Icons.DESCRIPTION_OUTLINED, size=self.fs(56), color=ft.Colors.PRIMARY),
+            sleepy_dog(self.fs(200)),
             self.text(t("Open a PDF to start"), 22, weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER),
             self.text(t("The converted version appears here next to the original, so you can compare them. "
                         "Your original file is never changed."), 15, text_align=ft.TextAlign.CENTER,
@@ -1244,7 +1245,11 @@ class ConverterApp:
             self.card(t("Privacy and storage"), [
                 self.text(t("Everything is processed on this device unless you switch on AI (see AI settings). "
                             "Your settings, dictionary and saved OCR results are stored here:"), 13),
-                self.text(str(app_data_dir()), 12, selectable=True)], ft.Icons.LOCK_OUTLINE),
+                self.text(str(app_data_dir()), 12, selectable=True),
+                self.text(t("Focus mode keeps the pages it has drawn there too, so a document you open again "
+                            "shows at once."), 13),
+                ft.Row([ft.OutlinedButton(t("Clear saved page pictures"), icon=ft.Icons.DELETE_OUTLINE,
+                                          on_click=self.on_clear_page_cache)])], ft.Icons.LOCK_OUTLINE),
             self.card(t("Support"), [
                 self.text(t("The app is free. If it helps you, you can buy the maker a coffee. This is "
                             "completely optional and changes nothing in the app."), 13),
@@ -1320,6 +1325,11 @@ class ConverterApp:
         """Delete the saved OCR results (scanned documents are then read again when opened)."""
         n = await self.in_thread(pipeline.clear_ocr_cache)
         self.notify(self.t("Saved OCR results cleared ({n} document(s)).", n=n))
+
+    async def on_clear_page_cache(self, e):
+        """Delete the page pictures focus mode kept (they are drawn again when needed)."""
+        n = await self.in_thread(preview.clear_page_cache)
+        self.notify(self.t("Saved page pictures cleared ({n}).", n=n))
 
     # ---------------------------------------------------------------- help tab
     def build_help_tab(self) -> ft.Control:

@@ -1576,6 +1576,37 @@ T: dict[str, dict[str, str]] = {
     'Open a PDF to start': {'nl': 'Open een pdf om te beginnen', 'fr': 'Ouvrez un PDF pour commencer', 'de': 'Öffnen Sie ein PDF, um zu beginnen', 'es': 'Abre un PDF para empezar', 'it': 'Apri un PDF per iniziare'},
     'The AI check button on the Convert screen reads the whole converted text and lists conversion mistakes; you choose what to fix.': {'nl': 'De knop AI-controle op het scherm Omzetten leest de hele omgezette tekst en somt conversiefouten op; jij kiest wat hersteld wordt.', 'fr': "Le bouton Vérification IA de l'écran Convertir lit tout le texte converti et liste les erreurs de conversion ; vous choisissez ce qui est corrigé.", 'de': 'Die Taste KI-Prüfung im Bildschirm Umwandeln liest den ganzen umgewandelten Text und listet Umwandlungsfehler auf; Sie wählen, was behoben wird.', 'es': 'El botón Revisión con IA de la pantalla Convertir lee todo el texto convertido y enumera los errores de conversión; tú eliges qué corregir.', 'it': 'Il pulsante Controllo IA nella schermata Converti legge tutto il testo convertito ed elenca gli errori di conversione; scegli tu cosa correggere.'},
     'The converted version appears here next to the original, so you can compare them. Your original file is never changed.': {'nl': 'De omgezette versie verschijnt hier naast het origineel, zodat je ze kunt vergelijken. Je originele bestand wordt nooit veranderd.', 'fr': "La version convertie apparaît ici à côté de l'original, pour que vous puissiez les comparer. Votre fichier original n'est jamais modifié.", 'de': 'Die umgewandelte Fassung erscheint hier neben dem Original, damit Sie vergleichen können. Ihre Originaldatei wird nie verändert.', 'es': 'La versión convertida aparece aquí junto al original, para que puedas compararlas. Tu archivo original nunca se modifica.', 'it': "La versione convertita appare qui accanto all'originale, così puoi confrontarle. Il tuo file originale non viene mai modificato."},
+    # ---------------------------------------------------------------- focus mode loading screen, page pictures
+    "Preparing your pages…": {"nl": "Je pagina's worden klaargezet…", "fr": "Préparation de vos pages…",
+                              "de": "Deine Seiten werden vorbereitet…", "es": "Preparando tus páginas…",
+                              "it": "Preparazione delle pagine…"},
+    "The other pages follow while you read.": {
+        "nl": "De andere pagina's volgen terwijl je leest.",
+        "fr": "Les autres pages suivent pendant votre lecture.",
+        "de": "Die übrigen Seiten folgen, während du liest.",
+        "es": "Las demás páginas llegan mientras lees.",
+        "it": "Le altre pagine arrivano mentre leggi."},
+    "Focus mode keeps the pages it has drawn there too, so a document you open again shows at once.": {
+        "nl": "De focusmodus bewaart daar ook de pagina's die hij heeft getekend, zodat een document dat je "
+              "opnieuw opent meteen verschijnt.",
+        "fr": "Le mode concentration y garde aussi les pages qu'il a dessinées : un document rouvert s'affiche "
+              "tout de suite.",
+        "de": "Der Fokusmodus speichert dort auch die gezeichneten Seiten, damit ein erneut geöffnetes Dokument "
+              "sofort erscheint.",
+        "es": "El modo concentración también guarda allí las páginas que ha dibujado, para que un documento "
+              "que vuelves a abrir aparezca al instante.",
+        "it": "La modalità concentrazione conserva lì anche le pagine già disegnate, così un documento riaperto "
+              "compare subito."},
+    "Clear saved page pictures": {"nl": "Bewaarde paginaweergaven wissen",
+                                  "fr": "Effacer les images de pages enregistrées",
+                                  "de": "Gespeicherte Seitenbilder löschen",
+                                  "es": "Borrar las imágenes de páginas guardadas",
+                                  "it": "Cancella le immagini delle pagine salvate"},
+    "Saved page pictures cleared ({n}).": {"nl": "Bewaarde paginaweergaven gewist ({n}).",
+                                           "fr": "Images de pages enregistrées effacées ({n}).",
+                                           "de": "Gespeicherte Seitenbilder gelöscht ({n}).",
+                                           "es": "Imágenes de páginas guardadas borradas ({n}).",
+                                           "it": "Immagini delle pagine salvate cancellate ({n})."},
 }
 
 # messages from the processing core, matched in i18n.MESSAGE_PATTERNS; {0}, {1}... are the parts found

@@ -103,6 +103,13 @@ def render_highlight(pdf: bytes | str, index: int, width_px: int, sentence: list
     if tint not in cached:
         cached[tint] = _tinted(cached["white"], tint)
     base = cached[tint]
+    if not (marks or sentence or word or notes or ruler):  # the plain page (focus mode draws its marks on top)
+        png_key = "png:" + tint
+        if png_key not in cached:
+            out = io.BytesIO()
+            base.convert("RGB").save(out, "PNG", optimize=False, compress_level=1)
+            cached[png_key] = out.getvalue()
+        return cached[png_key]
     dark = dark or tint == "dark"
     layer = Image.new("RGBA", base.size, (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
@@ -134,3 +141,93 @@ def render_highlight(pdf: bytes | str, index: int, width_px: int, sentence: list
     out = io.BytesIO()
     Image.alpha_composite(base, layer).convert("RGB").save(out, "PNG", optimize=False, compress_level=1)
     return out.getvalue()
+
+
+# ----------------------------------------------------------------------------- page pictures kept on this device
+# Focus mode draws every page once for the width it is shown at. The pictures are kept on disk, so a document
+# opened again shows at once. They stay on this device and are removed oldest first past PAGE_CACHE_MB.
+
+PAGE_CACHE_VERSION = "1"
+PAGE_CACHE_MB = 400
+
+
+def page_cache_dir():
+    """The folder where drawn page pictures are kept."""
+    from ..settings import app_data_dir
+
+    d = app_data_dir() / "page_cache"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def document_key(pdf: bytes | str) -> str:
+    """A short name for a document's content: the same pages give the same key, any change a new one."""
+    import hashlib
+    import os
+    import re
+
+    h = hashlib.sha1(PAGE_CACHE_VERSION.encode())
+    if isinstance(pdf, (bytes, bytearray)):
+        # the same pages exported again differ only in the file's dates and ID, which are never drawn
+        pdf = re.sub(rb"\(D:\d{14}[^)]*\)", b"()", bytes(pdf))
+        pdf = re.sub(rb"/ID\s*\[\s*<[0-9A-Fa-f]*>\s*<[0-9A-Fa-f]*>\s*\]", b"/ID[]", pdf)
+        h.update(pdf)
+    else:
+        st = os.stat(pdf)
+        h.update(f"{os.path.abspath(pdf)}|{st.st_size}|{st.st_mtime_ns}".encode())
+    return h.hexdigest()[:20]
+
+
+def cached_page_path(doc_key: str, index: int, width_px: int, tint: str):
+    """Where the picture of one page, at one width and page colour, is kept."""
+    return page_cache_dir() / f"{doc_key}-{index}-{width_px}-{tint}.png"
+
+
+def render_page_cached(pdf: bytes | str, doc_key: str, index: int, width_px: int, tint: str = "white") -> bytes:
+    """The plain page picture (no marks), from the disk when it was drawn before, else drawn and kept."""
+    import os
+
+    path = cached_page_path(doc_key, index, width_px, tint)
+    try:
+        png = path.read_bytes()
+        os.utime(path)  # used now: removed last when the folder is trimmed
+        return png
+    except OSError:
+        pass
+    png = render_highlight(pdf, index, width_px, [], [], tint=tint)
+    try:
+        tmp = path.with_suffix(".tmp")
+        tmp.write_bytes(png)
+        tmp.replace(path)
+    except OSError:  # a full or read-only disk only means drawing again next time
+        pass
+    return png
+
+
+def trim_page_cache(limit_mb: int = PAGE_CACHE_MB) -> None:
+    """Remove the oldest kept page pictures while they take more than ``limit_mb``."""
+    try:
+        files = [(f.stat().st_mtime, f.stat().st_size, f) for f in page_cache_dir().glob("*.png")]
+    except OSError:
+        return
+    total = sum(size for _, size, _ in files)
+    for _, size, f in sorted(files, key=lambda x: x[0]):
+        if total <= limit_mb * 1024 * 1024:
+            break
+        try:
+            f.unlink()
+            total -= size
+        except OSError:
+            pass
+
+
+def clear_page_cache() -> int:
+    """Delete all kept page pictures; returns how many were removed."""
+    n = 0
+    for f in page_cache_dir().glob("*.png"):
+        try:
+            f.unlink()
+            n += 1
+        except OSError:
+            pass
+    return n

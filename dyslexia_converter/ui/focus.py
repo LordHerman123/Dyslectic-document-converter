@@ -22,6 +22,7 @@ from ..fonts import FONT_CHOICES
 from ..ai.providers import PROVIDERS
 from ..render import preview
 from ..speech import sentence_at
+from .sleepy_dog import sleepy_dog
 
 if TYPE_CHECKING:  # pragma: no cover
     from .app import ConverterApp
@@ -63,6 +64,7 @@ class FocusMode:
     """
     BASE_W = 820  # page width at 100 %
     GAP = 18
+    READY_PAGES = 20  # a long document opens once this many pages are drawn; the rest follow while reading
     PAD = 20
 
     def __init__(self, app: "ConverterApp"):
@@ -115,6 +117,8 @@ class FocusMode:
         self._typing = False
         self._scroll_px = 0.0
         self._render_task: Optional[asyncio.Task] = None
+        self._doc_key = ""  # names the document's page pictures kept on disk
+        self._preparing = False  # the next rendering shows the loading screen until the first pages are ready
         self._reading: Optional[tuple[int, list, list]] = None  # page, sentence, word being read aloud
         self._drag: Optional[tuple[int, int, int]] = None  # page, first word, last word
         self._pinch: dict = {}
@@ -215,7 +219,8 @@ class FocusMode:
         # one panel for how the text and page look (read aloud keeps its own)
         self.settings_panel = self._panel(self._settings_row(), "focus_settings_open")
         self.divider = ft.Divider(height=1)
-        self.list = ft.ListView(expand=True, spacing=self.GAP, on_scroll=self.on_scroll,
+        # the page counter follows scrolling: ten reports a second are plenty (the default sends a hundred)
+        self.list = ft.ListView(expand=True, spacing=self.GAP, on_scroll=self.on_scroll, scroll_interval=100,
                                 padding=ft.Padding.symmetric(vertical=self.PAD))
         self.pager_row = ft.Row([], alignment=ft.MainAxisAlignment.CENTER, scroll=ft.ScrollMode.AUTO)
         self.pager = ft.Stack([
@@ -250,7 +255,8 @@ class FocusMode:
                                 expand=True, spacing=0, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)
         self.root = ft.RotatedBox(content=ft.Stack([self.column, ft.Row([self.counter], left=0, right=0, bottom=10,
                                                                  alignment=ft.MainAxisAlignment.CENTER),
-                                            self.card_layer, self.show_bars], expand=True),
+                                            self.card_layer, self.show_bars, self._loading_screen()],
+                                            expand=True),
                                   quarter_turns=self.turns, expand=True)
         self._saved = list(app.page.controls)
         app.page.controls.clear()
@@ -258,10 +264,12 @@ class FocusMode:
         self._prev_keys = app.page.on_keyboard_event
         app.page.on_keyboard_event = self.on_key
         self._apply_tint()
+        self._preparing = True
         await self._build_pages()
         app.page.update()
         await self._show_layout()
         self._start_rendering()
+        asyncio.get_running_loop().run_in_executor(None, preview.trim_page_cache)  # keep the kept pages in bounds
 
     async def on_background_click(self, e) -> None:
         """A click beside the pages clears the selection and closes the card."""
@@ -353,6 +361,7 @@ class FocusMode:
         pdf = self._pdf
         n = preview.page_count(pdf)
         self.sizes = [await app.in_thread(preview.page_size, pdf, i) for i in range(n)]
+        self._doc_key = await app.in_thread(preview.document_key, pdf)
         if self.source == "original":
             self.words, self._sentences, self._paragraphs, self._toc_starts = [], [], [], []
         else:
@@ -363,14 +372,17 @@ class FocusMode:
             self._toc_starts = await app.in_thread(self._heading_starts)
         self._lines = {}
         page_bg = TINT_COLOURS.get(self.tint, TINT_COLOURS["white"])[0]
-        self.images, self.frames, self.detectors, self.overlays = [], [], [], []
+        self.images, self.frames, self.detectors, self.overlays, self.marks = [], [], [], [], []
         for i, (pw, ph) in enumerate(self.sizes):
             img = ft.Image(src=_blank(), fit=ft.BoxFit.FILL, gapless_playback=True, expand=True)
             # the selection and the picked word are drawn as a few shapes over the picture: moving them while
             # dragging is instant, where drawing them into the picture meant rendering the whole page again
             overlay = ft.Stack([])
+            # highlights, note signs, the reading ruler and the words being read are shapes over the picture too:
+            # the picture itself is drawn once, so changing them never draws or sends the page again
+            marks = ft.Stack([])
             # a mouse or pen selects by dragging; a finger scrolls (and selects with press-and-hold)
-            pen = ft.GestureDetector(content=ft.Stack([img, overlay], fit=ft.StackFit.EXPAND), data=i,
+            pen = ft.GestureDetector(content=ft.Stack([img, marks, overlay], fit=ft.StackFit.EXPAND), data=i,
                                      allowed_devices=[
                 ft.PointerDeviceType.MOUSE, ft.PointerDeviceType.STYLUS, ft.PointerDeviceType.INVERTED_STYLUS],
                 on_pan_start=self.on_pen_start, on_pan_update=self.on_pen_move, on_pan_end=self.on_pen_end)
@@ -384,11 +396,14 @@ class FocusMode:
                                  shadow=ft.BoxShadow(blur_radius=10, color="#33000000"))
             self.images.append(img)
             self.overlays.append(overlay)
+            self.marks.append(marks)
             self.detectors.append(det)
             self.frames.append(frame)
         self.current = min(self.current, n - 1)
         if self.ruler and self.ruler[0] >= n:
             self.ruler = None
+        for i in range(n):
+            self.marks[i].controls = self._mark_shapes(i)
         self._set_tool_gestures()
         self._update_label()
 
@@ -417,6 +432,8 @@ class FocusMode:
         for i in self._marked_pages():  # the selection's shapes are in pixels: place them for the new size
             if 0 <= i < len(self.overlays):
                 self.overlays[i].controls = self._selection_shapes(i)
+        for i in range(min(len(self.marks), len(self.sizes))):  # and so are the highlights and the ruler
+            self.marks[i].controls = self._mark_shapes(i)
         if update:
             self.app.page.update()
 
@@ -510,6 +527,7 @@ class FocusMode:
         self.current = page
         self.ruler = None
         self._refresh_source_bar()
+        self._preparing = True
         await self._build_pages()
         await self._show_layout()
         self._start_rendering()
@@ -537,20 +555,68 @@ class FocusMode:
         """PNG of page ``i`` with everything drawn on it: highlights, note signs, the sentence and word being
         read, the reading ruler, the word on the word card, in the page colour.
         """
-        width = int(max(1000, self._page_w(i) * 1.3))
-        if self.source == "original":  # the original on its own: only the page colour
-            return preview.render_highlight(self._pdf, i, width, [], [], tint=self.tint)
-        marks = hl.page_marks(self.highlights, self.words, i)
-        sentence, word = (self._reading[1], self._reading[2]) if self._reading and self._reading[0] == i else ((), ())
-        ruler = ()
+        return preview.render_page_cached(self._pdf, self._doc_key, i, self._render_width(i), self.tint)
+
+    def _render_width(self, i: int) -> int:
+        """How many pixels wide page ``i`` is drawn: the size it is shown at, a quarter more for sharp text on
+        high-resolution screens (not a fixed large size, which is slower to draw, send and show). Rounded up to
+        a hundred pixels, so a small zoom step reuses the pictures already drawn."""
+        want = min(2400, max(700, self._page_w(i) * 1.25))
+        return int(-(-want // 100) * 100)
+
+    def _is_cached(self, pages: list[int]) -> bool:
+        """Whether the pictures of these pages were all drawn before and kept on disk."""
+        return all(preview.cached_page_path(self._doc_key, i, self._render_width(i), self.tint).exists()
+                   for i in pages)
+
+    def _mark_shapes(self, i: int) -> list[ft.Control]:
+        """The shapes over page ``i``: the reader's highlights, note signs, the reading ruler, and the sentence and
+        word being read aloud, placed in screen pixels for the page's current size."""
+        if self.source == "original" or i >= len(self.sizes) or not self.words:
+            return []
+        pw, ph = self.sizes[i]
+        s = self._page_w(i) / pw  # screen pixels per PDF point
+        h = ph * s
+        out: list[ft.Control] = []
+
+        def colour(rgba) -> str:
+            r, g, b, a = rgba
+            return f"#{a:02X}{r:02X}{g:02X}{b:02X}"
+
+        for (x0, y0, x1, y1), rgba in hl.page_marks(self.highlights, self.words, i):
+            out.append(ft.Container(left=x0 * s - 2, top=y0 * s - 1, width=(x1 - x0) * s + 4,
+                                    height=(y1 - y0) * s + 3, border_radius=3, bgcolor=colour(rgba)))
+        for x, y in hl.note_marks(self.highlights, self.words, i):
+            size = hl.NOTE_SIGN * s
+            out.append(ft.Container(ft.Icon(ft.Icons.NOTES, size=size * 0.85, color="#FFFFFF"), left=x * s,
+                                    top=y * s, width=size, height=size, border_radius=size * 0.2,
+                                    bgcolor="#B8860B", alignment=ft.Alignment.CENTER))
+        if self._reading and self._reading[0] == i:
+            for x0, y0, x1, y1 in self._reading[1]:  # soft yellow behind the sentence being read
+                out.append(ft.Container(left=x0 * s - 2, top=y0 * s - 1, width=(x1 - x0) * s + 4,
+                                        height=(y1 - y0) * s + 2, bgcolor="#69FFD65A"))
+            edge = "#E66E82" if self.tint == "dark" else "#7A2E3A"
+            for x0, y0, x1, y1 in self._reading[2]:  # the word being said: a burgundy box
+                out.append(ft.Container(left=x0 * s - 3, top=y0 * s - 2, width=(x1 - x0) * s + 6,
+                                        height=(y1 - y0) * s + 4, border_radius=4, bgcolor="#3C7A2E3A",
+                                        border=ft.Border.all(2, edge)))
         if self.ruler and self.ruler[0] == i:
             lines = self._lines_of(i)
             if lines:
-                ruler = lines[min(self.ruler[1], len(lines) - 1)]
-        # (the selection and the picked word are shapes over the picture: see _paint_selection)
-        return preview.render_highlight(self.app.converted_pdf, i, width, list(sentence), list(word),
-                                        marks=marks, tint=self.tint, ruler=ruler,
-                                        notes=hl.note_marks(self.highlights, self.words, i))
+                top, bottom = lines[min(self.ruler[1], len(lines) - 1)]
+                r, g, b = preview.TINTS.get(self.tint, preview.TINTS["white"])
+                veil = f"#96{r:02X}{g:02X}{b:02X}"  # the page colour, so only the line being read stands out
+                top, bottom = max(0.0, (top - 5) * s), min(h, (bottom + 5) * s)
+                edge = "#E66E82" if self.tint == "dark" else "#7A2E3A"
+                line = max(2.0, s)
+                out += [ft.Container(left=0, top=0, width=self._page_w(i), height=top, bgcolor=veil),
+                        ft.Container(left=0, top=bottom, width=self._page_w(i), height=max(0.0, h - bottom),
+                                     bgcolor=veil),
+                        ft.Container(left=0, top=max(0.0, top - line / 2), width=self._page_w(i), height=line,
+                                     bgcolor=edge),
+                        ft.Container(left=0, top=bottom - line / 2, width=self._page_w(i), height=line,
+                                     bgcolor=edge)]
+        return out
 
     def _start_rendering(self) -> None:
         """(Re)start rendering all pages in the background (after a zoom, colour or layout change)."""
@@ -559,24 +625,70 @@ class FocusMode:
         self._render_task = asyncio.get_running_loop().create_task(self._render_all())
 
     async def _render_all(self) -> None:
-        """Pages near the one being read first, then the rest, so the view fills quickly."""
+        """Pages near the one being read first, then the rest, so the view fills quickly.
+
+        When focus mode opens (or shows another document) the loading screen covers the pages until the first
+        ones are drawn, so reading starts smoothly; a long document opens after READY_PAGES and draws the rest
+        while you read. Pages drawn before come from the disk, and then the loading screen is skipped.
+        """
         order = sorted(range(len(self.images)), key=lambda i: abs(i - self.current))
+        ready = min(len(order), self.READY_PAGES)
+        waiting = self._preparing and not await self.app.in_thread(self._is_cached, order[:ready])
+        self._preparing = False
+        if waiting:
+            self._show_loading(0, ready, len(order))
         for n, i in enumerate(order):
             if not self.active:
                 return
             self.images[i].src = await self.app.in_thread(self._render, i)
-            if n < 3 or n % 4 == 3 or n == len(order) - 1:
+            if waiting:
+                if n + 1 < ready:
+                    self._show_loading(n + 1, ready, len(order))
+                    continue
+                waiting = False
+                self.loading.visible = False
                 self.app.page.update()
-            if n == 2 and self._settle is not None and self.layout == "scroll":
+            elif n < 3 or n % 4 == 3 or n == len(order) - 1:
+                self.app.page.update()
+            if n >= 2 and self._settle is not None and self.layout == "scroll":  # the list is laid out now
                 page, self._settle = self._settle, None
                 await self.scroll_to(page, animate=False)
 
+    def _loading_screen(self) -> ft.Control:
+        """The screen shown while the first pages are drawn: a sleeping dog, and how far along it is."""
+        t = self.app.t
+        self.loading_bar = ft.ProgressBar(value=0, width=260, border_radius=4)
+        self.loading_count = self.app.text("", 13, color=ft.Colors.ON_SURFACE_VARIANT)
+        self.loading_more = self.app.text(t("The other pages follow while you read."), 12,
+                                          color=ft.Colors.ON_SURFACE_VARIANT, visible=False)
+        self.loading = ft.Container(
+            ft.Column([sleepy_dog(240), self.app.text(t("Preparing your pages…"), 20, weight=ft.FontWeight.BOLD),
+                       self.loading_bar, self.loading_count, self.loading_more],
+                      horizontal_alignment=ft.CrossAxisAlignment.CENTER, alignment=ft.MainAxisAlignment.CENTER,
+                      spacing=10, tight=True),
+            alignment=ft.Alignment.CENTER, bgcolor=ft.Colors.SURFACE, left=0, top=0, right=0, bottom=0,
+            visible=False, on_click=lambda e: None)  # the click stays here, not on the pages below
+        close = ft.IconButton(ft.Icons.CLOSE, tooltip=t("Leave focus mode"), on_click=self.on_close,
+                              right=8, top=8)
+        self.loading.content = ft.Stack([ft.Container(self.loading.content, alignment=ft.Alignment.CENTER,
+                                                      left=0, top=0, right=0, bottom=0), close])
+        return self.loading
+
+    def _show_loading(self, done: int, ready: int, total: int) -> None:
+        """Show the loading screen at ``done`` of the ``ready`` pages focus mode opens after."""
+        self.loading.visible = True
+        self.loading_bar.value = done / max(1, ready)
+        self.loading_count.value = f"{done} / {ready}"
+        self.loading_more.visible = total > ready
+        self.app.page.update()
+
     async def redraw(self, i: int) -> None:
-        """Render page ``i`` again and show it (after a highlight, ruler or reading change)."""
-        if 0 <= i < len(self.images):
-            self.images[i].src = await self.app.in_thread(self._render, i)
+        """Show what changed on page ``i`` (a highlight, a note, the ruler or the words being read): only the
+        shapes over the page are placed again; the page picture stays as it is."""
+        if 0 <= i < len(self.marks):
+            self.marks[i].controls = self._mark_shapes(i)
             try:
-                self.images[i].update()
+                self.marks[i].update()
             except Exception:  # not on screen (page by page)
                 pass
 
@@ -587,6 +699,7 @@ class FocusMode:
         old = max(1, len(self.sizes))
         self.card_word, self.sel, self.card_mode = None, None, None
         self.card_layer.visible = False
+        self._preparing = True
         await self._build_pages()
         self._refresh_notes()
         self.current = min(len(self.sizes) - 1, round(self.current * len(self.sizes) / old))
@@ -1962,6 +2075,8 @@ class FocusMode:
         """A page colour button: use it for all pages."""
         self._save("focus_tint", e.control.data)
         self._apply_tint()
+        for i, marks in enumerate(self.marks):  # the ruler and the reading box follow the page colour
+            marks.controls = self._mark_shapes(i)
         self._refresh_view_row()
         self.app.page.update()
         self._start_rendering()

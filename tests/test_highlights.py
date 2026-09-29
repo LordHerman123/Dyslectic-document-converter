@@ -221,3 +221,37 @@ def test_notes_as_a_word_document():
     assert text[0] == "Notes on paper"
     assert "■ p. 10" in text and "“the quoted words”" in text and "my note" in text
     assert "■ p. 12" in text and "“more”" in text
+
+
+def test_page_pictures_kept_on_disk(paper):
+    """Focus mode's page pictures are drawn once, kept on this device, found again, trimmed and cleared."""
+    from dyslexia_converter.render import preview
+
+    key = preview.document_key(str(paper))
+    assert key == preview.document_key(str(paper))
+    pdf = paper.read_bytes()
+    assert preview.document_key(pdf) != preview.document_key(pdf + b" ")  # other content, other pictures
+    dated = b"%PDF (D:20260929115046+00'00') /ID [<AB12><CD34>]"
+    assert preview.document_key(dated) == preview.document_key(dated.replace(b"2026", b"2027").replace(b"AB", b"EF"))
+    png = preview.render_page_cached(str(paper), key, 0, 400, "cream")
+    path = preview.cached_page_path(key, 0, 400, "cream")
+    assert path.exists() and path.read_bytes() == png
+    path.write_bytes(b"kept")  # the kept picture is used, not drawn again
+    assert preview.render_page_cached(str(paper), key, 0, 400, "cream") == b"kept"
+    preview.render_page_cached(str(paper), key, 1, 400, "cream")
+    preview.trim_page_cache(limit_mb=0)
+    assert not list(preview.page_cache_dir().glob("*.png"))
+    preview.render_page_cached(str(paper), key, 0, 400)
+    assert preview.clear_page_cache() == 1
+
+
+def test_sleepy_dog_is_shipped():
+    """The loading screen's dog is an animation in the package assets."""
+    from PIL import Image
+
+    from dyslexia_converter.ui import sleepy_dog
+
+    data = sleepy_dog._dog_bytes()
+    assert data
+    import io
+    assert Image.open(io.BytesIO(data)).n_frames > 10
