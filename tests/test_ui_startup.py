@@ -29,6 +29,20 @@ def test_every_app_font_is_bundled():
         assert (Path(ASSETS_DIR) / "fonts" / file).is_file(), file
 
 
+def test_a_file_given_at_start_is_opened(tmp_path):
+    """Dropping a file on the app's icon (or "Open with") starts the app with the file's path: it is opened."""
+    from dyslexia_converter.ui.app import file_from_args
+
+    pdf, txt = tmp_path / "My paper.pdf", tmp_path / "notes.txt"
+    pdf.write_bytes(b"%PDF-1.4")
+    txt.write_text("x")
+    assert file_from_args([str(pdf)]) == str(pdf)
+    assert file_from_args([f'"{pdf}"']) == str(pdf)  # quoted, as Windows may pass it
+    assert file_from_args(["--flag", str(txt), str(pdf)]) == str(pdf)
+    assert file_from_args([str(tmp_path / "missing.epub")]) is None
+    assert file_from_args([]) is None
+
+
 def test_focus_mode_resizes_before_its_pages_are_built(isolated_home):
     """The window can report its size while focus mode is still reading the document: nothing is placed yet,
     and that is not an error (it was: 'FocusMode' object has no attribute 'marks')."""

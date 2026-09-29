@@ -28,6 +28,8 @@ SolidCompression=yes
 WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
+; the app is added to "Open with" for PDF, Word and EPUB files
+ChangesAssociations=yes
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -42,6 +44,18 @@ Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs 
 [Icons]
 Name: "{group}\Dyslexia Converter"; Filename: "{app}\DyslexiaConverter.exe"
 Name: "{userdesktop}\Dyslexia Converter"; Filename: "{app}\DyslexiaConverter.exe"; Tasks: desktopicon
+
+[Registry]
+; "Open with > Dyslexia Converter" for PDF, Word and EPUB files (for this user; the usual app for these files is
+; not changed). Dropping a file on the app's icon or shortcut opens it too.
+Root: HKCU; Subkey: "Software\Classes\Applications\DyslexiaConverter.exe"; ValueType: string; ValueName: "FriendlyAppName"; ValueData: "Dyslexia Converter"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\Applications\DyslexiaConverter.exe\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\DyslexiaConverter.exe"" ""%1"""
+Root: HKCU; Subkey: "Software\Classes\Applications\DyslexiaConverter.exe\SupportedTypes"; ValueType: string; ValueName: ".pdf"; ValueData: ""
+Root: HKCU; Subkey: "Software\Classes\Applications\DyslexiaConverter.exe\SupportedTypes"; ValueType: string; ValueName: ".docx"; ValueData: ""
+Root: HKCU; Subkey: "Software\Classes\Applications\DyslexiaConverter.exe\SupportedTypes"; ValueType: string; ValueName: ".epub"; ValueData: ""
+Root: HKCU; Subkey: "Software\Classes\.pdf\OpenWithList\DyslexiaConverter.exe"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\.docx\OpenWithList\DyslexiaConverter.exe"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\.epub\OpenWithList\DyslexiaConverter.exe"; Flags: uninsdeletekey
 
 [Run]
 Filename: "{app}\DyslexiaConverter.exe"; Description: "{cm:LaunchProgram,Dyslexia Converter}"; Flags: nowait postinstall skipifsilent

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -2330,6 +2331,23 @@ def main(page: ft.Page) -> None:
     page.update()
     app.show_start_notice()
     page.run_task(app.check_for_update)
+    start_file = file_from_args(sys.argv[1:])
+    if start_file:  # a file dropped on the app's icon, or opened with "Open with": convert it straight away
+        app.source_path = start_file
+        page.run_task(app.load_document)
+
+
+OPENABLE = (".pdf", ".docx", ".epub")
+
+
+def file_from_args(args: list[str]) -> Optional[str]:
+    """The document to open at start: the first argument that is an existing PDF, Word or EPUB file (Windows passes
+    the file when one is dropped on the app's icon or opened with "Open with")."""
+    for a in args:
+        p = Path(a.strip('"'))
+        if p.suffix.lower() in OPENABLE and p.is_file():
+            return str(p)
+    return None
 
 
 ASSETS_DIR = str(Path(__file__).resolve().parent.parent / "assets")
