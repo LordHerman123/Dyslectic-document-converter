@@ -186,6 +186,11 @@ async def _read_everywhere(app, path):
     await r.on_pages()
     assert app.focus.active and not r.active
     await app.focus.close()
+    # "Read along" in the read-aloud panel, pressed in focus mode: focus mode closes, read along opens
+    await app.focus.open()
+    await app.on_reflow(None)
+    assert r.active and not app.focus.active
+    await r.close()
 
 
 def test_app_check_pdf(headless, paper):

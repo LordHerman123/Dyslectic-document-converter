@@ -1714,7 +1714,7 @@ class ConverterApp:
             path = await self.in_thread(web.save_article, address)
         except web.WebPageError as ex:
             self.busy(False, t("Could not open the web page."))
-            self.notify(t(str(ex)), error=True)
+            self.notify(t(str(ex)) + (f" ({ex.detail})" if ex.detail else ""), error=True)
             return
         except Exception as ex:
             self.busy(False, t("Could not open the web page."))
@@ -1757,6 +1757,8 @@ class ConverterApp:
             low = name.lower()
             kind = t("an EPUB book") if low.endswith(".epub") else t("a web page") \
                 if low.endswith((".html", ".htm")) else t("a Word document")
+            if low.endswith((".html", ".htm")) and d.title:  # a saved web page: its title, not the file name
+                name = d.title
             return t("{name}: {kind}. Language: {language}.", name=name, kind=kind,
                      language=self.lang_name(d.language))
         kind = {"text": t("selectable text"),
@@ -1922,9 +1924,14 @@ class ConverterApp:
             self.read_btn.disabled = True
             self.read_btn.tooltip = t("No speech voices were found on this device.") + (
                 f" ({self.speaker.last_error})" if self.speaker.last_error else "")
+        self.read_along_btn = ft.OutlinedButton(
+            t("Read along"), icon=ft.Icons.CHROME_READER_MODE_OUTLINED, on_click=self.on_reflow,
+            tooltip=t("Read the text itself, flowing to fit the window, with the sentence and word being read "
+                      "marked; size, spacing and colours change at once"))
         self.read_row = ft.Row([
             self.read_btn, self.stop_btn, self.tap_btn, ft.Container(width=6),
             self.text(t("Speed"), 13), self.speed_slider, self.speed_label, self.voice_dd, self.follow_cb,
+            self.read_along_btn,
         ], wrap=True, spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER)
         self.read_panel = ft.Container(self.read_row, padding=ft.Padding.symmetric(horizontal=8, vertical=2),
                                        border_radius=10, bgcolor=ft.Colors.SURFACE_CONTAINER_LOW,
@@ -1939,8 +1946,10 @@ class ConverterApp:
                                                 tooltip=t("Show or hide the read-aloud controls"))
         self.focus_btn = ft.OutlinedButton(t("Focus mode"), icon=ft.Icons.FULLSCREEN, on_click=self.on_focus,
                                            tooltip=t("Read the converted document in the whole window"))
-        self.reflow_btn = ft.OutlinedButton(t("Reading view"), icon=ft.Icons.CHROME_READER_MODE_OUTLINED,
-                                            on_click=self.on_reflow,
+        # read along lives in the read-aloud panel; where speech is not available (the web version) that panel is
+        # hidden, so it gets its own button here
+        self.reflow_btn = ft.OutlinedButton(t("Read along"), icon=ft.Icons.CHROME_READER_MODE_OUTLINED,
+                                            on_click=self.on_reflow, visible=not self._speech_allowed(),
                                             tooltip=t("Read the text itself, flowing to fit the window: change "
                                                       "the size and spacing at once"))
         self.hl_items = []
@@ -2018,7 +2027,9 @@ class ConverterApp:
         await self.focus.open()
 
     async def on_reflow(self, e):
-        """The Reading view button."""
+        """The Read along button (in the read-aloud panel, also in focus mode)."""
+        if self.focus.active:
+            await self.focus.close()
         await self.reflow.open()
 
     # ---------------------------------------------------------------- where each document was left

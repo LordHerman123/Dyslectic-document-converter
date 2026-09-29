@@ -105,3 +105,118 @@ def test_saved_page_converts(site, client, tmp_path):
     path = web.save_article(site + "/article.html", client=client, folder=tmp_path)
     session = pipeline.load(str(path), FormatSettings())
     assert session.original_pdf and session.export("pdf", FormatSettings())[:4] == b"%PDF"
+
+
+# Wikipedia: the article interface gives the article in <section>s, with reference marks and navigation boxes;
+# the normal page has the site around it (menus, tools, [edit] links, language list).
+WIKI_API = """<!DOCTYPE html>
+<html prefix="dc: http://purl.org/dc/terms/"><head><meta charset="utf-8"><title>Red fox</title>
+<link rel="stylesheet" href="/w/load.php?modules=mediawiki.skinning.content.parsoid"></head>
+<body lang="en" class="mw-content-ltr sitedir-ltr ltr mw-body-content parsoid-body mediawiki mw-parser-output">
+<section data-mw-section-id="0"><div class="shortdescription nomobile noexcerpt noprint searchaux"
+ style="display:none">Species of carnivore</div>
+<div role="note" class="hatnote navigation-not-searchable">For other uses, see Red fox (disambiguation).</div>
+<p>The <b>red fox</b> (<i>Vulpes vulpes</i>) is the largest of the true foxes and one of the most widely distributed
+members of the order Carnivora, being present across the entire Northern Hemisphere.<sup class="mw-ref reference">
+<a href="./Red_fox#cite_note-1"><span class="mw-reflink-text">[1]</span></a></sup> It is listed as least concern.</p>
+<figure typeof="mw:File/Thumb"><a href="./File:Fox.png"><img src="//upload.wikimedia.org/fox.png" width="120"
+ height="80"></a><figcaption>A red fox in a garden</figcaption></figure></section>
+<section data-mw-section-id="1"><h2 id="Taxonomy">Taxonomy</h2>
+<p>Carl Linnaeus named the species in 1758, in the tenth edition of his Systema Naturae, and many subspecies have
+been described since then, although several of them are now thought to be the same animal.</p></section>
+<section data-mw-section-id="2"><h2 id="Behaviour">Behaviour</h2>
+<p>Red foxes are usually together in pairs or small groups consisting of families, such as a mated pair and their
+young, or a male with several females having kinship ties.</p></section>
+<div role="navigation" class="navbox" aria-labelledby="Carnivora">Carnivora: Felidae · Canidae · Ursidae</div>
+</body></html>"""
+
+WIKI_PAGE = """<!DOCTYPE html><html class="client-nojs vector-feature-main-menu-pinned-disabled" lang="en"><head>
+<title>Red fox - Wikipedia</title><meta property="og:title" content="Red fox - Wikipedia"></head>
+<body class="skin-vector mediawiki ltr ns-0 page-Red_fox skin-vector-2022">
+<a class="mw-jump-link" href="#bodyContent">Jump to content</a>
+<div class="vector-header-container"><header class="vector-header mw-header">
+<div class="vector-main-menu-container">Main page Contents Current events Random article</div>
+<div id="p-search" role="search">Search Wikipedia</div></header></div>
+<div class="mw-page-container"><div class="mw-page-container-inner">
+<div class="vector-column-start"><nav class="vector-toc">Contents (Top) 1 Taxonomy 2 Behaviour</nav></div>
+<div class="mw-content-container"><main id="content" class="mw-body">
+<header class="mw-body-header vector-page-titlebar"><h1 id="firstHeading" class="firstHeading mw-first-heading">
+<span class="mw-page-title-main">Red fox</span></h1>
+<div id="p-lang-btn" class="vector-dropdown mw-portlet mw-portlet-lang"><input type="checkbox"
+ class="vector-dropdown-checkbox"><label class="vector-dropdown-label"><span>150 languages</span></label>
+<div class="vector-dropdown-content"><div class="vector-menu-content"><ul class="vector-menu-content-list">
+<li>Afrikaans</li><li>العربية</li><li>Deutsch</li></ul></div></div></div></header>
+<div class="vector-page-toolbar">Article Talk Read Edit View history Tools</div>
+<div id="bodyContent" class="vector-body"><div id="siteSub" class="noprint">From Wikipedia, the free encyclopedia</div>
+<div id="mw-content-text" class="mw-body-content"><div class="mw-content-ltr mw-parser-output" lang="en" dir="ltr">
+""" + WIKI_API.split("<body", 1)[1].split(">", 1)[1].replace("</body></html>", "").replace(
+    '<h2 id="Taxonomy">Taxonomy</h2>',
+    '<div class="mw-heading mw-heading2"><h2 id="Taxonomy">Taxonomy</h2><span class="mw-editsection">'
+    '<span class="mw-editsection-bracket">[</span><a href="/w/index.php?action=edit">edit</a>'
+    '<span class="mw-editsection-bracket">]</span></span></div>') + """
+</div></div><div id="catlinks" class="catlinks">Categories: Vulpes</div></div></main>
+<footer id="footer" class="mw-footer">This page was last edited on 1 May 2026. Privacy policy</footer>
+</div></div></div></body></html>"""
+
+
+def _wiki_site(api_status=200):
+    """A pretend Wikipedia: the article interface, the page itself and the picture server, which (like the real
+    ones) only answer programs that name themselves."""
+    seen = []
+
+    def answer(request):
+        seen.append(str(request.url))
+        if not request.headers.get("user-agent", "").startswith("DyslexiaConverter/"):
+            return httpx.Response(403, text="Please set a user-agent and respect our robot policy")
+        path = request.url.path
+        if path == "/w/rest.php/v1/page/Red_fox/html":
+            return httpx.Response(api_status, headers={"content-type": "text/html; charset=utf-8"}, text=WIKI_API)
+        if path == "/wiki/Red_fox":
+            return httpx.Response(200, headers={"content-type": "text/html; charset=utf-8"}, text=WIKI_PAGE)
+        if request.url.host == "upload.wikimedia.org":
+            return httpx.Response(200, headers={"content-type": "image/png"}, content=_png())
+        return httpx.Response(404)
+    return httpx.Client(transport=httpx.MockTransport(answer), follow_redirects=True), seen
+
+
+@pytest.mark.parametrize("api_status", [200, 500])
+def test_wikipedia_article(tmp_path, api_status):
+    """A Wikipedia article (through its article interface, or the page itself when that fails): the article with
+    its sections, picture and caption; not the menus, [edit] links, languages, contents, hidden short description,
+    "for other uses" note, navigation box, categories or footer."""
+    client, seen = _wiki_site(api_status)
+    path = web.save_article("https://en.m.wikipedia.org/wiki/Red_fox#Behaviour", client=client, folder=tmp_path)
+    assert seen[0] == "https://en.wikipedia.org/w/rest.php/v1/page/Red_fox/html"
+    saved = path.read_text(encoding="utf-8")
+    assert path.name.startswith("Red fox (") and '<html lang="en">' in saved
+    for kept in ("largest of the true foxes", "Taxonomy", "Linnaeus", "Behaviour", "kinship ties",
+                 "A red fox in a garden", "data:image/png;base64,"):
+        assert kept in saved, kept
+    for clutter in ("Jump to content", "Main page", "Search Wikipedia", "150 languages", "Afrikaans", "(Top)",
+                    "View history", "free encyclopedia", "action=edit", "[", "Species of carnivore", "For other uses",
+                    "Felidae", "Categories", "last edited", "- Wikipedia"):
+        assert clutter not in saved, clutter
+
+    doc = pipeline.load(str(path), FormatSettings()).document
+    assert doc.title == "Red fox" and doc.language == "en"
+    heads = [b.text for b in doc.blocks if b.kind == BlockKind.HEADING]
+    assert heads == ["Red fox", "Taxonomy", "Behaviour"]
+
+
+def test_error_code_is_shown(tmp_path):
+    client, _ = _wiki_site()
+    client.headers["User-Agent"] = "x"  # a site that refuses the request
+    with pytest.raises(web.WebPageError) as e:
+        web.save_article("https://example.org/page", client=client, folder=tmp_path)
+    assert e.value.detail == "error 403"
+
+
+def test_wiki_formulas_are_written_as_text():
+    """A wiki's formula pictures (SVG, which the app cannot show) become their text, so sentences stay whole."""
+    assert web._formula_text(r"{\displaystyle \pi r^{2}}") == "π r^2"
+    assert web._formula_text(r"{\displaystyle {\frac {a+b}{2}}}") == "(a+b)/2"
+    html = ("<html><body><article><p>" + PARA * 3 + 'The area is <span class="mwe-math-element"><span '
+            'style="display: none;"><math>x</math></span><img class="mwe-math-fallback-image-inline" src="a.svg" '
+            'alt="{\\displaystyle \\pi r^{2}}"></span> for a circle.</p></article></body></html>')
+    _, article, _ = web.extract_article(html, "https://en.wikipedia.org/wiki/Circle")
+    assert "The area is <span" in article and "π r^2</span> for a circle." in article and "<math" not in article

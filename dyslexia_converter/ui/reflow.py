@@ -1,4 +1,4 @@
-"""Reading view: the converted text itself, flowing to fit the window (instead of page pictures).
+"""Read along (the reading view): the converted text itself, flowing to fit the window (instead of page pictures).
 
 Text size, line spacing, column width and page colour change at once, without converting or drawing any page,
 and the text fits any screen, including a phone. The content is the composed document (the same the exports use),
@@ -142,7 +142,7 @@ class ReflowMode:
             items=[ft.PopupMenuItem(labels[m], data=m, checked=m == self.colour_help, on_click=self.on_colour_help)
                    for m in COLOUR_HELP])
         bar = ft.Row([
-            ft.IconButton(ft.Icons.CLOSE, tooltip=t("Leave the reading view"), on_click=self.on_close),
+            ft.IconButton(ft.Icons.CLOSE, tooltip=t("Leave read along"), on_click=self.on_close),
             ft.IconButton(ft.Icons.TEXT_DECREASE, tooltip=t("Smaller text"), on_click=lambda e: self._size_by(-2)),
             ft.IconButton(ft.Icons.TEXT_INCREASE, tooltip=t("Larger text"), on_click=lambda e: self._size_by(2)),
             ft.IconButton(ft.Icons.FORMAT_LINE_SPACING, tooltip=t("More space between lines"),
