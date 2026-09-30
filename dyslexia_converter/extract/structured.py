@@ -410,8 +410,9 @@ class _EpubPage(HTMLParser):
             return  # table cells are collected into the table
         text, styles = self.text, self.styles
         self.text, self.styles = "", []
-        if not text.strip():
-            return
+        if not text.strip() or (self.kind == BlockKind.LIST_ITEM and not re.sub(r"^(•|\d+\.)\s*", "", text).strip()):
+            self.kind, self.level = BlockKind.PARAGRAPH, 0
+            return  # nothing, or a list item with nothing in it (a menu left empty)
         kind = self.kind
         if kind == BlockKind.PARAGRAPH and self.note:
             kind = BlockKind.FOOTNOTE
