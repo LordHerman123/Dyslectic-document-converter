@@ -93,6 +93,33 @@ OCR = Task(
 )
 
 
+SPLITS = Task(
+    name="splits",
+    system=(
+        "You help a tool that makes documents easier to read for people with dyslexia. "
+        "You answer one narrow question and never rewrite text.\n\n"
+        f"Each numbered line holds a few words of a document with two pieces marked {M0}like this{M1}. Scanning "
+        "and copying text out of PDFs sometimes puts a space inside a word. Decide for each whether the marked "
+        "pieces are one word wrongly split by a space. Letters used as symbols or names (a variable, an "
+        "initial, a unit) and two real words are not split words.\n"
+        'Answer with JSON: {"j": [ids of the lines whose pieces are ONE word]}. Leave out every other line.\n\n'
+        "Examples\n"
+        f"0: …papers {M0}subm itted{M1} to the journal were…\n"
+        f"1: …for every integer of {M0}degree n{M1} we find that…\n"
+        f"2: …the Journal {M0}o f{M1} Natural Pharmaceuticals…\n"
+        f"3: …signed by {M0}A T{M1} Smith and…\n"
+        f"4: …it was a {M0}lit tle{M1} too late to…\n"
+        f"5: …costs grow {M0}since r{M1} is larger than…\n"
+        f"6: …{M0}W hen{M1} the editors replied…\n"
+        'Answer: {"j": [0, 2, 4, 6]}'
+    ),
+    schema={"type": "object", "additionalProperties": False, "required": ["j"],
+            "properties": {"j": {"type": "array", "items": {"type": "integer"}}}},
+    answer_hint='Answer with JSON only: {"j": [ids]}',
+    tokens_per_item=3,
+)
+
+
 def citation_prompt(snippets: list[str]) -> str:
     """The snippets of one request, numbered from 0, one per line."""
     return "\n".join(f"{i}: {s}" for i, s in enumerate(snippets))

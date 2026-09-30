@@ -1288,6 +1288,9 @@ class FocusMode:
             *dots,
             btn(ft.Icons.STICKY_NOTE_2_OUTLINED, t("Note"), lambda e: app.page.run_task(self.open_note, a, b),
                 tip=t("Add or edit a note (N)")),
+            btn(ft.Icons.EDIT_OUTLINED, t("Edit"), lambda e: app.page.run_task(self.edit_selection, a, b),
+                visible=self.source == "converted" and app.session is not None and b - a < 200,
+                tip=t("Correct these words (for example a word split by a space)")),
             btn(ft.Icons.VOLUME_UP, t("Read"), lambda e: app.say_word(text), visible=app._speech_allowed()),
             btn(ft.Icons.SMART_TOY_OUTLINED, t("Summarise"), lambda e: app.page.run_task(self.summarise_selection, a, b),
                 visible=self._ai_on() and b - a >= 15, tip=t("AI summary of the selection")),
@@ -1355,6 +1358,53 @@ class FocusMode:
         self._more = not self._more
         if self.sel:
             await self.open_selection(*self.sel)
+
+    async def edit_selection(self, a: int, b: int) -> None:
+        """Let the reader retype the selected words: stored as their own correction (the original is kept, and
+        it can be undone here or in the OCR review tab), then the document is converted again."""
+        app, t = self.app, self.app.t
+        session = app.session
+        where = session.find_passage(hl.text_of(self.words, a, b)) if session else None
+        if where is None:
+            self._toast(t("These words can't be edited: the converter added or moved them (for example reference "
+                          "numbers). Select words of the text itself."))
+            return
+        field = ft.TextField(value=session.passage_as_shown(*where), multiline=True, min_lines=2, max_lines=8,
+                             autofocus=True, text_size=app.fs(16), width=560)
+
+        def close(_=None):
+            """Close the dialog; the keyboard shortcuts work again."""
+            self._typing = False
+            app.page.pop_dialog()
+
+        async def save(_):
+            """Store the words as typed and convert again."""
+            close()
+            edit = session.edit_passage(*where, field.value or "")
+            if edit is None:
+                self._toast(t("Nothing was changed."))
+                return
+            await self.close_card()
+            app.refresh_review()
+            await app.rerender()
+
+            async def undo(e):
+                """Take the edit back out and convert again."""
+                session.remove_user_edit(edit.id)
+                app.refresh_review()
+                await app.rerender()
+
+            self._toast(t("Your correction was saved."), undo=undo)
+
+        self._typing = True
+        app.page.show_dialog(ft.AlertDialog(
+            modal=True, title=app.text(t("Correct the text"), 18, weight=ft.FontWeight.BOLD),
+            content=ft.Column([
+                app.text(t("Type the words as they should read. The original document is not changed and you can "
+                           "undo this."), 13),
+                field], tight=True, spacing=12),
+            actions=[ft.TextButton(t("Cancel"), on_click=close),
+                     ft.FilledButton(t("Save"), icon=ft.Icons.CHECK, on_click=save)]))
 
     async def copy(self, a: int, b: int) -> None:
         """Copy words a..b to the clipboard."""

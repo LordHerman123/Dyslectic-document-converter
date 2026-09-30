@@ -30,7 +30,7 @@ from . import keys
 from .keystore import KeyStore, redact
 from .log import LogEntry, RequestLog
 from .privacy import mask, window
-from .prompts import (CHECK, CITATIONS, EXPLAIN, LAYOUT, OCR, SUMMARY, Task, check_prompt, citation_prompt,
+from .prompts import (CHECK, CITATIONS, EXPLAIN, LAYOUT, OCR, SPLITS, SUMMARY, Task, check_prompt, citation_prompt,
                       explain_prompt, layout_prompt, ocr_prompt, summary_prompt)
 from .providers import AIError, Busy, Reply, UnreadableAnswer, make_provider
 
@@ -219,6 +219,45 @@ class AIAssistant:
             requests.append(Request(OCR, ocr_prompt([(sug, snip) for _, sug, snip, _ in chunk]),
                                     [ck for *_, ck in chunk], [c for c, *_ in chunk]))
         return requests, known
+
+    def plan_splits(self, items: list[tuple[str, int, int]]) -> tuple[list[Request], dict[int, bool]]:
+        """``items``: (text around it, start, end of two pieces that may be one word split by a space).
+
+        Returns the requests that would be sent, and the answers already known from earlier (item -> one word)."""
+        known: dict[int, bool] = {}
+        groups: dict[str, tuple[str, list[int]]] = {}  # cache key -> (snippet, items): each snippet sent once
+        for i, (text, start, end) in enumerate(items):
+            snippet = window(text, start, end, before=5, after=5)
+            ck = self._item_key("splits", snippet)
+            hit = self.cache.get(ck)
+            if hit is not None:
+                known[i] = bool(hit)
+            else:
+                groups.setdefault(ck, (snippet, []))[1].append(i)
+        todo = list(groups.items())
+        requests = []
+        for start in range(0, len(todo), CHUNK):
+            chunk = todo[start:start + CHUNK]
+            requests.append(Request(SPLITS, citation_prompt([snip for _, (snip, _) in chunk]),
+                                    [ck for ck, _ in chunk], [ids for _, (_, ids) in chunk]))
+        return requests, known
+
+    def review_splits(self, items: list[tuple[str, int, int]],
+                      progress: Optional[Callable[[str, float], None]] = None) -> dict[int, bool]:
+        """Ask whether each pair of pieces is one word split by a space. Returns item -> one word."""
+        requests, decisions = self.plan_splits(items)
+        if decisions:
+            self.usage.append(UsageEntry("splits", len(decisions), True))
+        for n, req in enumerate(requests):
+            if progress:
+                progress("Asking AI about words split by a space", n / max(1, len(requests)))
+            yes = {i for i in self.send(req).data.get("j", []) if isinstance(i, int)}
+            values = {ck: i in yes for i, ck in enumerate(req.keys)}
+            self.cache.put_many(values)
+            for i, ids in enumerate(req.items):
+                for k in ids:
+                    decisions[k] = values[req.keys[i]]
+        return decisions
 
     # ---------------------------------------------------------------- sending
     def send(self, request: Request) -> Reply:

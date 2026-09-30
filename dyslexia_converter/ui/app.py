@@ -686,7 +686,7 @@ class ConverterApp:
         t = self.t
         self.update_review_notice()
         self.review_list.controls.clear()
-        if not self.session or not self.session.document.ocr_used:
+        if not self.session or not (self.session.document.ocr_used or self.session.document.corrections):
             self.review_summary.value = t("No OCR was needed for this document.") if self.session else \
                 t("No scanned document loaded.")
             return
@@ -1242,7 +1242,7 @@ class ConverterApp:
                  ft.Text(t("This is exactly the document text that will be sent:"), size=self.fs(14),
                          weight=ft.FontWeight.BOLD)]
         for r in requests:
-            label = {"citations": t("Citations"), "layout": t("Page layout: the first and last words of each "
+            label = {"citations": t("Citations"), "splits": t("Words that may be split by a space"), "layout": t("Page layout: the first and last words of each "
                                                               "piece of the page")}.get(r.task.name, t("OCR words"))
             lines.append(ft.Text(label, size=self.fs(13), weight=ft.FontWeight.BOLD))
             lines.append(ft.Container(ft.Text(r.prompt, size=self.fs(12), selectable=True),

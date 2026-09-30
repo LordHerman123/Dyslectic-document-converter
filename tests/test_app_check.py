@@ -174,6 +174,19 @@ async def _read_everywhere(app, path):
         await f.on_more(None)
         assert not f._more
         await f.close_card(None)
+        # correct a few words: the dialog saves them as the reader's own (undoable) correction
+        shown = []
+        show = app.page.show_dialog
+        app.page.show_dialog = lambda d: (shown.append(d), show(d))[1]
+        a = next((i for i in range(20, len(f.words) - 3) if all(w[1].isalpha() for w in f.words[i:i + 3])), None)
+        if a is not None and app.session.find_passage(" ".join(w[1] for w in f.words[a:a + 3])):
+            await f.edit_selection(a, a + 2)
+            dialog = shown[-1]
+            field = dialog.content.controls[1]
+            field.value = field.value + " extra"
+            await dialog.actions[1].on_click(None)
+            assert any(c.source == "user" for c in app.session.document.corrections)
+        app.page.show_dialog = show
     f._zoom_by(1.2)
     await f.on_layout(None)
     await f.turn(1)

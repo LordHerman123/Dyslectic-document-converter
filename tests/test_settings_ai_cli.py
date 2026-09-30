@@ -358,3 +358,25 @@ def test_ai_summary_keeps_the_chosen_length(isolated_home, monkeypatch):
     a = make_assistant(isolated_home, many, monkeypatch)
     assert len(a.summarise("Some text to summarise.", "en").points) == 5
     assert len(a.summarise("Some text to summarise.", "en", detailed=True).points) == 10
+
+
+def test_ai_joins_words_split_by_a_space(isolated_home, monkeypatch, tmp_path):
+    from dyslexia_converter.model import Block, BlockKind, Document
+    from dyslexia_converter.transform.spelling import CustomWords
+
+    text = "Papers subm itted to the Journal o f Pharmacy since r grows were a lit tle late."
+    doc = Document(source_path="x.pdf", blocks=[Block(id="b1", kind=BlockKind.PARAGRAPH, text=text, page=0)])
+    doc.language = "en"
+    session = pipeline.Session(doc, CustomWords(tmp_path / "words.txt"))
+    assert [text[s:e] for _, s, e, _ in session.split_items()] == ["subm itted", "o f", "since r", "lit tle"]
+    a = make_assistant(isolated_home, {"j": [0, 1, 3]}, monkeypatch)
+    a.settings.use_for_citations = False
+    preview = session.ai_preview(a, FormatSettings())
+    assert len(preview) == 1 and "[[o f]]" in preview[0].prompt and "Papers" in preview[0].prompt
+    summary = session.run_ai(a, FormatSettings())
+    assert "4 word(s) that may be split by a space (3 joined)" in summary
+    assert doc.display_text(doc.blocks[0]) == ("Papers submitted to the Journal of Pharmacy since r grows were a "
+                                               "little late.")
+    assert doc.blocks[0].text == text                   # the extracted text is kept: each join can be undone
+    assert session.split_items() == [(("b1"), text.index("since r"), text.index("since r") + 7, "sincer")]
+    assert session.ai_preview(a, FormatSettings()) == []  # answered before: nothing is sent again

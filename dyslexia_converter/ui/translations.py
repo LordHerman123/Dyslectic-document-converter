@@ -1680,6 +1680,38 @@ T: dict[str, dict[str, str]] = {
     'Start one word later': {'nl': 'Begin een woord later', 'fr': 'Début un mot plus tard', 'de': 'Anfang ein Wort später', 'es': 'Inicio una palabra después', 'it': 'Inizio una parola dopo'},
     'End one word earlier': {'nl': 'Einde een woord eerder', 'fr': 'Fin un mot plus tôt', 'de': 'Ende ein Wort früher', 'es': 'Final una palabra antes', 'it': 'Fine una parola prima'},
     'End one word later': {'nl': 'Einde een woord later', 'fr': 'Fin un mot plus tard', 'de': 'Ende ein Wort später', 'es': 'Final una palabra después', 'it': 'Fine una parola dopo'},
+    "Correct these words (for example a word split by a space)": {
+        "nl": "Deze woorden verbeteren (bijvoorbeeld een woord dat door een spatie is gesplitst)",
+        "fr": "Corriger ces mots (par exemple un mot coupé par une espace)",
+        "de": "Diese Wörter korrigieren (zum Beispiel ein durch ein Leerzeichen getrenntes Wort)",
+        "es": "Corregir estas palabras (por ejemplo, una palabra separada por un espacio)",
+        "it": "Correggi queste parole (ad esempio una parola divisa da uno spazio)"},
+    "These words can't be edited: the converter added or moved them (for example reference numbers). Select words of the text itself.": {
+        "nl": "Deze woorden kunnen niet bewerkt worden: de converter heeft ze toegevoegd of verplaatst (bijvoorbeeld "
+              "verwijzingsnummers). Selecteer woorden uit de tekst zelf.",
+        "fr": "Ces mots ne peuvent pas être modifiés : le convertisseur les a ajoutés ou déplacés (par exemple des "
+              "numéros de référence). Sélectionnez des mots du texte lui-même.",
+        "de": "Diese Wörter können nicht bearbeitet werden: Der Konverter hat sie hinzugefügt oder verschoben (zum "
+              "Beispiel Verweisnummern). Wählen Sie Wörter aus dem Text selbst.",
+        "es": "Estas palabras no se pueden editar: el conversor las añadió o las movió (por ejemplo, números de "
+              "referencia). Seleccione palabras del propio texto.",
+        "it": "Queste parole non si possono modificare: il convertitore le ha aggiunte o spostate (ad esempio i "
+              "numeri dei riferimenti). Seleziona parole del testo stesso."},
+    "Type the words as they should read. The original document is not changed and you can undo this.": {
+        "nl": "Typ de woorden zoals ze moeten zijn. Het originele document verandert niet en u kunt dit ongedaan maken.",
+        "fr": "Tapez les mots tels qu'ils doivent être. Le document original n'est pas modifié et vous pouvez annuler.",
+        "de": "Geben Sie die Wörter so ein, wie sie lauten sollen. Das Originaldokument wird nicht geändert und Sie "
+              "können dies rückgängig machen.",
+        "es": "Escriba las palabras como deben quedar. El documento original no cambia y puede deshacerlo.",
+        "it": "Scrivi le parole come devono essere. Il documento originale non cambia e puoi annullare."},
+    "Your correction was saved.": {"nl": "Uw verbetering is bewaard.", "fr": "Votre correction a été enregistrée.",
+                                   "de": "Ihre Korrektur wurde gespeichert.", "es": "Se guardó su corrección.",
+                                   "it": "La tua correzione è stata salvata."},
+    "Words that may be split by a space": {"nl": "Woorden die door een spatie gesplitst kunnen zijn",
+                                           "fr": "Mots peut-être coupés par une espace",
+                                           "de": "Wörter, die durch ein Leerzeichen getrennt sein können",
+                                           "es": "Palabras que quizá estén separadas por un espacio",
+                                           "it": "Parole forse divise da uno spazio"},
 }
 
 # messages from the processing core, matched in i18n.MESSAGE_PATTERNS; {0}, {1}... are the parts found
@@ -1767,6 +1799,11 @@ PATTERNS: dict[str, dict[str, str]] = {
                        "fr": "{0} page(s) à la mise en page inhabituelle",
                        "de": "{0} Seite(n) mit ungewöhnlichem Layout", "es": "{0} página(s) con un diseño poco habitual",
                        "it": "{0} pagina/e con un'impaginazione insolita"},
+    "n_splits": {"nl": "{0} woord(en) dat door een spatie gesplitst kan zijn ({1} samengevoegd)",
+                 "fr": "{0} mot(s) peut-être coupé(s) par une espace ({1} réuni(s))",
+                 "de": "{0} Wort/Wörter, evtl. durch ein Leerzeichen getrennt ({1} zusammengefügt)",
+                 "es": "{0} palabra(s) quizá separada(s) por un espacio ({1} unida(s))",
+                 "it": "{0} parola/e forse divisa/e da uno spazio ({1} unita/e)"},
     "n_ocr_words": {"nl": "{0} twijfelachtig(e) OCR-woord(en)", "fr": "{0} mot(s) OCR incertain(s)",
                     "de": "{0} unsichere(s) OCR-Wort/Wörter", "es": "{0} palabra(s) OCR dudosa(s)",
                     "it": "{0} parola/e OCR incerta/e"},

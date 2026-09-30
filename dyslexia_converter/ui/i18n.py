@@ -33,6 +33,7 @@ MESSAGE_PATTERNS: list[tuple[str, re.Pattern]] = [(k, re.compile(p)) for k, p in
     ("sent_to_ai", r"^Sent to AI: (.+)$"),
     ("n_citations", r"^(\d+) uncertain citation\(s\)$"),
     ("n_ocr_words", r"^(\d+) uncertain OCR word\(s\)$"),
+    ("n_splits", r"^(\d+) word\(s\) that may be split by a space \((\d+) joined\)$"),
     ("n_layout_pages", r"^(\d+) page\(s\) with an unusual layout$"),
     ("font_substitute", r"^(.+) is not installed on this device; using the similar free font (.+) instead\.$"),
     ("check_part", r"^Checking part (\d+) of (\d+)$"),

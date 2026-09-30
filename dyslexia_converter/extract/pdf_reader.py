@@ -461,9 +461,67 @@ def _join_drop_caps(spans: list[_Span]) -> list[_Span]:
     return out
 
 
-def _page_spans(page: pymupdf.Page) -> list[_Span]:
+def _false_spaces(chars: list[dict], size: float, known_word: Optional[Callable[[str], bool]]) -> set[int]:
+    """Indices of spaces in one line of the PDF's text that split a word ("o f", "com puter", "W hen"), as the text
+    layers of some scanned articles have: there is hardly any room for them (a real space on the line leaves
+    about twice as much), and taking them out makes a known word, from pieces that are not both words."""
+    if known_word is None:
+        return set()
+    gaps: list[tuple[int, int, float]] = []  # (first space, next letter, room between the letters around it)
+    prev = None
+    i = 0
+    while i < len(chars):
+        if chars[i]["c"].isspace():
+            j = i
+            while j < len(chars) and chars[j]["c"].isspace():
+                j += 1
+            if prev is not None and j < len(chars):
+                gaps.append((i, j, chars[j]["bbox"][0] - chars[prev]["bbox"][2]))
+            i = j
+            continue
+        prev = i
+        i += 1
+    if len(gaps) < 3:
+        return set()
+    typical = statistics.median(g for _, _, g in gaps)
+    if typical < 0.2 * size:
+        return set()  # a tightly set line: no room to tell false spaces from real ones
+
+    def piece(k: int, step: int) -> str:
+        """The run of letters from index ``k`` going left (-1) or right (+1)."""
+        out = ""
+        while 0 <= k < len(chars) and chars[k]["c"].isalpha():
+            out = out + chars[k]["c"] if step > 0 else chars[k]["c"] + out
+            k += step
+        return out
+
+    def word(w: str) -> bool:
+        return len(w) > 1 or w in "aAI"
+
+    def lone(w: str, other: str) -> bool:
+        """A single letter that is not a word by itself ("o f", "b y", "j ournals", "W hen")."""
+        return len(w) == 1 and not word(w) and (w.islower() or (len(other) > 1 and other.islower()))
+
+    drop: set[int] = set()
+    for start, nxt, gap in gaps:
+        left, right = piece(start - 1, -1), piece(nxt, 1)
+        if not left or not right:
+            continue
+        # a lone letter can't stand by itself, so its space may be as wide as a real one (the text layer spaces
+        # letters evenly); anything else must have clearly less room than the spaces around it
+        loose = lone(left, right) or lone(right, left)
+        if gap >= 0.3 * size or (not loose and (gap >= 0.5 * typical or gap >= 0.25 * size)):
+            continue
+        both_words = word(left) and word(right) and known_word(left) and known_word(right)
+        if not both_words and known_word(left + right):
+            drop.update(range(start, nxt))
+    return drop
+
+
+def _page_spans(page: pymupdf.Page, known_word: Optional[Callable[[str], bool]] = None) -> list[_Span]:
     """Every horizontal run of text on a page, in unrotated page coordinates (rotated text such as margin notes and
-    watermarks is left out).
+    watermarks is left out). With ``known_word``, spaces that split a word in the PDF's text are taken out
+    (see :func:`_false_spaces`).
     """
     d = page.get_text("rawdict", flags=pymupdf.TEXTFLAGS_RAWDICT & ~pymupdf.TEXT_PRESERVE_IMAGES)
     to_page, to_dir = _page_mapper(page)
@@ -475,8 +533,11 @@ def _page_spans(page: pymupdf.Page) -> list[_Span]:
             dx, dy = to_dir(line["dir"])
             if abs(dy) > 0.1 or dx < 0:  # rotated text (margins, watermarks)
                 continue
+            line_chars = [c for span in line["spans"] for c in span.get("chars", [])]
+            size = max((span["size"] for span in line["spans"]), default=10.0)
+            false = {id(line_chars[k]) for k in _false_spaces(line_chars, size, known_word)}
             for span in line["spans"]:
-                chars = span.get("chars", [])
+                chars = [c for c in span.get("chars", []) if id(c) not in false]
                 t = "".join(c["c"] for c in chars)
                 if not t or not t.strip():
                     continue  # word gaps are recovered from positions
@@ -813,9 +874,13 @@ def _group_scripts(row: list[_Span], baseline: float, ref_size: float, skip: dic
     return out
 
 
-def _text_lines(page: pymupdf.Page, pno: int) -> list[RawLine]:
-    """The text lines of a page, with bold/italic/math styles, formulas recognised and indices placed."""
-    spans = _join_drop_caps(_page_spans(page))
+def _text_lines(page: pymupdf.Page, pno: int, known_word: Optional[Callable[[str], bool]] = None) -> list[RawLine]:
+    """The text lines of a page, with bold/italic/math styles, formulas recognised and indices placed.
+    ``known_word`` is used to take out spaces that split words, only on a page whose text lies over a picture of
+    the whole page: text made by OCR software (a typeset page spaces symbols and initials tightly on purpose)."""
+    if known_word is not None and image_coverage(page) < 0.9:
+        known_word = None
+    spans = _join_drop_caps(_page_spans(page, known_word))
     try:
         rules = [tuple(d["rect"]) for d in page.get_drawings()
                  if d["rect"].height < 1.6 and 2 < d["rect"].width]
@@ -2487,13 +2552,13 @@ def read_pdf(path: str, ocr_engine: Optional[OcrEngine] = None, languages: Optio
                         progress(f"Running OCR on page {pno + 1} of {n}", pno / max(1, n))
                     lines, figs = _ocr_page(page, vno, ocr_engine, ocr_langs)
                     if kind == "mixed":
-                        text_lines = _text_lines(page, vno)
+                        text_lines = _text_lines(page, vno, known_word)
                         lines = text_lines + [l for l in lines
                                               if not any(overlap_ratio(l.bbox, t.bbox) > 0.3 for t in text_lines)]
                     rp.lines, rp.figures = lines, figs
                     info.ocr_used = True
             else:
-                all_lines = _text_lines(page, vno)
+                all_lines = _text_lines(page, vno, known_word)
                 rp.tables = _tables(page)
                 rp.tables += _rule_tables(page, rp.tables)
                 rp.tables += _caption_tables(page, all_lines, rp.tables)

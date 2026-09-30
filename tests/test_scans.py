@@ -230,3 +230,30 @@ def test_scanned_formulas_are_pictures_in_reading_order(tmp_path):
     at = [next(i for i, t in enumerate(seq) if t.startswith(o)) for o in order]
     assert at == sorted(at) and all(seq[i + 1] == "[F]" for i in at)  # each sentence, then its formula
     assert len(texts) > 5
+
+
+def _line(pieces):
+    """rawdict-like characters for a line: (text, room before it) pieces, letters 4 points wide."""
+    chars, x = [], 0.0
+    for text, room in pieces:
+        if chars:
+            chars.append({"c": " ", "bbox": (x, 0, x + room, 10)})
+            x += room
+        for ch in text:
+            chars.append({"c": ch, "bbox": (x, 0, x + 4, 10)})
+            x += 4
+    return chars
+
+
+def test_spaces_splitting_words_in_a_scan_text_layer_are_dropped():
+    from dyslexia_converter.extract.pdf_reader import _false_spaces
+    from dyslexia_converter.transform.spelling import Dictionary
+
+    known = Dictionary(["en"]).known
+    line = _line([("the", 0), ("Journal", 3), ("o", 3), ("f", 1.5), ("subm", 3), ("itted", 0.5), ("papers", 3),
+                  ("an", 3), ("apple", 3), ("in", 0.5), ("time", 3)])
+    text = "".join(c["c"] for k, c in enumerate(line) if k not in _false_spaces(line, 8.5, known))
+    # a lone letter joins even with a normal space; other pieces only with hardly any room, and two real
+    # words ("in time") stay apart
+    assert text == "the Journal of submitted papers an apple in time"
+    assert _false_spaces(line, 8.5, None) == set()
