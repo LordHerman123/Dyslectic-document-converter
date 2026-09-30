@@ -159,6 +159,21 @@ async def _read_everywhere(app, path):
     assert f._side_mode == "original" and not f._is_open(f.read_panel)
     f.on_original_panel(None)
     assert f._side_mode is None
+    # a selection with its Selection panel: sentence, paragraph, move the start and the end, close it again
+    if len(f.words) > 40:
+        await f.open_selection(20, 25)
+        await f.on_more(None)
+        assert f._more
+        class U:
+            control = type("C", (), {"selected": ["sentence"]})()
+        await f.on_unit(U())
+        U.control.selected = ["paragraph"]
+        await f.on_unit(U())
+        await f.nudge(0, 1)
+        await f.nudge(1, -1)
+        await f.on_more(None)
+        assert not f._more
+        await f.close_card(None)
     f._zoom_by(1.2)
     await f.on_layout(None)
     await f.turn(1)

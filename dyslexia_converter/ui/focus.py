@@ -1297,8 +1297,11 @@ class FocusMode:
                 self.open_card, self.words[a][0], a), visible=a == b),
             btn(ft.Icons.DELETE_OUTLINE, t("Remove"), lambda e: app.page.run_task(self.unmark, a, b),
                 visible=h is not None, tip=t("Remove the highlight (Delete)")),
-            ft.IconButton(ft.Icons.MORE_HORIZ, tooltip=t("More: select the sentence or paragraph, adjust"),
-                          on_click=self.on_more, selected=self._more, style=self._toggle_style()),
+            ft.TextButton(t("Selection"), icon=ft.Icons.EXPAND_MORE if self._more else ft.Icons.EXPAND_LESS,
+                          tooltip=t("Select the sentence or paragraph, or move the start or end"),
+                          on_click=self.on_more,
+                          style=ft.ButtonStyle(padding=ft.Padding.symmetric(horizontal=10),
+                                               bgcolor=ft.Colors.PRIMARY_CONTAINER if self._more else None)),
             ft.IconButton(ft.Icons.CLOSE, tooltip=t("Close (Esc)"), on_click=self.close_card),
         ], spacing=4, tight=True, wrap=True, alignment=ft.MainAxisAlignment.CENTER,
             vertical_alignment=ft.CrossAxisAlignment.CENTER),
@@ -1307,23 +1310,48 @@ class FocusMode:
             shadow=ft.BoxShadow(blur_radius=12, color="#40000000"))
         parts: list[ft.Control] = []
         if self._more:
-            nudge = lambda icon, tip, end, step: ft.IconButton(  # noqa: E731
-                icon, tooltip=tip, on_click=lambda e: app.page.run_task(self.nudge, end, step))
-            parts.append(ft.Container(ft.Column([
-                self._unit_row(),
-                ft.Row([app.text(t("Start"), 13),
-                        nudge(ft.Icons.CHEVRON_LEFT, t("One word earlier"), 0, -1),
-                        nudge(ft.Icons.CHEVRON_RIGHT, t("One word later"), 0, 1), ft.Container(width=12),
-                        app.text(t("End"), 13),
-                        nudge(ft.Icons.CHEVRON_LEFT, t("One word earlier"), 1, -1),
-                        nudge(ft.Icons.CHEVRON_RIGHT, t("One word later"), 1, 1)], spacing=0),
-            ], spacing=4, tight=True), bgcolor=ft.Colors.SURFACE_CONTAINER_HIGH, border_radius=16, padding=12,
-                shadow=ft.BoxShadow(blur_radius=12, color="#40000000")))
+            parts.append(self._selection_panel())
         parts.append(bar)
         return ft.Column(parts, spacing=8, tight=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
 
+    def _selection_panel(self) -> ft.Control:
+        """Above the toolbar, in the same style and only as wide as it needs: select the word, sentence or
+        paragraph, and move the start or the end of the selection by a word."""
+        app, t = self.app, self.app.t
+
+        def nudge(icon, tip, end, step):
+            """An arrow that moves the start (``end`` 0) or end (1) one word."""
+            return ft.IconButton(icon, tooltip=tip, icon_size=20, style=ft.ButtonStyle(padding=4),
+                                 on_click=lambda e: app.page.run_task(self.nudge, end, step))
+
+        def group(label, *controls):
+            """A label with its buttons, kept together when the row wraps."""
+            return ft.Row([app.text(label, 13, color=ft.Colors.ON_SURFACE_VARIANT), *controls], spacing=2,
+                          tight=True, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+
+        units = ft.SegmentedButton(
+            segments=[ft.Segment("word", label=ft.Text(t("Word"))),
+                      ft.Segment("sentence", label=ft.Text(t("Sentence"))),
+                      ft.Segment("paragraph", label=ft.Text(t("Paragraph")))],
+            selected=[self.sel_unit] if self.sel_unit else [], allow_empty_selection=True, show_selected_icon=False,
+            on_change=self.on_unit,
+            style=ft.ButtonStyle(padding=ft.Padding.symmetric(horizontal=12),
+                                 visual_density=ft.VisualDensity.COMPACT))
+        divider = ft.Container(width=1, height=24, bgcolor=ft.Colors.OUTLINE_VARIANT)
+        row = ft.Row([
+            group(t("Select"), ft.Container(width=6), units), divider,
+            group(t("Start"), nudge(ft.Icons.CHEVRON_LEFT, t("Start one word earlier"), 0, -1),
+                  nudge(ft.Icons.CHEVRON_RIGHT, t("Start one word later"), 0, 1)), divider,
+            group(t("End"), nudge(ft.Icons.CHEVRON_LEFT, t("End one word earlier"), 1, -1),
+                  nudge(ft.Icons.CHEVRON_RIGHT, t("End one word later"), 1, 1)),
+        ], spacing=14, tight=True, wrap=True, alignment=ft.MainAxisAlignment.CENTER,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER)
+        return ft.Container(row, bgcolor=ft.Colors.SURFACE_CONTAINER_HIGH, border_radius=28,
+                            padding=ft.Padding.symmetric(horizontal=18, vertical=6),
+                            shadow=ft.BoxShadow(blur_radius=12, color="#40000000"))
+
     async def on_more(self, e) -> None:
-        """•••: show or hide Select (word, sentence, paragraph) and moving the start and end."""
+        """Selection: show or hide Select (word, sentence, paragraph) and moving the start and end."""
         self._more = not self._more
         if self.sel:
             await self.open_selection(*self.sel)
