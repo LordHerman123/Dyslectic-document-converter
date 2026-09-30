@@ -185,3 +185,48 @@ def test_border_line_does_not_erase_letters_in_the_same_column():
     out = clear_edge_blobs(ink)
     assert not out[50:600, 30:33].any()  # the long line is removed
     assert out[650:950, 25:60].sum() == ink[650:950, 25:60].sum()  # the letters are kept
+
+
+def test_dot_leaders_are_found_and_text_is_left_alone():
+    """The rows of dots of a table of contents are taken out before OCR (it reads them as made-up words);
+    ordinary text, and a short "..." in it, is not touched."""
+    from PIL import ImageFont
+
+    from dyslexia_converter.extract.pdf_reader import _leader_spans
+
+    img = Image.new("L", (900, 120), 255)
+    d = ImageDraw.Draw(img)
+    font = ImageFont.load_default(size=22)
+    d.text((10, 10), "1. Introduction", font=font, fill=0)
+    for x in range(200, 820, 12):  # the leader: small dots on the baseline
+        d.rectangle((x, 28, x + 2, 30), fill=0)
+    d.text((840, 10), "2", font=font, fill=0)
+    d.text((10, 70), "Plain text with a pause... and more words here.", font=font, fill=0)
+    spans = _leader_spans(np.asarray(img) < 150)
+    assert len(spans) == 1
+    y0, y1, x0, x1 = spans[0]
+    assert y0 < 29 < y1 and 190 <= x0 <= 205 and 815 <= x1 <= 830
+
+
+@needs_tesseract
+def test_scanned_formulas_are_pictures_in_reading_order(tmp_path):
+    """On a scanned page, formulas become pictures of the page with all their pieces (limits, matrix rows,
+    "otherwise"), and the sentences between them stay text, in order."""
+    from pathlib import Path
+
+    src = pymupdf.open(Path(__file__).parent / "stress" / "s1_math.pdf")
+    out = pymupdf.open()
+    pix = src[0].get_pixmap(dpi=200, colorspace=pymupdf.csGRAY)
+    page = out.new_page(width=src[0].rect.width, height=src[0].rect.height)
+    page.insert_image(page.rect, stream=pix.tobytes("png"))
+    out.save(tmp_path / "scan.pdf")
+    doc = pipeline.load(tmp_path / "scan.pdf").document
+    seq = ["[F]" if b.kind == BlockKind.IMAGE else b.text for b in doc.blocks]
+    for stray in ("—x otherwise", "7 8 9", "n=l p prime", "—00"):
+        assert not any(stray in t for t in seq), stray
+    texts = [t for t in seq if t != "[F]"]
+    order = ["The Gaussian integral is", "Equation (1) is classical", "Without a number", "An aligned derivation",
+             "A piecewise definition", "Matrices and determinants"]
+    at = [next(i for i, t in enumerate(seq) if t.startswith(o)) for o in order]
+    assert at == sorted(at) and all(seq[i + 1] == "[F]" for i in at)  # each sentence, then its formula
+    assert len(texts) > 5

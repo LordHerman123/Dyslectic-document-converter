@@ -797,6 +797,11 @@ class StructureDetector:
             t = b.text.strip()
             if SPECIAL_HEADINGS.match(t) or len(t) > 250 or t.endswith("."):
                 break
+            if b.kind == BlockKind.HEADING and re.match(r"^\d+(\.\d+)*\.?\s+\S", t):
+                break  # "1 Introduction": the text has begun ("E. Edge" is an author with an initial)
+            n_words = len(t.split())
+            if n_words > 15 and t.count(",") < n_words / 8:
+                break  # running text (a list of names has a comma every few words)
             if re.search(r",|\band\b|\ben\b|&|\d|@", t) or len(t.split()) <= 6:
                 b.kind = BlockKind.AUTHORS
                 b.level = 0

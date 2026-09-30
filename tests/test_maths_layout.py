@@ -138,3 +138,22 @@ def test_narrow_gutter_plain_columns_do_not_merge(tmp_path):
     lines = pdf_reader._text_lines(pymupdf.open(path)[0], 0)
     assert lines and all(not ("Left" in l.text and "Right" in l.text) for l in lines)
     assert all(l.x1 < 297 or l.x0 > 297 for l in lines)
+
+
+def test_sum_with_limits_stays_in_its_sentence(maths):
+    """A sum at the start of a line keeps its limits (the upper one sits closer to the line above, the lower one is
+    partly set in the text font): the sentence stays one paragraph, with no stray "k=1" line."""
+    abstract = next(b for b in maths.blocks if "abstract itself contains a sum" in b.text)
+    assert "sum ∑k=1n k =" in abstract.text
+    assert not any(b.text.strip() in ("k=1", "∑", "n") for b in maths.blocks)
+
+
+def test_small_fraction_in_a_times_document():
+    """In a Times document the maths is set in Times italic: ½ (a small 1 and 2 around a short bar) is still a
+    fraction, and the first numbered heading after the author is a heading, not part of the author line."""
+    doc = load("s4_times.pdf")
+    item = next(b for b in doc.blocks if b.text.startswith("• Kinetic energy"))
+    assert "21mv" not in item.text
+    assert any(img.alt == "(1)/(2)" for img in doc.inline_images.values())
+    kinds = {b.text: b.kind for b in doc.blocks[:4]}
+    assert kinds["E. Edge"] == BlockKind.AUTHORS and kinds["1 Physics in Times"] == BlockKind.HEADING

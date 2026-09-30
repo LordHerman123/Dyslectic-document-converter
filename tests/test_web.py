@@ -127,6 +127,10 @@ been described since then, although several of them are now thought to be the sa
 <section data-mw-section-id="2"><h2 id="Behaviour">Behaviour</h2>
 <p>Red foxes are usually together in pairs or small groups consisting of families, such as a mated pair and their
 young, or a male with several females having kinship ties.</p></section>
+<section data-mw-section-id="3"><h2 id="References">References</h2><div class="mw-references-wrap">
+<ol class="mw-references references"><li id="cite_note-1"><span class="mw-cite-backlink"><a href="#cite_ref-1">↑</a>
+</span><span class="reference-text">Hoffmann, M. (2016). Vulpes vulpes. IUCN Red List of Threatened Species.</span>
+</li></ol></div></section>
 <div role="navigation" class="navbox" aria-labelledby="Carnivora">Carnivora: Felidae · Canidae · Ursidae</div>
 </body></html>"""
 
@@ -190,6 +194,7 @@ def test_wikipedia_article(tmp_path, api_status):
     saved = path.read_text(encoding="utf-8")
     assert path.name.startswith("Red fox (") and '<html lang="en">' in saved
     for kept in ("largest of the true foxes", "Taxonomy", "Linnaeus", "Behaviour", "kinship ties",
+                 "Hoffmann, M. (2016). Vulpes vulpes",  # the reference list stays (only the marks [1] go)
                  "A red fox in a garden", "data:image/png;base64,"):
         assert kept in saved, kept
     for clutter in ("Jump to content", "Main page", "Search Wikipedia", "150 languages", "Afrikaans", "(Top)",
@@ -200,7 +205,7 @@ def test_wikipedia_article(tmp_path, api_status):
     doc = pipeline.load(str(path), FormatSettings()).document
     assert doc.title == "Red fox" and doc.language == "en"
     heads = [b.text for b in doc.blocks if b.kind == BlockKind.HEADING]
-    assert heads == ["Red fox", "Taxonomy", "Behaviour"]
+    assert heads == ["Red fox", "Taxonomy", "Behaviour", "References"]
 
 
 def test_error_code_is_shown(tmp_path):
@@ -220,3 +225,19 @@ def test_wiki_formulas_are_written_as_text():
             'alt="{\\displaystyle \\pi r^{2}}"></span> for a circle.</p></article></body></html>')
     _, article, _ = web.extract_article(html, "https://en.wikipedia.org/wiki/Circle")
     assert "The area is <span" in article and "π r^2</span> for a circle." in article and "<math" not in article
+
+
+def test_pages_are_downloaded_without_httpx(site, tmp_path):
+    """The app downloads with Python's own urllib: some sites (Wikipedia) refuse connections made by httpx."""
+    assert isinstance(web._client(), web._Fetcher)
+    path = web.save_article(site + "/article.html", folder=tmp_path)
+    saved = path.read_text(encoding="utf-8")
+    assert "Where they live" in saved and saved.count("data:image/png;base64,") == 1
+
+
+def test_menus_next_to_each_other_all_go():
+    """Removing parts of a page while going through it must not skip the next one (two menus in a row)."""
+    html = ("<html><body><main><nav>First menu</nav><nav>Second menu</nav><nav>Third menu</nav>"
+            f"<p>{PARA * 3}</p></main></body></html>")
+    _, article, _ = web.extract_article(html, "https://example.org/a")
+    assert "menu" not in article

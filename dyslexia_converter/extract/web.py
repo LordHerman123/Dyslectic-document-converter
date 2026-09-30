@@ -35,8 +35,7 @@ _DROP_HINTS = re.compile(
     r"toolbar|skip-link|paywall|outbrain|taboola|byline-share|"
     # Wikipedia and other wikis: [edit] links, navigation boxes, "for other uses" notes, hidden short description
     r"navbox|navigation|editsection|noprint|metadata|shortdescription|hatnote|catlinks|printfooter|"
-    r"jump-link|cite-backlink|empty-elt|sistersitebox|portalbox|portlet|dropdown|"
-    r"reference)([\s_-]|$)", re.I)  # footnote marks like [1] in the text (the list of references stays)
+    r"jump-link|cite-backlink|empty-elt|sistersitebox|portalbox|portlet|dropdown)([\s_-]|$)", re.I)
 _HIDDEN_STYLE = re.compile(r"display\s*:\s*none|visibility\s*:\s*hidden", re.I)
 
 
@@ -72,21 +71,56 @@ def _headers(url: str) -> dict:
     return {}
 
 
-def _client():
-    import httpx
+class _Response:
+    """What a download gives back (the same fields as an httpx response, which the tests use)."""
 
-    return httpx.Client(timeout=TIMEOUT, follow_redirects=True, headers={"User-Agent": USER_AGENT})
+    def __init__(self, status_code: int, headers, content: bytes, url: str, encoding: Optional[str]):
+        self.status_code, self.headers, self.content, self.url, self.encoding = (status_code, headers, content, url,
+                                                                                 encoding)
+
+
+class _Fetcher:
+    """Downloads with Python's own ``urllib``. Some sites, Wikipedia among them, refuse connections made by other
+    HTTP libraries (httpx included) whatever the request says, but accept these."""
+
+    def get(self, url: str, headers: Optional[dict] = None) -> _Response:
+        import urllib.error
+        import urllib.request
+
+        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, **(headers or {})})
+        try:
+            with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+                return _Response(r.status, r.headers, r.read(MAX_PAGE + 1), r.geturl(),
+                                 r.headers.get_content_charset())
+        except urllib.error.HTTPError as e:  # the site answered, with an error
+            return _Response(e.code, e.headers, b"", url, None)
+
+    def close(self) -> None:
+        pass
+
+
+def _client():
+    return _Fetcher()
+
+
+def _network_errors() -> tuple:
+    errors: tuple = (OSError, ValueError)  # urllib's errors are OSErrors (a bad address is a ValueError)
+    try:
+        import httpx
+
+        errors += (httpx.HTTPError,)
+    except ImportError:
+        pass
+    return errors
 
 
 def download(url: str, client=None) -> tuple[str, str]:
     """(HTML text, final address after redirects) of a web page."""
-    import httpx
-
     own = client is None
     client = client or _client()
     try:
         r = client.get(url, headers=_headers(url))
-    except httpx.HTTPError as e:
+    except _network_errors() as e:
         raise WebPageError("The page could not be downloaded. Check the address and the internet "
                            "connection.", type(e).__name__) from e
     finally:
@@ -120,7 +154,10 @@ def extract_article(html: str, base_url: str = "") -> tuple[str, str, str]:
     for el in root.xpath("//comment()"):
         _drop(el)
     for tag in _DROP_TAGS:
-        for el in root.iter(tag):
+        for el in list(root.iter(tag)):  # a list first: removing while going through would skip some
+            _drop(el)
+    for el in list(root.iter("sup")):  # footnote marks like [1] in the text (the list of references stays)
+        if re.search(r"(^|\s)(reference|mw-ref)(\s|$)", el.get("class") or ""):
             _drop(el)
     for el in list(root.iter("header")):  # the page's header goes; a header inside the article (its title) stays
         if not any(a.tag in ("article", "main") for a in el.iterancestors()):
@@ -136,7 +173,7 @@ def extract_article(html: str, base_url: str = "") -> tuple[str, str, str]:
     best = _main_part(root)
     if best is None or len(_text(best)) < 200:
         raise WebPageError("No article text was found on this page")
-    for el in best.iter("a"):  # links are read as plain text
+    for el in list(best.iter("a")):  # links are read as plain text
         el.drop_tag()
     for img in best.iter("img"):  # lazy-loaded pictures keep their real address in data-src
         real = img.get("data-src") or img.get("data-original") or img.get("data-lazy-src")
@@ -192,6 +229,10 @@ def _replace_with_text(el, text: str) -> None:
     if parent is None:
         return
     prev = el.getprevious()
+    if text:
+        text = " " + text  # "the equation:a^2" -> "the equation: a^2" (the text before may be outside its parent)
+    if text and el.tail and el.tail[0].isalnum():
+        text += " "
     joined = text + (el.tail or "")
     parent.remove(el)
     if prev is not None:
@@ -256,7 +297,6 @@ def _escape(text: str) -> str:
 def embed_images(article: str, client=None) -> str:
     """The article with its pictures stored inside it (data: addresses), so the saved copy is complete on its own;
     pictures that cannot be downloaded are left out."""
-    import httpx
     from lxml import etree, html as lh
 
     root = lh.fragment_fromstring(article, create_parent="div")
@@ -273,7 +313,7 @@ def embed_images(article: str, client=None) -> str:
         count += 1
         try:
             r = client.get(src, headers=_headers(src))
-        except httpx.HTTPError:
+        except _network_errors():
             return ""
         kind = r.headers.get("content-type", "").split(";")[0]
         if r.status_code >= 400 or not kind.startswith("image/") or len(r.content) > MAX_IMAGE:
