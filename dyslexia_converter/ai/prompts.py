@@ -93,6 +93,33 @@ OCR = Task(
 )
 
 
+SPLITS = Task(
+    name="splits",
+    system=(
+        "You help a tool that makes documents easier to read for people with dyslexia. "
+        "You answer one narrow question and never rewrite text.\n\n"
+        f"Each numbered line holds a few words of a document with two pieces marked {M0}like this{M1}. Scanning "
+        "and copying text out of PDFs sometimes puts a space inside a word. Decide for each whether the marked "
+        "pieces are one word wrongly split by a space. Letters used as symbols or names (a variable, an "
+        "initial, a unit) and two real words are not split words.\n"
+        'Answer with JSON: {"j": [ids of the lines whose pieces are ONE word]}. Leave out every other line.\n\n'
+        "Examples\n"
+        f"0: …papers {M0}subm itted{M1} to the journal were…\n"
+        f"1: …for every integer of {M0}degree n{M1} we find that…\n"
+        f"2: …the Journal {M0}o f{M1} Natural Pharmaceuticals…\n"
+        f"3: …signed by {M0}A T{M1} Smith and…\n"
+        f"4: …it was a {M0}lit tle{M1} too late to…\n"
+        f"5: …costs grow {M0}since r{M1} is larger than…\n"
+        f"6: …{M0}W hen{M1} the editors replied…\n"
+        'Answer: {"j": [0, 2, 4, 6]}'
+    ),
+    schema={"type": "object", "additionalProperties": False, "required": ["j"],
+            "properties": {"j": {"type": "array", "items": {"type": "integer"}}}},
+    answer_hint='Answer with JSON only: {"j": [ids]}',
+    tokens_per_item=3,
+)
+
+
 def citation_prompt(snippets: list[str]) -> str:
     """The snippets of one request, numbered from 0, one per line."""
     return "\n".join(f"{i}: {s}" for i, s in enumerate(snippets))
@@ -126,6 +153,38 @@ SUMMARY = Task(
         'Answer: {"t": "How plants make food", "b": ["Plants use light to make their own food (sugar).", '
         '"The green substance chlorophyll takes in the sunlight.", "They use carbon dioxide and water, and give '
         'off oxygen.", "Smith (2019) says light and temperature change how fast this goes."]}'
+    ),
+    schema={"type": "object", "additionalProperties": False, "required": ["t", "b"],
+            "properties": {"t": {"type": "string"}, "b": {"type": "array", "items": {"type": "string"}}}},
+    answer_hint='Answer with JSON only: {"t": "title", "b": ["point", ...]}',
+    tokens_per_item=700,
+)
+
+
+EXPLAIN = Task(
+    name="explain",
+    system=(
+        "You help people with dyslexia understand academic texts. The reader chose a short part they find hard "
+        "to follow. You explain what it means, so they can go back to the text and understand it. The "
+        "explanation is shown next to the original text, never instead of it.\n\n"
+        "Rules:\n"
+        "- Explain only what the text says and means. Do not add facts, opinions or advice, and do not judge it.\n"
+        "- Write in the language given on the first line (the document's language).\n"
+        "- Use short sentences (at most 15 words) and everyday words.\n"
+        "- First 2 to 5 points that say what the text means, in order. Then, for up to 4 difficult words or "
+        "terms from the text, one point each: 'term: what it means here'.\n"
+        "- Keep who says what: 'The author argues...', not as if it were a fact.\n"
+        "- Give a short title that says what the part is about.\n"
+        'Answer with JSON: {"t": "title", "b": ["point", "point", ...]}.\n\n'
+        "Example\n"
+        "Language: en\nText:\n"
+        "Heteronormative assumptions in curricula marginalise students whose identities fall outside them, "
+        "Jones (2018) contends, thereby reproducing structural inequities.\n"
+        'Answer: {"t": "How school lessons can leave students out", "b": ["Jones (2018) looks at what lessons '
+        'take for granted.", "Lessons often assume everyone is straight.", "Jones says this pushes other '
+        'students to the side.", "In this way, unfair patterns in society keep going.", "heteronormative: '
+        'taking for granted that everyone is straight", "curricula: what is taught at school", "structural '
+        'inequities: unfairness built into how society works"]}'
     ),
     schema={"type": "object", "additionalProperties": False, "required": ["t", "b"],
             "properties": {"t": {"type": "string"}, "b": {"type": "array", "items": {"type": "string"}}}},
@@ -194,6 +253,12 @@ def summary_prompt(text: str, language: str, detailed: bool, plain: bool) -> str
             f"Style: {'plain' if plain else 'normal'}\nText:\n{text}\n\n"
             f"Cover the whole text in {points}. Write the title and points in "
             f"{LANGUAGE_NAMES.get(language, language)}.")
+
+
+def explain_prompt(text: str, language: str) -> str:
+    """The request to explain one part of the document."""
+    return (f"Language: {language}\nText:\n{text}\n\n"
+            f"Write the title and points in {LANGUAGE_NAMES.get(language, language)}.")
 
 
 CHECK = Task(

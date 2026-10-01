@@ -472,6 +472,43 @@ def word_rejoiner(dictionary: Dictionary):
     return decide
 
 
+_SPLIT_SPACE = re.compile(r"(?<=[^\W\d_]) (?=[^\W\d_])")
+_GLUE = {"is", "and", "or", "of", "to", "in", "the", "for", "on", "at", "by", "as", "if", "be", "are", "was",
+         "with", "from", "that", "then", "than", "we", "it"}
+_WORD_EDGE = "-\u2010\u2011'\u2019.@/"  # a piece next to these is part of something else ("e-mail", "U.S.")
+
+
+def split_word_candidates(text: str, dictionary: Dictionary) -> list[tuple[int, int, str]]:
+    """Places where a space may split one word ("subm itted", "lit tle", "o f"), for the AI to confirm: taking
+    the space out makes a known word, and the pieces are not both words. (start, end of the two pieces, the
+    joined word)."""
+    def word(w: str) -> bool:
+        return dictionary.known(w) and (len(w) > 1 or w in "aAI")
+
+    out = []
+    for m in _SPLIT_SPACE.finditer(text):
+        a = m.start()
+        while a > 0 and text[a - 1].isalpha():
+            a -= 1
+        z = m.end()
+        while z < len(text) and text[z].isalpha():
+            z += 1
+        left, right = text[a:m.start()], text[m.end():z]
+        if not left or not right or left.lower() in _GLUE or right.lower() in _GLUE:
+            continue  # "x is", "s and", "to b": a symbol or letter next to a small word
+        if (a > 0 and text[a - 1] in _WORD_EDGE) or (z < len(text) and text[z] in _WORD_EDGE):
+            continue
+        if right[0].isupper() and not left.isupper():
+            continue  # "theNew": a new word or name starts
+        if word(left) and word(right):
+            continue
+        joined = left + right
+        if len(joined) > 2 and dictionary.known(joined) or joined.lower() in ("of", "by", "to", "in", "on", "at",
+                                                                               "is", "it", "or", "as", "an", "be"):
+            out.append((a, z, joined))
+    return out
+
+
 def dehyphenator(dictionary: Dictionary):
     """Decide whether ``left-`` + ``right`` at a line break is one word."""
 

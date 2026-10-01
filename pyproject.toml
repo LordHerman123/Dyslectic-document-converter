@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dyslexia-converter"
-version = "1.14.1"
+version = "1.15.0"
 description = "Convert PDFs (papers, textbooks, reports) into cleaner, dyslexia-friendly, printable layouts without changing the text."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -50,3 +50,18 @@ company = "Dyslexia Converter"
 
 [tool.flet.app]
 path = "."
+exclude = ["tests", "windows", "docs", "tools", "dist", ".github", "epubcheck-5.3.0-py3-none-any.whl",
+           "tablib-3.10.0-py3-none-any.whl", "xlrd-2.0.2-py2.py3-none-any.whl", "xlwt-1.3.0-py2.py3-none-any.whl"]
+# the build uses [project] dependencies plus these (the app itself, reading aloud, and dropping files on the window)
+
+[tool.flet.windows]
+dependencies = [
+    "flet==1.0.1", "flet-dropzone==0.4.0", "pyttsx3>=2.90", "pywin32>=306",
+    "winrt-runtime>=2.3", "winrt-Windows.Media.SpeechSynthesis>=2.3", "winrt-Windows.Media.Core>=2.3",
+    "winrt-Windows.Storage.Streams>=2.3", "winrt-Windows.Foundation>=2.3",
+    "winrt-Windows.Foundation.Collections>=2.3",
+]
+
+# flet-dropzone's Flutter side asks for flet ^0.80; it works with the flet 1.0.1 client this app is built with
+[tool.flet.flutter.pubspec.dependency_overrides]
+flet = "1.0.1"

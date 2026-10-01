@@ -136,6 +136,32 @@ def test_user_can_retype_a_badly_read_line(tmp_path):
     assert session.pending_corrections() == [suggestion]
 
 
+def test_words_picked_in_focus_mode_can_be_retyped(tmp_path):
+    text = "Submitted to the Journal o f Natural\nPharmaceuticals by an author."
+    session, doc, block = _session_with(tmp_path, text, "Journal", "Journal")
+    doc.corrections[0].status = "auto"
+    where = session.find_passage("Journal o f Natural Pharmaceuticals")   # as the words are shown
+    assert where is not None and session.passage_as_shown(*where) == "Journal o f Natural\nPharmaceuticals"
+    edit = session.edit_passage(*where, "Journal of Natural Pharmaceuticals")
+    assert (edit.source, edit.status) == ("user", "accepted")
+    assert doc.display_text(block) == "Submitted to the Journal of Natural Pharmaceuticals by an author."
+    assert block.text == text                            # the original is kept
+    session.remove_user_edit(edit.id)                    # undo
+    assert doc.display_text(block) == text
+    assert session.find_passage("reference [12]") is None  # not in the text: nothing to edit
+    assert session.edit_passage(*where, " Journal o f  Natural Pharmaceuticals") is None  # unchanged
+
+
+def test_corrected_words_are_found_as_shown(tmp_path):
+    text = "The rnodel works well."
+    session, doc, block = _session_with(tmp_path, text, "rnodel", "model")
+    doc.corrections[0].status = "auto"
+    where = session.find_passage("model works")
+    assert where == ("b1", 4, 16) and session.passage_as_shown(*where) == "model works"
+    session.edit_passage(*where, "model runs")
+    assert doc.display_text(block) == "The model runs well."
+
+
 def test_unchanged_edit_does_nothing(tmp_path):
     session, doc, _ = _session_with(tmp_path, "One two thre four. Five.", "thre", "three")
     assert session.edit_text(doc.corrections[0], "One two thre four.") is None

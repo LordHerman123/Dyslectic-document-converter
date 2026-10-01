@@ -67,7 +67,10 @@ def _app_dirs() -> list[Path]:
         meipass = getattr(sys, "_MEIPASS", None)
         if meipass:
             dirs.append(Path(meipass))
-    dirs.append(Path(__file__).resolve().parents[2])
+    here = Path(__file__).resolve()
+    dirs.append(here.parents[2])
+    # an app made with `flet build` keeps the Python code a few folders below the .exe: look up to there
+    dirs += [p for p in here.parents[3:8] if p not in dirs]
     return dirs
 
 

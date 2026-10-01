@@ -461,9 +461,67 @@ def _join_drop_caps(spans: list[_Span]) -> list[_Span]:
     return out
 
 
-def _page_spans(page: pymupdf.Page) -> list[_Span]:
+def _false_spaces(chars: list[dict], size: float, known_word: Optional[Callable[[str], bool]]) -> set[int]:
+    """Indices of spaces in one line of the PDF's text that split a word ("o f", "com puter", "W hen"), as the text
+    layers of some scanned articles have: there is hardly any room for them (a real space on the line leaves
+    about twice as much), and taking them out makes a known word, from pieces that are not both words."""
+    if known_word is None:
+        return set()
+    gaps: list[tuple[int, int, float]] = []  # (first space, next letter, room between the letters around it)
+    prev = None
+    i = 0
+    while i < len(chars):
+        if chars[i]["c"].isspace():
+            j = i
+            while j < len(chars) and chars[j]["c"].isspace():
+                j += 1
+            if prev is not None and j < len(chars):
+                gaps.append((i, j, chars[j]["bbox"][0] - chars[prev]["bbox"][2]))
+            i = j
+            continue
+        prev = i
+        i += 1
+    if len(gaps) < 3:
+        return set()
+    typical = statistics.median(g for _, _, g in gaps)
+    if typical < 0.2 * size:
+        return set()  # a tightly set line: no room to tell false spaces from real ones
+
+    def piece(k: int, step: int) -> str:
+        """The run of letters from index ``k`` going left (-1) or right (+1)."""
+        out = ""
+        while 0 <= k < len(chars) and chars[k]["c"].isalpha():
+            out = out + chars[k]["c"] if step > 0 else chars[k]["c"] + out
+            k += step
+        return out
+
+    def word(w: str) -> bool:
+        return len(w) > 1 or w in "aAI"
+
+    def lone(w: str, other: str) -> bool:
+        """A single letter that is not a word by itself ("o f", "b y", "j ournals", "W hen")."""
+        return len(w) == 1 and not word(w) and (w.islower() or (len(other) > 1 and other.islower()))
+
+    drop: set[int] = set()
+    for start, nxt, gap in gaps:
+        left, right = piece(start - 1, -1), piece(nxt, 1)
+        if not left or not right:
+            continue
+        # a lone letter can't stand by itself, so its space may be as wide as a real one (the text layer spaces
+        # letters evenly); anything else must have clearly less room than the spaces around it
+        loose = lone(left, right) or lone(right, left)
+        if gap >= 0.3 * size or (not loose and (gap >= 0.5 * typical or gap >= 0.25 * size)):
+            continue
+        both_words = word(left) and word(right) and known_word(left) and known_word(right)
+        if not both_words and known_word(left + right):
+            drop.update(range(start, nxt))
+    return drop
+
+
+def _page_spans(page: pymupdf.Page, known_word: Optional[Callable[[str], bool]] = None) -> list[_Span]:
     """Every horizontal run of text on a page, in unrotated page coordinates (rotated text such as margin notes and
-    watermarks is left out).
+    watermarks is left out). With ``known_word``, spaces that split a word in the PDF's text are taken out
+    (see :func:`_false_spaces`).
     """
     d = page.get_text("rawdict", flags=pymupdf.TEXTFLAGS_RAWDICT & ~pymupdf.TEXT_PRESERVE_IMAGES)
     to_page, to_dir = _page_mapper(page)
@@ -475,8 +533,11 @@ def _page_spans(page: pymupdf.Page) -> list[_Span]:
             dx, dy = to_dir(line["dir"])
             if abs(dy) > 0.1 or dx < 0:  # rotated text (margins, watermarks)
                 continue
+            line_chars = [c for span in line["spans"] for c in span.get("chars", [])]
+            size = max((span["size"] for span in line["spans"]), default=10.0)
+            false = {id(line_chars[k]) for k in _false_spaces(line_chars, size, known_word)}
             for span in line["spans"]:
-                chars = span.get("chars", [])
+                chars = [c for c in span.get("chars", []) if id(c) not in false]
                 t = "".join(c["c"] for c in chars)
                 if not t or not t.strip():
                     continue  # word gaps are recovered from positions
@@ -494,12 +555,14 @@ def _page_spans(page: pymupdf.Page) -> list[_Span]:
     return spans
 
 
-def _attach_small(sp: _Span, rows: list[dict], rules: Optional[list[Rect]]) -> bool:
-    """Put a sub-/superscript, limit or fraction part on the line it belongs to; False if none fits."""
+def _attach_small(sp: _Span, rows: list[dict], rules: Optional[list[Rect]], math_like: frozenset = frozenset()) -> bool:
+    """Put a sub-/superscript, limit or fraction part on the line it belongs to; False if none fits.
+    ``math_like``: ids of small spans in a text font that are part of a formula (they touch a maths span)."""
     # maths indices and limits can sit a little apart from their line; small print in the text font (a
     # footnote marker, 'th') follows its word directly, and a smaller line beyond a column gutter is not part
     # of it at all
-    math = is_math_font(sp.font) or bool(re.match(r"^(CMEX|MTEX|TXEX|PXEX|RMTEX)", base_font(sp.font), re.I))
+    math = is_math_font(sp.font) or bool(re.match(r"^(CMEX|MTEX|TXEX|PXEX|RMTEX)", base_font(sp.font), re.I)) \
+        or id(sp) in math_like
     if not math and len(sp.text.strip()) > 12:
         return False
 
@@ -657,13 +720,18 @@ def _rows(spans: list[_Span], rules: Optional[list[Rect]] = None) -> list[list[_
         row["x0"] = min(o.x0 for o in row["spans"])
         row["x1"] = max(o.x1 for o in row["spans"])
     orphans: list[_Span] = list(small)
+    # an index set in the text font right against a maths index ("=1" after the "k" of k=1 under a sum) is part
+    # of the formula: it is placed like maths
+    math_like = frozenset(id(sp) for sp in small if not is_math_font(sp.font) and any(
+        is_math_font(o.font) and abs(o.baseline - sp.baseline) < 0.3 * sp.size and
+        (abs(o.x1 - sp.x0) < 1.0 or abs(sp.x1 - o.x0) < 1.0) for o in small))
     # repeated, so that a chain of pieces (a sum sign, its index, then the text) grows its line leftwards
     progress = True
     while progress and orphans:
         progress = False
         pending, orphans = orphans, []
         for sp in pending:
-            if _attach_small(sp, rows, rules):
+            if _attach_small(sp, rows, rules, math_like):
                 progress = True
             else:
                 orphans.append(sp)
@@ -806,9 +874,13 @@ def _group_scripts(row: list[_Span], baseline: float, ref_size: float, skip: dic
     return out
 
 
-def _text_lines(page: pymupdf.Page, pno: int) -> list[RawLine]:
-    """The text lines of a page, with bold/italic/math styles, formulas recognised and indices placed."""
-    spans = _join_drop_caps(_page_spans(page))
+def _text_lines(page: pymupdf.Page, pno: int, known_word: Optional[Callable[[str], bool]] = None) -> list[RawLine]:
+    """The text lines of a page, with bold/italic/math styles, formulas recognised and indices placed.
+    ``known_word`` is used to take out spaces that split words, only on a page whose text lies over a picture of
+    the whole page: text made by OCR software (a typeset page spaces symbols and initials tightly on purpose)."""
+    if known_word is not None and image_coverage(page) < 0.9:
+        known_word = None
+    spans = _join_drop_caps(_page_spans(page, known_word))
     try:
         rules = [tuple(d["rect"]) for d in page.get_drawings()
                  if d["rect"].height < 1.6 and 2 < d["rect"].width]
@@ -861,7 +933,9 @@ def _text_lines(page: pymupdf.Page, pno: int) -> list[RawLine]:
         right_edge = 0.0  # rightmost ink so far (stacked indices end at different points)
         inline_images: dict[str, ImageData] = {}
         stack_of: dict[int, int] = {}
-        stacks = _stacks(row, rules, baseline, max_size) if any(is_math_font(sp.font) for sp in row) else []
+        # (also on lines without a maths font: in a Times document the maths is set in Times italic, and ½ is a
+        # small 1 and 2 around a short bar)
+        stacks = _stacks(row, rules, baseline, max_size) if rules or any(is_math_font(sp.font) for sp in row) else []
         for k, (_r, members, _t) in enumerate(stacks):
             for sp in members:
                 stack_of[id(sp)] = k
@@ -1859,7 +1933,7 @@ def _caption_tables(page: pymupdf.Page, lines: list[RawLine], existing: list[Raw
 def _ocr_image(png: bytes, dpi: int, width_pt: float, height_pt: float, pno: int, engine: OcrEngine,
                languages: list[str], crop: Callable[[Rect], ImageData]) -> tuple[list[RawLine], list[RawFigure]]:
     """OCR one image and return lines/figures in points relative to that image."""
-    res = engine.recognize(png, languages)
+    res = engine.recognize(_without_leaders(png), languages)
     scale = 72.0 / dpi
     groups: dict[tuple[int, int, int], list] = {}
     for w in res.words:
@@ -1899,6 +1973,76 @@ def _ocr_image(png: bytes, dpi: int, width_pt: float, height_pt: float, pno: int
     return lines, figures + formulas
 
 
+def _leader_spans(ink: np.ndarray) -> list[tuple[int, int, int, int]]:
+    """Rows of dots in a black-and-white page image (``ink``: True where there is ink), as (y0, y1, x0, x1): the
+    dot leaders between a title and its page number in a table of contents. Each text line is looked at on its
+    own: a leader is at least five tiny specks low on the line, one after the other at a regular distance."""
+    rows = ink.any(axis=1)
+    spans = []
+    y = 0
+    n = len(rows)
+    while y < n:
+        if not rows[y]:
+            y += 1
+            continue
+        y0 = y
+        while y < n and rows[y]:
+            y += 1
+        band = ink[y0:y]
+        h = y - y0
+        if h < 6:
+            continue
+        cols = band.any(axis=0)
+        if cols.sum() < 20:
+            continue
+        top = np.where(cols, band.argmax(axis=0), 0)
+        bottom = np.where(cols, h - 1 - band[::-1].argmax(axis=0), 0)
+        # specks: short blobs (a dot is at most about a third of the line high) in the lower part of the line
+        dots = []
+        xs = np.flatnonzero(cols)
+        start = prev = int(xs[0])
+        for x in list(xs[1:]) + [None]:
+            if x is not None and x == prev + 1:
+                prev = int(x)
+                continue
+            t, b = int(top[start:prev + 1].min()), int(bottom[start:prev + 1].max())
+            if prev - start + 1 <= max(4, 0.35 * h) and b - t + 1 <= max(4, 0.35 * h) and t > 0.4 * h:
+                dots.append((start, prev))
+            else:
+                dots.append(None)  # a letter or other mark: ends a row of dots
+            if x is not None:
+                start = prev = int(x)
+        run: list = []
+        for d in dots + [None]:
+            if d is not None and (not run or d[0] - run[-1][1] <= 1.6 * h):
+                run.append(d)
+                continue
+            if len(run) >= 5:
+                gaps = [b[0] - a[1] for a, b in zip(run, run[1:])]
+                if max(gaps) <= 3 * max(1, min(gaps)) + 2:  # evenly spaced
+                    spans.append((y0, y, run[0][0], run[-1][1] + 1))
+            run = [d] if d is not None else []
+    return spans
+
+
+def _without_leaders(png: bytes) -> bytes:
+    """The page image with the rows of dots of a table of contents taken out: OCR reads them as made-up words,
+    and they make it misread the titles next to them."""
+    from PIL import Image
+
+    im = Image.open(io.BytesIO(png)).convert("L")
+    gray = np.asarray(im)
+    spans = _leader_spans(gray < 150)
+    if not spans:
+        return png
+    clean = gray.copy()
+    for y0, y1, x0, x1 in spans:
+        clean[y0:y1, x0:x1] = 255
+    buf = io.BytesIO()
+    Image.fromarray(clean).save(buf, format="PNG")
+    return buf.getvalue()
+
+
 def _scan_formulas(lines: list[RawLine], width: float, crop: Callable[[Rect], ImageData]
                    ) -> tuple[list[RawFigure], list[RawLine]]:
     """OCR cannot read formulas: on a scanned page, lines that look like displayed mathematics (set apart,
@@ -1909,11 +2053,32 @@ def _scan_formulas(lines: list[RawLine], width: float, crop: Callable[[Rect], Im
     left = sorted(l.x0 for l in long)[len(long) // 5]
     right = sorted(l.x1 for l in long)[len(long) * 4 // 5]
     text_w = max(1.0, right - left)
+    # a page in columns: "set apart" is measured within the column of the line, not across the page
+    columns: list[list[RawLine]] = []
+    for l in sorted(long, key=lambda l: l.x0):
+        if columns and l.x0 - columns[-1][0].x0 < 0.15 * width:
+            columns[-1].append(l)
+        else:
+            columns.append([l])
+    columns = [c for c in columns if len(c) >= max(3, 0.15 * len(long))]
+    bounds_of = []
+    if len(columns) >= 2:
+        for c in columns:
+            c_left = sorted(l.x0 for l in c)[len(c) // 5]
+            c_right = sorted(l.x1 for l in c)[len(c) * 4 // 5]
+            bounds_of.append((c_left, c_right, max(1.0, c_right - c_left)))
+
+    def bounds(l: RawLine) -> tuple[float, float, float]:
+        """(left, right, width) of the text the line is set in: its column, or the page's text."""
+        if not bounds_of:
+            return left, right, text_w
+        return max(bounds_of, key=lambda b: min(b[1], l.x1) - max(b[0], l.x0))
 
     def formula_like(l: RawLine) -> bool:
         """Whether an OCR line looks like a formula OCR could not read (set apart, few real words, low
         confidence, or an equation number).
         """
+        left, right, text_w = bounds(l)
         body = re.sub(r"\s", "", l.text)
         if len(body) < 3 or (len(body) <= 5 and re.fullmatch(r"[\divxlcIVXLC.\-–—]+", body)):
             return False  # page numbers
@@ -1922,32 +2087,78 @@ def _scan_formulas(lines: list[RawLine], width: float, crop: Callable[[Rect], Im
         conf = sum(c.confidence for c in l.conf) / len(l.conf) if l.conf else 100.0
         set_apart = l.x0 - left > 0.12 * text_w and right - l.x1 > 0.12 * text_w
         numbered = bool(re.search(r"\(\d{1,3}[a-z]?\)\s*$", l.text)) and l.x1 > right - 0.05 * text_w
+        indented = l.x0 - left > 0.12 * text_w  # (an equation number may reach the right edge, read as "A)")
         return (set_apart and letters < 0.5 and conf < 85) or (numbered and letters < 0.5) or \
+            (indented and conf < 50 and letters < 0.5) or \
             (set_apart and conf < 55 and letters < 0.7) or (letters < 0.3 and conf < 70 and len(body) <= 40) or \
             (letters < 0.2 and len(body) <= 30 and bool(re.search(r"[=+<>|/()\[\]{}^_]", body)))
     flagged = [l for l in lines if formula_like(l)]
     if not flagged:
         return [], lines
+
+    def fragment(l: RawLine) -> bool:
+        """A piece of a formula OCR read as a line of its own (a limit under an integral, a matrix row, "if x > 0",
+        "otherwise"): set in from the margin, not a full line, and at most one real word."""
+        left, _right, text_w = bounds(l)
+        return l.x0 - left > 0.08 * text_w and l.x1 - l.x0 < 0.75 * text_w and \
+            len(re.findall(r"[A-Za-z]{4,}", l.text)) <= 1 and len(re.sub(r"\s", "", l.text)) <= 30
+
+    flagged_ids = {id(l) for l in flagged}
+    text_lines = [l for l in lines if id(l) not in flagged_ids and not fragment(l)]
+
+    def text_between(r: Rect, l: RawLine) -> bool:
+        """Whether an ordinary line of text lies between a formula region and a line (they are separate then:
+        "Equation (1) is classical." between two formulas)."""
+        top, bottom = (r[3], l.y0) if l.y0 >= r[3] else (l.y1, r[1])
+        return any(m.y0 >= top - 1 and m.y1 <= bottom + 1 for m in text_lines)
+
     regions: list[list] = []
     for l in sorted(flagged, key=lambda l: l.y0):
         for reg in regions:
             r = reg[0]
-            if l.y0 - r[3] < 1.5 * l.size and min(r[2], l.x1) - max(r[0], l.x0) > -0.1 * text_w:
+            if l.y0 - r[3] < 1.5 * l.size and min(r[2], l.x1) - max(r[0], l.x0) > -0.1 * text_w and \
+                    not text_between(r, l):
                 reg[0] = _union(r, l.bbox)
                 reg[1].append(l)
                 break
         else:
             regions.append([l.bbox, [l]])
+
+    grown = True
+    while grown:  # take in the pieces touching a formula (each piece can bring the next one)
+        grown = False
+        taken = {id(m) for reg in regions for m in reg[1]}
+        for l in lines:
+            if id(l) in taken or not fragment(l):
+                continue
+            for reg in regions:
+                r = reg[0]
+                near = max(l.size, 8.0)
+                beside = min(r[3], l.y1) - max(r[1], l.y0) > 0.5 * (l.y1 - l.y0) and \
+                    bounds(l) == bounds(reg[1][0])  # on the same line in the same column (a formula and its number)
+                if l.y0 < r[3] + near and l.y1 > r[1] - near and not text_between(r, l) and \
+                        (beside or min(r[2], l.x1) - max(r[0], l.x0) > -0.5 * near):
+                    reg[0] = _union(r, l.bbox)
+                    reg[1].append(l)
+                    grown = True
+                    break
     figures: list[RawFigure] = []
     used: set[int] = set()
     for rect, members in regions:
-        pad = 0.35 * max(l.size for l in members)
+        # parts OCR did not see (a brace, a limit) stick out; a tall formula (brackets) reads as a big "size", so
+        # the room is at most about a line of the running text
+        body = float(statistics.median(l.size for l in long))
+        pad = min(0.8 * max(l.size for l in members), 1.2 * body)
         # small pieces OCR dropped (a denominator, an index) sit just above or below: take some room, but
         # not into the text lines around it
-        others = [l for l in lines if l not in members and min(l.x1, rect[2]) - max(l.x0, rect[0]) > 0]
+        # (any line above or below counts, also one beside it at the margin: the picture must not start above it,
+        # or it would be read before it)
+        others = [l for l in lines if l not in members]
         top = max([l.y1 + 0.5 for l in others if l.y1 <= rect[1] + 1] + [rect[1] - pad])
         bottom = min([l.y0 - 0.5 for l in others if l.y0 >= rect[3] - 1] + [rect[3] + pad])
-        box = (max(0.0, rect[0] - pad), max(0.0, top), min(width, rect[2] + pad), bottom)
+        # at the sides more room: a big symbol OCR did not see (a sum or integral sign) often starts the formula
+        side = max(pad, 0.9 * body)
+        box = (max(0.0, rect[0] - side), max(0.0, top), min(width, rect[2] + side), bottom)
         img = crop(box)
         img.kind = "equation"
         img.alt = "formula (see the picture)"
@@ -2341,13 +2552,13 @@ def read_pdf(path: str, ocr_engine: Optional[OcrEngine] = None, languages: Optio
                         progress(f"Running OCR on page {pno + 1} of {n}", pno / max(1, n))
                     lines, figs = _ocr_page(page, vno, ocr_engine, ocr_langs)
                     if kind == "mixed":
-                        text_lines = _text_lines(page, vno)
+                        text_lines = _text_lines(page, vno, known_word)
                         lines = text_lines + [l for l in lines
                                               if not any(overlap_ratio(l.bbox, t.bbox) > 0.3 for t in text_lines)]
                     rp.lines, rp.figures = lines, figs
                     info.ocr_used = True
             else:
-                all_lines = _text_lines(page, vno)
+                all_lines = _text_lines(page, vno, known_word)
                 rp.tables = _tables(page)
                 rp.tables += _rule_tables(page, rp.tables)
                 rp.tables += _caption_tables(page, all_lines, rp.tables)

@@ -1,0 +1,92 @@
+name: Windows build with drag and drop (experimental)
+
+# Builds the Windows app with `flet build`, which compiles Flet's Flutter client together with the flet-dropzone
+# extension, so files can be dropped onto the app's window. (The regular release workflow uses `flet pack` with
+# Flet's ready-made client, which cannot include extensions.) Tesseract is bundled next to the .exe as before.
+# The result is a zip to try out, available under the workflow run's artifacts.
+on:
+  push:
+    branches: [experimental]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Flet's build tools and Tesseract (to bundle)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt "flet-cli==1.0.1" "flet==1.0.1" "flet-dropzone==0.4.0"
+          choco install tesseract -y --no-progress
+
+      - name: Switch dropping files on the window on
+        shell: pwsh
+        run: New-Item -ItemType File -Force dyslexia_converter/assets/dropzone.enabled | Out-Null
+
+      - name: flet build windows
+        shell: pwsh
+        env:
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: "1"
+        run: flet build windows --yes --verbose --product "Dyslexia Converter" --project DyslexiaConverter
+
+      - name: Bundle Tesseract next to the app
+        shell: pwsh
+        run: |
+          $out = "build/windows"
+          Get-ChildItem $out
+          $src = "C:\Program Files\Tesseract-OCR"
+          New-Item -ItemType Directory -Force "$out/tesseract/tessdata" | Out-Null
+          Copy-Item "$src\*.exe","$src\*.dll" "$out/tesseract/" -Force
+          foreach ($lang in "eng","nld","deu","fra","spa","ita","por","osd") {
+            $f = "$src\tessdata\$lang.traineddata"
+            if (Test-Path $f) { Copy-Item $f "$out/tesseract/tessdata/" }
+            else { Invoke-WebRequest "https://github.com/tesseract-ocr/tessdata_fast/raw/main/$lang.traineddata" -OutFile "$out/tesseract/tessdata/$lang.traineddata" }
+          }
+          if (Test-Path "$src\tessdata\configs") { Copy-Item "$src\tessdata\configs" "$out/tesseract/tessdata/" -Recurse }
+
+      - name: Start the app and let it convert a scanned PDF from inside (window built, Python and Tesseract work)
+        shell: pwsh
+        run: |
+          python tests/make_samples.py selftest
+          $here = (Get-Location).Path
+          $env:DYSLEXIA_CONVERTER_READY_FILE = "$here\selftest\ready.txt"
+          $env:DYSLEXIA_CONVERTER_SELFTEST = "$here\selftest\sample_scanned.pdf;$here\selftest\out.pdf;$here\selftest\report.txt"
+          $env:PATH = "C:\Windows\System32;C:\Windows"   # only the bundled Tesseract can be used
+          $exe = Get-ChildItem build/windows -Filter *.exe | Where-Object { $_.Name -notlike "tesseract*" } | Select-Object -First 1
+          Write-Host "Starting $($exe.FullName)"
+          $p = Start-Process -FilePath $exe.FullName -PassThru
+          $waited = 0
+          function Reported { (Test-Path "selftest\ready.txt") -and (Select-String -Path "selftest\ready.txt" -Pattern "ready|error" -Quiet) }
+          while (-not (Reported) -and $waited -lt 240) {
+            if ($p.HasExited) { throw "the app closed by itself (exit code $($p.ExitCode))" }
+            Start-Sleep -Seconds 5; $waited += 5
+          }
+          if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force }
+          if (-not (Test-Path selftest\ready.txt)) { throw "the app did not report that it started (Python did not run?)" }
+          Get-Content selftest\ready.txt
+          if (Test-Path selftest\report.txt) { Get-Content selftest\report.txt }
+          if (Select-String -Path selftest\ready.txt -Pattern "^error" -Quiet) { throw "the app stopped with an error" }
+          if (-not (Select-String -Path selftest\ready.txt -Pattern "selftest exit 0" -Quiet)) { throw "the self-test failed" }
+          if (-not (Select-String -Path selftest\report.txt -Pattern "tesseract" -Quiet)) { throw "the bundled Tesseract was not used" }
+
+      - name: Zip
+        shell: pwsh
+        run: |
+          $version = python -c "import dyslexia_converter as d; print(d.__version__)"
+          Compress-Archive -Path build/windows/* -DestinationPath "DyslexiaConverter-$version-dragdrop-windows.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DyslexiaConverter-dragdrop-windows
+          path: DyslexiaConverter-*-dragdrop-windows.zip

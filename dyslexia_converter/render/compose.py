@@ -382,7 +382,10 @@ def _about_text(doc: Document, s: FormatSettings, citations_moved: bool) -> str:
     from pathlib import Path
 
     lang = doc.language or "en"
-    parts = [doc_label(lang, "about_source", file=Path(doc.source_path).name, font=s.font,
+    source = Path(doc.source_path).name
+    if source.lower().endswith((".html", ".htm")) and doc.title:  # a saved web page: its title, not the file name
+        source = doc.title
+    parts = [doc_label(lang, "about_source", file=source, font=s.font,
                        size=f"{s.font_size:g}", spacing=f"{s.line_spacing:g}")]
     parts.append(doc_label(lang, "about_wording"))
     if doc.ocr_used:

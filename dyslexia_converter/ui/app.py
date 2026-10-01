@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -20,12 +21,15 @@ from ..ai.keystore import ENV_VARS, KeyStore, install_log_redaction, redact
 from ..ai.providers import PROVIDERS, AIError
 from .. import DONATE_URL, PROJECT_URL, __version__
 from ..extract.ocr import default_engine, find_tesseract
+from ..extract import web
+from ..extract.structured import ProtectedFile
 from ..fonts import FONT_CHOICES, get_family
 from ..render import preview
 from ..settings import PRESET_DISCLAIMER, PRESETS, FormatSettings, SettingsStore
 from ..transform.spelling import CustomWords
 from .check_panel import CheckPanel
 from .focus import FocusMode
+from .reflow import ReflowMode
 from .sleepy_dog import sleepy_dog
 from .i18n import LANGUAGES, Translator, system_language
 from .theme import make_theme, palette
@@ -105,6 +109,7 @@ class ConverterApp:
         self.doc_key: Optional[str] = None
         self.hl_items: list = []  # ("Include my highlights" divider, menu item) of each export menu
         self.focus = FocusMode(self)
+        self.reflow = ReflowMode(self)  # the reading view: the text itself, flowing to fit the window
         self.checker = CheckPanel(self)  # the whole-document AI check
         self._read_units: Optional[list] = None  # sentences of the converted PDF, made when reading starts
         self._read_pos: Optional[int] = None  # sentence being read (kept when paused)
@@ -182,6 +187,9 @@ class ConverterApp:
         """The close button of a notice."""
         idx = e.control.data
         if 0 <= idx < len(getattr(self, "_notices", [])):
+            action = self._notices[idx][2]
+            if action and action[0] == self.t("Download") and getattr(self, "_update_dismiss", None):
+                self._update_dismiss()  # not shown again for this version
             del self._notices[idx]
         self._render_notices()
         self.page.update()
@@ -242,11 +250,13 @@ class ConverterApp:
                                 tooltip=t("Where your document content is processed"))
         logo = ft.Image(src="logo_small.png", width=self.fs(38), height=self.fs(38), semantics_label="Logo",
                         filter_quality=ft.FilterQuality.HIGH)
-        open_btn = ft.FilledButton(t("Open PDF"), icon=ft.Icons.FOLDER_OPEN, on_click=self.on_open,
+        open_btn = ft.FilledButton(t("Open file"), icon=ft.Icons.FOLDER_OPEN, on_click=self.on_open,
                                    tooltip=t("Choose a PDF to convert"))
+        web_btn = ft.OutlinedButton(t("Web page"), icon=ft.Icons.LANGUAGE, on_click=self.on_open_web,
+                                    tooltip=t("Open an article from a web page"))
         header = ft.Container(
             ft.Row([
-                ft.Row([logo, self.text("Dyslexia Converter", 22, weight=ft.FontWeight.BOLD), open_btn,
+                ft.Row([logo, self.text("Dyslexia Converter", 22, weight=ft.FontWeight.BOLD), open_btn, web_btn,
                         self.coffee_button()], spacing=12, wrap=True, expand=True,
                        vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 self.mode_chip,  # pushed to the far right
@@ -282,9 +292,59 @@ class ConverterApp:
                 ft.TabBar(tabs=[ft.Tab(label=label, icon=i) for label, i, _ in tabs], scrollable=True),
                 ft.TabBarView(controls=[c for _, _, c in tabs], expand=True),
             ], expand=True, spacing=0))
-        p.add(ft.Column([header, ft.Container(ft.Column([self.status, self.progress, self.notices], spacing=4),
-                                              padding=ft.Padding.symmetric(horizontal=16)),
-                         self.tabs], expand=True, spacing=4))
+        body = ft.Column([header, ft.Container(ft.Column([self.status, self.progress, self.notices], spacing=4),
+                                               padding=ft.Padding.symmetric(horizontal=16)),
+                          self.tabs], expand=True, spacing=4)
+        p.add(self._with_file_drop(body))
+
+    # ---------------------------------------------------------------- dropping a file on the window
+    def _with_file_drop(self, body: ft.Control) -> ft.Control:
+        """The window's content, which also takes a PDF, Word or EPUB file dropped on it from the file explorer.
+
+        Dropping needs the flet-dropzone extension, which only an app built with `flet build` has (the build puts
+        ``assets/dropzone.enabled`` next to the app); otherwise the content is returned as it is and files are
+        opened with the Open button, or by dropping them on the app's icon.
+        """
+        zone = file_drop_support()
+        if zone is None:
+            return body
+        t = self.t
+        self.drop_hint = ft.Container(
+            ft.Column([ft.Icon(ft.Icons.FILE_DOWNLOAD_OUTLINED, size=self.fs(64), color=ft.Colors.PRIMARY),
+                       self.text(t("Drop the file to open it"), 22, weight=ft.FontWeight.BOLD),
+                       self.text(t("PDF, Word (.docx) or EPUB"), 14, color=self.pal["muted"])],
+                      horizontal_alignment=ft.CrossAxisAlignment.CENTER, alignment=ft.MainAxisAlignment.CENTER,
+                      tight=True, spacing=8),
+            alignment=ft.Alignment.CENTER, bgcolor=ft.Colors.with_opacity(0.92, ft.Colors.SURFACE),
+            border=ft.Border.all(3, ft.Colors.PRIMARY), border_radius=16, margin=12,
+            left=0, top=0, right=0, bottom=0, visible=False)
+        return zone.Dropzone(content=ft.Stack([body, self.drop_hint], expand=True), expand=True,
+                             allowed_file_types=[ext.lstrip(".") for ext in OPENABLE],
+                             on_dropped=self.on_file_dropped, on_entered=self._drop_hover(True),
+                             on_exited=self._drop_hover(False))
+
+    def _drop_hover(self, on: bool):
+        def handler(e=None):
+            self.drop_hint.visible = on
+            self.drop_hint.update()
+        return handler
+
+    async def on_file_dropped(self, e) -> None:
+        """A file was dropped on the window: open it (the first PDF, Word or EPUB file among those dropped)."""
+        self.drop_hint.visible = False
+        self.drop_hint.update()
+        paths = [f.path for f in getattr(e, "files", []) if f.path]
+        path = file_from_args(paths)
+        if not path:
+            self.notify(self.t("Drop a PDF, Word (.docx) or EPUB file to open it."))
+            return
+        if self.focus.active:
+            await self.focus.close()
+        if self.reflow.active:
+            await self.reflow.close()
+        self.tabs.selected_index = 0
+        self.source_path = path
+        await self.load_document()
 
     async def rebuild(self, tab: Optional[int] = None) -> None:
         """Build the whole window again (after changing the app language or text size), keeping the document."""
@@ -564,15 +624,21 @@ class ConverterApp:
                                 vertical_alignment=ft.CrossAxisAlignment.START, visible=self.session is not None)
         self.empty_state = ft.Container(ft.Column([
             sleepy_dog(self.fs(200)),
-            self.text(t("Open a PDF to start"), 22, weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER),
+            self.text(t("Open a document to start"), 22, weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER),
             self.text(t("The converted version appears here next to the original, so you can compare them. "
                         "Your original file is never changed."), 15, text_align=ft.TextAlign.CENTER,
                       color=self.pal["muted"]),
             ft.Container(height=6),
-            ft.FilledButton(t("Open PDF"), icon=ft.Icons.FOLDER_OPEN, on_click=self.on_open,
-                            style=ft.ButtonStyle(padding=ft.Padding.symmetric(horizontal=28, vertical=18))),
-            self.text(t("Articles, book chapters and scans all work. Change the layout on the left at any time."),
+            ft.Row([
+                ft.FilledButton(t("Open file"), icon=ft.Icons.FOLDER_OPEN, on_click=self.on_open,
+                                style=ft.ButtonStyle(padding=ft.Padding.symmetric(horizontal=28, vertical=18))),
+                ft.OutlinedButton(t("Web page"), icon=ft.Icons.LANGUAGE, on_click=self.on_open_web,
+                                  style=ft.ButtonStyle(padding=ft.Padding.symmetric(horizontal=22, vertical=18))),
+            ], alignment=ft.MainAxisAlignment.CENTER, spacing=10, wrap=True),
+            self.text(t("PDFs (articles, book chapters, scans), Word files, EPUB books and web articles all work. Change the layout on the left at any time."),
                       13, text_align=ft.TextAlign.CENTER, color=self.pal["muted"]),
+            self.text(t("Or drop a file anywhere in this window."), 13, text_align=ft.TextAlign.CENTER,
+                      color=self.pal["muted"], visible=file_drop_support() is not None),
         ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=12, tight=True, width=460),
             alignment=ft.Alignment.CENTER, expand=True, visible=self.session is None, border_radius=16,
             bgcolor=ft.Colors.SURFACE_CONTAINER_LOW)
@@ -620,7 +686,7 @@ class ConverterApp:
         t = self.t
         self.update_review_notice()
         self.review_list.controls.clear()
-        if not self.session or not self.session.document.ocr_used:
+        if not self.session or not (self.session.document.ocr_used or self.session.document.corrections):
             self.review_summary.value = t("No OCR was needed for this document.") if self.session else \
                 t("No scanned document loaded.")
             return
@@ -839,7 +905,7 @@ class ConverterApp:
         import time
         t = self.t
         task = {"citations": t("Citations"), "summary": t("Summary"), "check": t("Connection check"),
-                "layout": t("Page layout")}.get(
+                "layout": t("Page layout"), "explain": t("Explanation")}.get(
             e.task, t("OCR words"))
         stamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(e.when))
         title = f"{stamp} · {task} · {e.provider} / {e.model}"
@@ -1176,7 +1242,7 @@ class ConverterApp:
                  ft.Text(t("This is exactly the document text that will be sent:"), size=self.fs(14),
                          weight=ft.FontWeight.BOLD)]
         for r in requests:
-            label = {"citations": t("Citations"), "layout": t("Page layout: the first and last words of each "
+            label = {"citations": t("Citations"), "splits": t("Words that may be split by a space"), "layout": t("Page layout: the first and last words of each "
                                                               "piece of the page")}.get(r.task.name, t("OCR words"))
             lines.append(ft.Text(label, size=self.fs(13), weight=ft.FontWeight.BOLD))
             lines.append(ft.Container(ft.Text(r.prompt, size=self.fs(12), selectable=True),
@@ -1249,7 +1315,11 @@ class ConverterApp:
                 self.text(t("Focus mode keeps the pages it has drawn there too, so a document you open again "
                             "shows at once."), 13),
                 ft.Row([ft.OutlinedButton(t("Clear saved page pictures"), icon=ft.Icons.DELETE_OUTLINE,
-                                          on_click=self.on_clear_page_cache)])], ft.Icons.LOCK_OUTLINE),
+                                          on_click=self.on_clear_page_cache)]),
+                ft.Switch(label=t("Tell me when a new version is out"), value=bool(self.ui.get("check_updates", True)),
+                          on_change=self.on_check_updates, label_text_style=ft.TextStyle(size=self.fs(14))),
+                self.text(t("The app asks GitHub once a day which version is the newest. Nothing about you or your "
+                            "documents is sent."), 12, color=ft.Colors.ON_SURFACE_VARIANT)], ft.Icons.LOCK_OUTLINE),
             self.card(t("Support"), [
                 self.text(t("The app is free. If it helps you, you can buy the maker a coffee. This is "
                             "completely optional and changes nothing in the app."), 13),
@@ -1325,6 +1395,11 @@ class ConverterApp:
         """Delete the saved OCR results (scanned documents are then read again when opened)."""
         n = await self.in_thread(pipeline.clear_ocr_cache)
         self.notify(self.t("Saved OCR results cleared ({n} document(s)).", n=n))
+
+    def on_check_updates(self, e):
+        """Switch the daily check for a new version on or off."""
+        self.ui["check_updates"] = bool(e.control.value)
+        self.store.save_ui(self.ui)
 
     async def on_clear_page_cache(self, e):
         """Delete the page pictures focus mode kept (they are drawn again when needed)."""
@@ -1493,6 +1568,36 @@ class ConverterApp:
                                        self.end_space()], scroll=ft.ScrollMode.AUTO, expand=True),
                             padding=ft.Padding.only(left=16, right=16, top=4), expand=True)
 
+    # ================================================================ updates
+    async def check_for_update(self) -> None:
+        """Tell the reader when a newer version is out (asks GitHub at most once a day, in the background; see
+        :mod:`..updates`). The notice has a download button and can be dismissed for that version."""
+        from .. import updates
+
+        found = await self.in_thread(updates.check, self.ui)
+        self.store.save_ui(self.ui)  # when it last asked
+        if not found:
+            return
+        version, url = found
+
+        async def download(e):
+            """Open the release page in the web browser."""
+            try:
+                await ft.UrlLauncher().launch_url(url)
+            except Exception:
+                self.notify(url)
+
+        def dismiss(e=None):
+            self.ui["update_dismissed"] = version
+            self.store.save_ui(self.ui)
+
+        msg = self.t("Version {version} is available (you have {current}). Download it from the project page.",
+                     version=version, current=__version__)
+        self._notices = [("info", msg, (self.t("Download"), download))] + getattr(self, "_notices", [])
+        self._update_dismiss = dismiss
+        self._render_notices()
+        self.page.update()
+
     # ================================================================ dialogs
     def show_start_notice(self) -> None:
         """At start: the converter changes how a document looks, never what it says; the layout can go wrong,
@@ -1558,7 +1663,8 @@ class ConverterApp:
     # ================================================================ events
     async def on_open(self, e):
         """Open PDF: choose a file (in the web version it is uploaded to a private working copy) and load it."""
-        files = await self.file_picker.pick_files(dialog_title=self.t("Choose a PDF"), allowed_extensions=["pdf"],
+        files = await self.file_picker.pick_files(dialog_title=self.t("Choose a PDF, Word or EPUB file"),
+                                                  allowed_extensions=[x.lstrip(".") for x in OPENABLE],
                                                   file_type=ft.FilePickerFileType.CUSTOM,
                                                   with_data=self.page.web)
         if not files:
@@ -1573,6 +1679,56 @@ class ConverterApp:
             Path(path).write_bytes(f.bytes)
         self.source_path = path
         await self.load_document()
+
+    async def on_open_web(self, e):
+        """Open a web page: ask for its address, download the article (without menus, adverts and the like) and
+        open it like a document. The page is only requested from its own site; a copy is kept on this device."""
+        t = self.t
+        field = ft.TextField(label=t("Address of the page"), hint_text="https://", autofocus=True,
+                             keyboard_type=ft.KeyboardType.URL, text_size=self.fs(15), width=self.fs(460))
+        fut: asyncio.Future = asyncio.get_running_loop().create_future()
+
+        def close(result):
+            """A handler that closes the dialog with the typed address (or None for Cancel)."""
+            def handler(_):
+                """Close the dialog and give the answer."""
+                self.page.pop_dialog()
+                if not fut.done():
+                    fut.set_result(field.value if result else None)
+            return handler
+
+        field.on_submit = close(True)
+        self.page.show_dialog(ft.AlertDialog(
+            modal=True, title=self.text(t("Open a web page"), 18, weight=ft.FontWeight.BOLD),
+            content=ft.Column([
+                self.text(t("Paste the address of an article. Only the article is kept: menus, adverts and "
+                            "comments are left out. Pages behind a login or paywall cannot be opened."), 13),
+                field], tight=True, spacing=12),
+            actions=[ft.TextButton(t("Cancel"), on_click=close(False)),
+                     ft.FilledButton(t("Open"), icon=ft.Icons.DOWNLOAD, on_click=close(True))]))
+        address = await fut
+        if not address or not address.strip():
+            return
+        self.busy(True, t("Downloading the web page..."))
+        try:
+            path = await self.in_thread(web.save_article, address)
+        except web.WebPageError as ex:
+            self.busy(False, t("Could not open the web page."))
+            self.notify(t(str(ex)) + (f" ({ex.detail})" if ex.detail else ""), error=True)
+            return
+        except Exception as ex:
+            self.busy(False, t("Could not open the web page."))
+            self.notify(t("Could not open the web page.") + " " + redact(str(ex)), error=True)
+            return
+        self.source_path = str(path)
+        await self.load_document()
+
+    @property
+    def original_view(self):
+        """The original as pages for the Original view: the PDF itself, or a Word or EPUB file laid out as a PDF."""
+        if self.session is not None and self.session.original_pdf:
+            return self.session.original_pdf
+        return self.source_path
 
     async def on_page_range(self, e):
         """The page range changed: load the document again with it."""
@@ -1597,6 +1753,14 @@ class ConverterApp:
         d = self.session.document
         name = Path(self.source_path).name
         scanner_text = any(p.text_source == "scanner" for p in d.pages)
+        if self.session.original_pdf:  # a Word or EPUB file: its text and structure are read directly
+            low = name.lower()
+            kind = t("an EPUB book") if low.endswith(".epub") else t("a web page") \
+                if low.endswith((".html", ".htm")) else t("a Word document")
+            if low.endswith((".html", ".htm")) and d.title:  # a saved web page: its title, not the file name
+                name = d.title
+            return t("{name}: {kind}. Language: {language}.", name=name, kind=kind,
+                     language=self.lang_name(d.language))
         kind = {"text": t("selectable text"),
                 "scanned": t("scanned pages (the scanner's stored text was used)") if scanner_text
                 else t("scanned pages (text read with OCR)"),
@@ -1623,9 +1787,21 @@ class ConverterApp:
             self.session = await self.in_thread(
                 lambda: pipeline.load(self.source_path, self.settings, progress=progress,
                                       custom_words=self.custom_words, pages=self._page_range()))
+        except ProtectedFile as ex:  # copy protection or a password: say what it is and what to do
+            self.busy(False, self.t("Could not read {name}.", name=name))
+            if ex.kind == "password":
+                msg = self.t("This Word file is protected with a password. Open it in Word, remove the password "
+                             "(File > Info > Protect Document), save it, and open it here again.")
+            else:
+                msg = self.t("This e-book is copy-protected (DRM) by the shop it came from, so only that shop's "
+                             "reading app can open it. The converter cannot read protected books. Books without "
+                             "DRM work: many shops sell them, and libraries such as Project Gutenberg and "
+                             "Standard Ebooks are free.")
+            self.notify(msg, error=True)
+            return
         except Exception as ex:
             self.busy(False, self.t("Could not read {name}.", name=name))
-            self.notify(self.t("Could not read this PDF:") + " " + redact(str(ex)), error=True)
+            self.notify(self.t("Could not read this file:") + " " + redact(str(ex)), error=True)
             return
         d = self.session.document
         if self.checker.open:  # the findings were about the previous document
@@ -1637,9 +1813,9 @@ class ConverterApp:
             self.doc_key = None
         self.update_highlight_option()
         self.pages_row.visible, self.empty_state.visible = True, False
-        self.orig_count = preview.page_count(self.source_path)
+        self.orig_count = preview.page_count(self.original_view)
         self.orig_page = (self._page_range() or (1, 1))[0] - 1
-        self.conv_page = 0
+        self.conv_page = int(self.reading_position("focus", 0))  # where this document was left last time
         self.busy(False, self.doc_status())
         self._update_doc_language_option()
         self._notices = [("warning", w, None) for w in d.warnings]
@@ -1748,10 +1924,17 @@ class ConverterApp:
             self.read_btn.disabled = True
             self.read_btn.tooltip = t("No speech voices were found on this device.") + (
                 f" ({self.speaker.last_error})" if self.speaker.last_error else "")
-        self.read_row = ft.Row([
+        self.read_along_btn = ft.OutlinedButton(
+            t("Read along"), icon=ft.Icons.CHROME_READER_MODE_OUTLINED, on_click=self.on_reflow,
+            tooltip=t("Read the text itself, flowing to fit the window, with the sentence and word being read "
+                      "marked; size, spacing and colours change at once"))
+        controls = ft.Row([
             self.read_btn, self.stop_btn, self.tap_btn, ft.Container(width=6),
             self.text(t("Speed"), 13), self.speed_slider, self.speed_label, self.voice_dd, self.follow_cb,
-        ], wrap=True, spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+        ], wrap=True, spacing=6, expand=True, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+        # Read along on the right of the first line (the controls wrap under themselves, not under it)
+        self.read_row = ft.Row([controls, ft.Container(self.read_along_btn, padding=ft.Padding.only(top=8))],
+                               spacing=8, vertical_alignment=ft.CrossAxisAlignment.START)
         self.read_panel = ft.Container(self.read_row, padding=ft.Padding.symmetric(horizontal=8, vertical=2),
                                        border_radius=10, bgcolor=ft.Colors.SURFACE_CONTAINER_LOW,
                                        visible=self._speech_allowed() and bool(self.ui.get("read_panel_open", False)))
@@ -1765,10 +1948,17 @@ class ConverterApp:
                                                 tooltip=t("Show or hide the read-aloud controls"))
         self.focus_btn = ft.OutlinedButton(t("Focus mode"), icon=ft.Icons.FULLSCREEN, on_click=self.on_focus,
                                            tooltip=t("Read the converted document in the whole window"))
+        # read along lives in the read-aloud panel; where speech is not available (the web version) that panel is
+        # hidden, so it gets its own button here
+        self.reflow_btn = ft.OutlinedButton(t("Read along"), icon=ft.Icons.CHROME_READER_MODE_OUTLINED,
+                                            on_click=self.on_reflow, visible=not self._speech_allowed(),
+                                            tooltip=t("Read the text itself, flowing to fit the window: change "
+                                                      "the size and spacing at once"))
         self.hl_items = []
         self.export_menu = self.build_export_menu()
         return ft.Row([self.view_seg, self.read_toggle, ft.Container(expand=True), self.checker.button(),
-                       self.focus_btn, self.export_menu], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+                       self.reflow_btn, self.focus_btn, self.export_menu], spacing=10,
+                      vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
     def build_export_menu(self, compact: bool = False) -> ft.PopupMenuButton:
         """One "Export" button; the formats (and whether to include highlights) are in its menu."""
@@ -1837,6 +2027,34 @@ class ConverterApp:
     async def on_focus(self, e):
         """The Focus mode button."""
         await self.focus.open()
+
+    async def on_reflow(self, e):
+        """The Read along button (in the read-aloud panel, also in focus mode)."""
+        if self.focus.active:
+            await self.focus.close()
+        await self.reflow.open()
+
+    # ---------------------------------------------------------------- where each document was left
+    POSITIONS_KEPT = 200
+
+    def reading_position(self, kind: str, default=0):
+        """Where the open document was left in ``kind`` ("focus": a page, "reflow": a paragraph)."""
+        if not self.doc_key:
+            return default
+        return self.ui.get("positions", {}).get(self.doc_key, {}).get(kind, default)
+
+    def save_reading_position(self, kind: str, value) -> None:
+        """Remember where the open document was left (kept on this device, for the last 200 documents)."""
+        if not self.doc_key:
+            return
+        positions = dict(self.ui.get("positions", {}))
+        entry = dict(positions.pop(self.doc_key, {}))
+        entry[kind] = value
+        positions[self.doc_key] = entry  # the most recent last
+        while len(positions) > self.POSITIONS_KEPT:
+            positions.pop(next(iter(positions)))
+        self.ui["positions"] = positions
+        self.store.save_ui(self.ui)
 
     def _speech_allowed(self) -> bool:
         """Speech plays on the computer running the app: in the web version that is the server, not the reader."""
@@ -1991,7 +2209,7 @@ class ConverterApp:
                         before = self.orig_page
                         self._original_follows(1)
                         if self.orig_page != before and self.source_path:
-                            self.orig_img.src = await self.in_thread(preview.render_page, self.source_path,
+                            self.orig_img.src = await self.in_thread(preview.render_page, self.original_view,
                                                                      self.orig_page, 800)
                             self.orig_label.value = f"{self.t('Original')} {self.orig_page + 1} / {self.orig_count}"
                 rects = [r for w in sentence.words if w.page == page for r in w.rects]
@@ -2076,7 +2294,7 @@ class ConverterApp:
     async def show_pages(self) -> None:
         """Render and show the current original and converted pages in the preview."""
         if self.source_path:
-            self.orig_img.src = await self.in_thread(preview.render_page, self.source_path, self.orig_page, 800)
+            self.orig_img.src = await self.in_thread(preview.render_page, self.original_view, self.orig_page, 800)
             self.orig_label.value = f"{self.t('Original')} {self.orig_page + 1} / {self.orig_count}"
         if self.converted_pdf:
             self.conv_img.src = await self.in_thread(preview.render_page, self.converted_pdf, self.conv_page, 800)
@@ -2224,11 +2442,73 @@ def _blank_png() -> bytes:
 
 
 def main(page: ft.Page) -> None:
-    """Flet entry point: build the app in the window Flet gives us."""
-    app = ConverterApp(page)
-    app.build()
-    page.update()
+    """Flet entry point: build the app in the window Flet gives us.
+
+    For checking a packaged app (see the Windows build workflows): with DYSLEXIA_CONVERTER_READY_FILE set, the app
+    writes "ready <version>" there once its window is built (or the error that stopped it); with
+    DYSLEXIA_CONVERTER_SELFTEST="input.pdf;output.pdf;report.txt" it also runs the self-test from inside the app.
+    """
+    import os
+    import traceback
+
+    ready = os.environ.get("DYSLEXIA_CONVERTER_READY_FILE")
+    try:
+        app = ConverterApp(page)
+        app.build()
+        page.update()
+    except Exception:
+        if ready:
+            Path(ready).write_text("error\n" + traceback.format_exc(), encoding="utf-8")
+        raise
+    if ready:
+        from .. import __version__ as version
+
+        check = os.environ.get("DYSLEXIA_CONVERTER_SELFTEST")
+
+        async def report():
+            code = None
+            if check:
+                from ..selftest import run as selftest
+
+                code = await asyncio.to_thread(selftest, check.split(";"))
+            Path(ready).write_text(f"ready {version}" + (f"\nselftest exit {code}" if check else ""),
+                                   encoding="utf-8")
+        page.run_task(report)
     app.show_start_notice()
+    page.run_task(app.check_for_update)
+    start_file = file_from_args(sys.argv[1:])
+    if start_file:  # a file dropped on the app's icon, or opened with "Open with": convert it straight away
+        app.source_path = start_file
+        page.run_task(app.load_document)
+
+
+OPENABLE = (".pdf", ".docx", ".epub", ".html", ".htm")
+
+
+def file_drop_support():
+    """The flet-dropzone module when this app can take files dropped on its window, else None: the extension must
+    be installed and built into the app (`flet build` with the marker file ``assets/dropzone.enabled``, or the
+    environment variable DYSLEXIA_CONVERTER_DROP=1 when running such a build from source)."""
+    import os
+
+    marker = Path(__file__).resolve().parent.parent / "assets" / "dropzone.enabled"
+    if not (marker.is_file() or os.environ.get("DYSLEXIA_CONVERTER_DROP") == "1"):
+        return None
+    try:
+        import flet_dropzone
+    except ImportError:
+        return None
+    return flet_dropzone
+
+
+def file_from_args(args: list[str]) -> Optional[str]:
+    """The document to open at start: the first argument that is an existing PDF, Word or EPUB file (Windows passes
+    the file when one is dropped on the app's icon or opened with "Open with")."""
+    for a in args:
+        p = Path(a.strip('"'))
+        if p.suffix.lower() in OPENABLE and p.is_file():
+            return str(p)
+    return None
 
 
 ASSETS_DIR = str(Path(__file__).resolve().parent.parent / "assets")

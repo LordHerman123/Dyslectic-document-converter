@@ -18,12 +18,13 @@ from typing import Callable, Iterable, Optional
 from . import check
 from .extract.ocr import OcrEngine, default_engine
 from .extract.pdf_reader import read_pdf
-from .model import Correction, Document
+from .extract.structured import is_structured, read_structured
+from .model import BlockKind, Correction, Document, effective_corrections
 from .render.compose import ComposeResult, compose
 from .settings import FormatSettings
 from .structure.detector import StructureDetector
 from .transform.spelling import (CustomWords, Dictionary, OcrCorrector, dehyphenator, detect_language,
-                                 word_rejoiner)
+                                 split_word_candidates, word_rejoiner)
 
 # end of a sentence: . ! ? (optionally followed by a closing quote/bracket) and then a space
 SENTENCE_END_RE = re.compile(r"[.!?][\"'”’)\]]*\s+")
@@ -61,6 +62,8 @@ class Session:
     check_run: bool = False  # whether the AI check ran on this document
     # how to build the document again with a reading order from the AI, and the pieces of unusual pages
     _build: Optional[Callable] = field(default=None, repr=False)
+    # a Word or EPUB file laid out as pages (PDF) for the Original view; None for a PDF (shown as it is)
+    original_pdf: Optional[bytes] = field(default=None, repr=False)
     _layout_pieces: dict = field(default_factory=dict, repr=False)
 
     # ------------------------------------------------------------ the whole-document AI check
@@ -357,6 +360,66 @@ class Session:
                                      if not (x.source == "user" and x.overlaps(edit))] + [edit]
         return edit
 
+    def find_passage(self, words: str) -> Optional[tuple[str, int, int]]:
+        """Where words picked in the converted document (focus mode) are in the text: (block id, start, end) in
+        the block's original text, or None if they are not found (moved or added by the converter, such as
+        reference numbers). Words that were corrected are found as shown, and the passage is widened to whole
+        corrections."""
+        import unicodedata
+
+        parts = unicodedata.normalize("NFKC", words).split()
+        if not parts:
+            return None
+        # the words in order, with any spacing (or a hyphen at the end of a line) between them
+        pattern = re.compile(r"(?<!\w)" + r"(?:\s+|-\s*\n\s*)".join(re.escape(p) for p in parts) + r"(?!\w)")
+        for b in self.document.blocks:
+            shown, origin = self._shown_with_origin(b)
+            m = pattern.search(shown)
+            if m:
+                return b.id, min(origin[k][0] for k in range(m.start(), m.end())), \
+                    max(origin[k][1] for k in range(m.start(), m.end()))
+        return None
+
+    def _shown_with_origin(self, b) -> tuple[str, list[tuple[int, int]]]:
+        """A block's text as shown (with its corrections) and, per character, the original text it comes from."""
+        out: list[str] = []
+        origin: list[tuple[int, int]] = []
+        pos = 0
+        for c in sorted((c for c in effective_corrections(self.document.corrections_for(b.id))
+                         if b.text[c.start:c.end] == c.original), key=lambda c: c.start):
+            if c.start < pos:
+                continue  # overlaps one already put in
+            out.append(b.text[pos:c.start])
+            origin += [(k, k + 1) for k in range(pos, c.start)]
+            out.append(c.replacement)
+            origin += [(c.start, c.end)] * len(c.replacement)
+            pos = c.end
+        out.append(b.text[pos:])
+        origin += [(k, k + 1) for k in range(pos, len(b.text))]
+        return "".join(out), origin
+
+    def passage_as_shown(self, block_id: str, start: int, end: int) -> str:
+        """The original text ``start:end`` of a block with its applied corrections put in."""
+        b = self.document.block(block_id)
+        if b is None:
+            return ""
+        shown, origin = self._shown_with_origin(b)
+        return "".join(ch for ch, (s, e) in zip(shown, origin) if start <= s and e <= end)
+
+    def edit_passage(self, block_id: str, start: int, end: int, new_text: str) -> Optional[Correction]:
+        """The user retyped the words ``start:end`` of a block (picked in focus mode). Stored like
+        :meth:`edit_text`: only the changed words, as a correction of source "user" that can be undone."""
+        b = self.document.block(block_id)
+        new = " ".join(new_text.split())
+        if b is None or not new or new == " ".join(self.passage_as_shown(block_id, start, end).split()):
+            return None
+        old = b.text[start:end]
+        edit = Correction(id=f"user-{uuid.uuid4().hex[:10]}", block_id=block_id, start=start, end=end,
+                          original=old, replacement=new, confidence=1.0, status="accepted", source="user")
+        self.document.corrections = [x for x in self.document.corrections
+                                     if not (x.source == "user" and x.overlaps(edit))] + [edit]
+        return edit
+
     def remove_user_edit(self, correction_id: str) -> None:
         """Undo text the user typed in; the scan's own text (and any suggestion) comes back."""
         self.document.corrections = [c for c in self.document.corrections
@@ -407,6 +470,40 @@ class Session:
                     words.append((c, b.text, c.start, c.end))
         return cands, words
 
+    def split_items(self) -> list[tuple[str, int, int, str]]:
+        """Places where a space may split a word (to ask the AI): (block id, start, end, joined word). Places
+        with a correction already (or one the reader took back) are left out."""
+        dictionary = Dictionary([self.document.language or "en"], self.custom_words)
+        taken = {c.id for c in self.document.corrections}
+        out = []
+        for b in self.document.blocks:
+            if b.kind in (BlockKind.TABLE, BlockKind.IMAGE, BlockKind.FURNITURE) or not b.text:
+                continue
+            others = self.document.corrections_for(b.id)
+            for start, end, joined in split_word_candidates(b.text, dictionary):
+                if f"split-{b.id}-{start}" in taken or any(c.start < end and start < c.end for c in others):
+                    continue
+                out.append((b.id, start, end, joined))
+        return out
+
+    def _split_questions(self, items: list[tuple[str, int, int, str]]) -> list[tuple[str, int, int]]:
+        """The text around each place, for the AI."""
+        return [(self.document.block(bid).text, start, end) for bid, start, end, _ in items]
+
+    def join_split_words(self, items: list[tuple[str, int, int, str]], answers: dict[int, bool]) -> int:
+        """Join the pieces the AI says are one word (as corrections: the text itself is kept, and the reader can
+        take each one back in the review). Returns how many."""
+        n = 0
+        for i, (bid, start, end, joined) in enumerate(items):
+            if not answers.get(i):
+                continue
+            b = self.document.block(bid)
+            self.document.corrections.append(Correction(
+                id=f"split-{bid}-{start}", block_id=bid, start=start, end=end, original=b.text[start:end],
+                replacement=joined, confidence=0.9, status="auto", source="ai"))
+            n += 1
+        return n
+
     def ai_preview(self, assistant, settings: FormatSettings) -> list:
         """The requests that asking the AI now would send (answers known from earlier are not sent again)."""
         cands, words = self._ai_items(assistant, settings)
@@ -418,6 +515,10 @@ class Session:
             requests += assistant.plan_citations(cands)[0]
         if words:
             requests += assistant.plan_ocr(words)[0]
+        if assistant.settings.use_for_ocr:
+            splits = self.split_items()
+            if splits:
+                requests += assistant.plan_splits(self._split_questions(splits))[0]
         return requests
 
     def run_ai(self, assistant, settings: FormatSettings, progress: Optional[ProgressFn] = None) -> str:
@@ -439,6 +540,10 @@ class Session:
         if words:
             assistant.review_ocr_words(words, progress)
             sent.append(f"{len(words)} uncertain OCR word(s)")
+        splits = self.split_items() if assistant.settings.use_for_ocr else []
+        if splits:
+            joined = self.join_split_words(splits, assistant.review_splits(self._split_questions(splits), progress))
+            sent.append(f"{len(splits)} word(s) that may be split by a space ({joined} joined)")
         summary = ("Sent to AI: " + ", ".join(sent)) if sent else "Nothing needed AI help."
         self.ai_log.append(summary)
         return summary
@@ -642,12 +747,33 @@ def _text_layer_sample(path: str, max_pages: int = 6) -> str:
         return ""
 
 
+def _load_structured(path: str, settings: FormatSettings, progress: Optional[ProgressFn],
+                     custom_words: Optional[CustomWords]) -> Session:
+    """A Word or EPUB file: its own structure is read directly (no text recognition or layout guessing needed)."""
+    if progress:
+        progress("Reading the document", 0.2)
+    doc, original = read_structured(path)
+    if settings.ocr_language != "auto":
+        doc.language = settings.ocr_language
+    else:
+        sample = " ".join(b.text for b in doc.blocks[:80] if b.text)
+        if len(sample) > 200:
+            doc.language = detect_language(sample)
+    session = Session(doc, custom_words or CustomWords(), original_pdf=original)
+    session._build = lambda orders=None, extra=(): (doc, {})  # the reading order is the file's own
+    if progress:
+        progress("Done", 1.0)
+    return session
+
+
 def load(path: str | Path, settings: Optional[FormatSettings] = None, ocr_engine: Optional[OcrEngine] = None,
          progress: Optional[ProgressFn] = None, custom_words: Optional[CustomWords] = None,
          use_ocr: bool = True, pages: Optional[tuple[int, int]] = None) -> Session:
-    """Extract and structure a PDF. The source file is only read, never written."""
+    """Extract and structure a PDF, Word (.docx) or EPUB file. The source file is only read, never written."""
     settings = settings or FormatSettings()
     path = str(path)
+    if is_structured(path):
+        return _load_structured(path, settings, progress, custom_words)
     engine = (ocr_engine or default_engine()) if use_ocr else None
     ocr_langs = ["en", "nl"] if settings.ocr_language == "auto" else [settings.ocr_language]
     if settings.ocr_language == "auto":

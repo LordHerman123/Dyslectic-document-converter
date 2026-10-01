@@ -315,7 +315,7 @@ class CheckPanel:
         self.conv_label.value = f"{t('Converted')} {conv + 1} / {app.conv_count}"
         if self.preview_row.visible:
             if app.source_path:
-                self.orig_img.src = await app.in_thread(preview.render_page, app.source_path, orig, 900)
+                self.orig_img.src = await app.in_thread(preview.render_page, app.original_view, orig, 900)
             if app.converted_pdf:
                 self.conv_img.src = await app.in_thread(preview.render_page, app.converted_pdf, conv, 900)
         app.page.update()

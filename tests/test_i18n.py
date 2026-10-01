@@ -16,7 +16,7 @@ def _ui_texts() -> list[str]:
     """Every literal passed to the translator (t("...") or self.t("...")) in the UI."""
     out = []
     nodes = []
-    for name in ("app.py", "focus.py", "check_panel.py"):
+    for name in ("app.py", "focus.py", "check_panel.py", "reflow.py"):
         nodes += list(ast.walk(ast.parse((PKG / "ui" / name).read_text(encoding="utf-8"))))
     for node in nodes:
         if isinstance(node, ast.Call) and node.args and isinstance(node.args[0], ast.Constant) \

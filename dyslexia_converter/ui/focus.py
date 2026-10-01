@@ -19,6 +19,7 @@ import flet as ft
 from .. import dictionary
 from .. import highlights as hl
 from ..fonts import FONT_CHOICES
+from ..ai.assistant import EXPLAIN_WORDS
 from ..ai.providers import PROVIDERS
 from ..render import preview
 from ..speech import sentence_at
@@ -109,10 +110,12 @@ class FocusMode:
         self._pen_drag = False  # a selection being made with a mouse or pen
         self._ai_scope = "page"  # what the AI summary is of: page, section, selection or document
         self._ai_result = None  # (summary, first word, last word)
+        self._ai_mode = "summary"  # "summary" (main points) or "explain" (what a hard part means, in plain words)
         self._ai_busy = False
         self._ai_error = ""
         self._last_sel: Optional[tuple[int, int]] = None
         self._toc_starts: list[int] = []  # first word of every heading in the converted document
+        self._toc_titles: dict[int, tuple[int, str]] = {}  # first word of a heading -> (level, title)
         self._notes_only = False
         self._colour_filter: set[str] = set()
         self.bars_hidden = False
@@ -220,6 +223,10 @@ class FocusMode:
         self.read_panel = self._panel(app.read_row, "read_panel_open")
         # one panel for how the text and page look (read aloud keeps its own)
         self.settings_panel = self._panel(self._settings_row(), "focus_settings_open")
+        if self._is_open(self.read_panel) and self._is_open(self.settings_panel):  # one panel at a time
+            self._fold(self.settings_panel, False)
+            self.settings_toggle.selected = False
+            app.ui["focus_settings_open"] = False
         self.divider = ft.Divider(height=1)
         # the page counter follows scrolling: ten reports a second are plenty (the default sends a hundred)
         self.list = ft.ListView(expand=True, spacing=self.GAP, on_scroll=self.on_scroll, scroll_interval=100,
@@ -313,6 +320,8 @@ class FocusMode:
         app.page.controls.clear()
         app.page.controls.extend(self._saved)
         app.conv_page = min(self.current, max(0, app.conv_count - 1))
+        if self.source == "converted":
+            app.save_reading_position("focus", app.conv_page)
         if app.view_mode == "side":
             app._original_follows(1)
         app.sync_controls()  # settings changed in focus mode show in the Convert tab too
@@ -406,6 +415,7 @@ class FocusMode:
             self.ruler = None
         for i in range(n):
             self.marks[i].controls = self._mark_shapes(i)
+        self._apply_tint()  # the new page pictures take the page colour
         self._set_tool_gestures()
         self._update_label()
 
@@ -501,7 +511,7 @@ class FocusMode:
     @property
     def _pdf(self):
         """The pages focus mode shows: the converted document, or the original when reading only that."""
-        return self.app.source_path if self.source == "original" else self.app.converted_pdf
+        return self.app.original_view if self.source == "original" else self.app.converted_pdf
 
     async def on_read_original(self, e=None) -> None:
         """Read only the original: its own pages in focus mode (zoom, page colour, pages and rotation still
@@ -557,7 +567,13 @@ class FocusMode:
         """PNG of page ``i`` with everything drawn on it: highlights, note signs, the sentence and word being
         read, the reading ruler, the word on the word card, in the page colour.
         """
-        return preview.render_page_cached(self._pdf, self._doc_key, i, self._render_width(i), self.tint)
+        return preview.render_page_cached(self._pdf, self._doc_key, i, self._render_width(i), self._drawn_tint)
+
+    @property
+    def _drawn_tint(self) -> str:
+        """The page colour drawn into the pictures: only "dark" (light text on a dark page) is; the light colours
+        are laid over a white picture by the app (see :meth:`_apply_tint`), so switching between them is instant."""
+        return "dark" if self.tint == "dark" else "white"
 
     def _render_width(self, i: int) -> int:
         """How many pixels wide page ``i`` is drawn: the size it is shown at, a quarter more for sharp text on
@@ -568,7 +584,7 @@ class FocusMode:
 
     def _is_cached(self, pages: list[int]) -> bool:
         """Whether the pictures of these pages were all drawn before and kept on disk."""
-        return all(preview.cached_page_path(self._doc_key, i, self._render_width(i), self.tint).exists()
+        return all(preview.cached_page_path(self._doc_key, i, self._render_width(i), self._drawn_tint).exists()
                    for i in pages)
 
     def _mark_shapes(self, i: int) -> list[ft.Control]:
@@ -635,8 +651,13 @@ class FocusMode:
         """
         order = sorted(range(len(self.images)), key=lambda i: abs(i - self.current))
         ready = min(len(order), self.READY_PAGES)
-        waiting = self._preparing and not await self.app.in_thread(self._is_cached, order[:ready])
+        # a drawing restarted while the loading screen is up (a zoom, a colour) carries on behind it
+        preparing = self._preparing or self.loading.visible
+        waiting = preparing and not await self.app.in_thread(self._is_cached, order[:ready])
         self._preparing = False
+        if preparing and not waiting and self.loading.visible:
+            self.loading.visible = False
+            self.app.page.update()
         if waiting:
             self._show_loading(0, ready, len(order))
         for n, i in enumerate(order):
@@ -1267,15 +1288,23 @@ class FocusMode:
             *dots,
             btn(ft.Icons.STICKY_NOTE_2_OUTLINED, t("Note"), lambda e: app.page.run_task(self.open_note, a, b),
                 tip=t("Add or edit a note (N)")),
+            btn(ft.Icons.EDIT_OUTLINED, t("Edit"), lambda e: app.page.run_task(self.edit_selection, a, b),
+                visible=self.source == "converted" and app.session is not None and b - a < 200,
+                tip=t("Correct these words (for example a word split by a space)")),
             btn(ft.Icons.VOLUME_UP, t("Read"), lambda e: app.say_word(text), visible=app._speech_allowed()),
             btn(ft.Icons.SMART_TOY_OUTLINED, t("Summarise"), lambda e: app.page.run_task(self.summarise_selection, a, b),
                 visible=self._ai_on() and b - a >= 15, tip=t("AI summary of the selection")),
+            btn(ft.Icons.LIGHTBULB_OUTLINE, t("Explain"), lambda e: app.page.run_task(self.explain_selection, a, b),
+                visible=self._ai_on() and b > a, tip=t("AI explains what the selection means, in plain words")),
             btn(ft.Icons.MENU_BOOK_OUTLINED, t("Meaning"), lambda e: app.page.run_task(
                 self.open_card, self.words[a][0], a), visible=a == b),
             btn(ft.Icons.DELETE_OUTLINE, t("Remove"), lambda e: app.page.run_task(self.unmark, a, b),
                 visible=h is not None, tip=t("Remove the highlight (Delete)")),
-            ft.IconButton(ft.Icons.MORE_HORIZ, tooltip=t("More: select the sentence or paragraph, adjust"),
-                          on_click=self.on_more, selected=self._more, style=self._toggle_style()),
+            ft.TextButton(t("Selection"), icon=ft.Icons.EXPAND_MORE if self._more else ft.Icons.EXPAND_LESS,
+                          tooltip=t("Select the sentence or paragraph, or move the start or end"),
+                          on_click=self.on_more,
+                          style=ft.ButtonStyle(padding=ft.Padding.symmetric(horizontal=10),
+                                               bgcolor=ft.Colors.PRIMARY_CONTAINER if self._more else None)),
             ft.IconButton(ft.Icons.CLOSE, tooltip=t("Close (Esc)"), on_click=self.close_card),
         ], spacing=4, tight=True, wrap=True, alignment=ft.MainAxisAlignment.CENTER,
             vertical_alignment=ft.CrossAxisAlignment.CENTER),
@@ -1284,26 +1313,98 @@ class FocusMode:
             shadow=ft.BoxShadow(blur_radius=12, color="#40000000"))
         parts: list[ft.Control] = []
         if self._more:
-            nudge = lambda icon, tip, end, step: ft.IconButton(  # noqa: E731
-                icon, tooltip=tip, on_click=lambda e: app.page.run_task(self.nudge, end, step))
-            parts.append(ft.Container(ft.Column([
-                self._unit_row(),
-                ft.Row([app.text(t("Start"), 13),
-                        nudge(ft.Icons.CHEVRON_LEFT, t("One word earlier"), 0, -1),
-                        nudge(ft.Icons.CHEVRON_RIGHT, t("One word later"), 0, 1), ft.Container(width=12),
-                        app.text(t("End"), 13),
-                        nudge(ft.Icons.CHEVRON_LEFT, t("One word earlier"), 1, -1),
-                        nudge(ft.Icons.CHEVRON_RIGHT, t("One word later"), 1, 1)], spacing=0),
-            ], spacing=4, tight=True), bgcolor=ft.Colors.SURFACE_CONTAINER_HIGH, border_radius=16, padding=12,
-                shadow=ft.BoxShadow(blur_radius=12, color="#40000000")))
+            parts.append(self._selection_panel())
         parts.append(bar)
         return ft.Column(parts, spacing=8, tight=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
 
+    def _selection_panel(self) -> ft.Control:
+        """Above the toolbar, in the same style and only as wide as it needs: select the word, sentence or
+        paragraph, and move the start or the end of the selection by a word."""
+        app, t = self.app, self.app.t
+
+        def nudge(icon, tip, end, step):
+            """An arrow that moves the start (``end`` 0) or end (1) one word."""
+            return ft.IconButton(icon, tooltip=tip, icon_size=20, style=ft.ButtonStyle(padding=4),
+                                 on_click=lambda e: app.page.run_task(self.nudge, end, step))
+
+        def group(label, *controls):
+            """A label with its buttons, kept together when the row wraps."""
+            return ft.Row([app.text(label, 13, color=ft.Colors.ON_SURFACE_VARIANT), *controls], spacing=2,
+                          tight=True, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+
+        units = ft.SegmentedButton(
+            segments=[ft.Segment("word", label=ft.Text(t("Word"))),
+                      ft.Segment("sentence", label=ft.Text(t("Sentence"))),
+                      ft.Segment("paragraph", label=ft.Text(t("Paragraph")))],
+            selected=[self.sel_unit] if self.sel_unit else [], allow_empty_selection=True, show_selected_icon=False,
+            on_change=self.on_unit,
+            style=ft.ButtonStyle(padding=ft.Padding.symmetric(horizontal=12),
+                                 visual_density=ft.VisualDensity.COMPACT))
+        divider = ft.Container(width=1, height=24, bgcolor=ft.Colors.OUTLINE_VARIANT)
+        row = ft.Row([
+            group(t("Select"), ft.Container(width=6), units), divider,
+            group(t("Start"), nudge(ft.Icons.CHEVRON_LEFT, t("Start one word earlier"), 0, -1),
+                  nudge(ft.Icons.CHEVRON_RIGHT, t("Start one word later"), 0, 1)), divider,
+            group(t("End"), nudge(ft.Icons.CHEVRON_LEFT, t("End one word earlier"), 1, -1),
+                  nudge(ft.Icons.CHEVRON_RIGHT, t("End one word later"), 1, 1)),
+        ], spacing=14, tight=True, wrap=True, alignment=ft.MainAxisAlignment.CENTER,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER)
+        return ft.Container(row, bgcolor=ft.Colors.SURFACE_CONTAINER_HIGH, border_radius=28,
+                            padding=ft.Padding.symmetric(horizontal=18, vertical=6),
+                            shadow=ft.BoxShadow(blur_radius=12, color="#40000000"))
+
     async def on_more(self, e) -> None:
-        """•••: show or hide Select (word, sentence, paragraph) and moving the start and end."""
+        """Selection: show or hide Select (word, sentence, paragraph) and moving the start and end."""
         self._more = not self._more
         if self.sel:
             await self.open_selection(*self.sel)
+
+    async def edit_selection(self, a: int, b: int) -> None:
+        """Let the reader retype the selected words: stored as their own correction (the original is kept, and
+        it can be undone here or in the OCR review tab), then the document is converted again."""
+        app, t = self.app, self.app.t
+        session = app.session
+        where = session.find_passage(hl.text_of(self.words, a, b)) if session else None
+        if where is None:
+            self._toast(t("These words can't be edited: the converter added or moved them (for example reference "
+                          "numbers). Select words of the text itself."))
+            return
+        field = ft.TextField(value=session.passage_as_shown(*where), multiline=True, min_lines=2, max_lines=8,
+                             autofocus=True, text_size=app.fs(16), width=560)
+
+        def close(_=None):
+            """Close the dialog; the keyboard shortcuts work again."""
+            self._typing = False
+            app.page.pop_dialog()
+
+        async def save(_):
+            """Store the words as typed and convert again."""
+            close()
+            edit = session.edit_passage(*where, field.value or "")
+            if edit is None:
+                self._toast(t("Nothing was changed."))
+                return
+            await self.close_card()
+            app.refresh_review()
+            await app.rerender()
+
+            async def undo(e):
+                """Take the edit back out and convert again."""
+                session.remove_user_edit(edit.id)
+                app.refresh_review()
+                await app.rerender()
+
+            self._toast(t("Your correction was saved."), undo=undo)
+
+        self._typing = True
+        app.page.show_dialog(ft.AlertDialog(
+            modal=True, title=app.text(t("Correct the text"), 18, weight=ft.FontWeight.BOLD),
+            content=ft.Column([
+                app.text(t("Type the words as they should read. The original document is not changed and you can "
+                           "undo this."), 13),
+                field], tight=True, spacing=12),
+            actions=[ft.TextButton(t("Cancel"), on_click=close),
+                     ft.FilledButton(t("Save"), icon=ft.Icons.CHECK, on_click=save)]))
 
     async def copy(self, a: int, b: int) -> None:
         """Copy words a..b to the clipboard."""
@@ -1518,13 +1619,15 @@ class FocusMode:
         except Exception:
             return []
         starts = []
-        for _, title, page in toc:
+        self._toc_titles = {}
+        for level, title, page in toc:
             target = [w.lower() for w in title.split()[:3]]
             if not target:
                 continue
             for n, (p, text, _) in enumerate(self.words):
                 if p == page - 1 and [x[1].lower() for x in self.words[n:n + len(target)]] == target:
                     starts.append(n)
+                    self._toc_titles.setdefault(n, (level, title.strip()))  # for grouping the study sheet
                     break
         return sorted(set(starts))
 
@@ -1553,23 +1656,36 @@ class FocusMode:
                          disabled=key == "selection" and not (self.sel or self._last_sel))
                  for key, label in (("page", "This page"), ("section", "This section"),
                                     ("selection", "Selection"), ("document", "Whole document"))]
+        explain = self._ai_mode == "explain"
         rows: list[ft.Control] = [
             ft.Row([ft.Icon(ft.Icons.SMART_TOY_OUTLINED, color=ft.Colors.PRIMARY),
-                    ft.Text(t("AI summary"), size=app.fs(16), weight=ft.FontWeight.BOLD, expand=True),
+                    ft.Text(t("AI explanation") if explain else t("AI summary"), size=app.fs(16),
+                            weight=ft.FontWeight.BOLD, expand=True),
                     ft.IconButton(ft.Icons.CLOSE, tooltip=t("Close"), on_click=lambda e: self._open_side(None))]),
-            app.text(t("Summarise"), 12, color=ft.Colors.ON_SURFACE_VARIANT),
+            ft.SegmentedButton(segments=[
+                ft.Segment("summary", label=ft.Text(t("Summarise")), icon=ft.Icon(ft.Icons.SHORT_TEXT)),
+                ft.Segment("explain", label=ft.Text(t("Explain")), icon=ft.Icon(ft.Icons.LIGHTBULB_OUTLINE))],
+                selected=[self._ai_mode], on_change=self.on_ai_mode),
+            app.text(t("Explain what a hard part means, in plain words, with its difficult words") if explain
+                     else t("Summarise"), 12, color=ft.Colors.ON_SURFACE_VARIANT),
             ft.Row(chips, wrap=True, spacing=6),
-            ft.Row([app.text(t("Length"), 12, color=ft.Colors.ON_SURFACE_VARIANT),
-                    ft.SegmentedButton(segments=[ft.Segment("short", label=ft.Text(t("Short"))),
-                                                 ft.Segment("detailed", label=ft.Text(t("Detailed")))],
-                                       selected=["detailed" if ui.get("ai_summary_detailed") else "short"],
-                                       on_change=self.on_ai_length)], spacing=10),
-            ft.Switch(label=t("Plain language (short sentences, easy words)"),
-                      value=bool(ui.get("ai_summary_plain", True)), on_change=self.on_ai_plain,
-                      label_text_style=ft.TextStyle(size=app.fs(13))),
         ]
+        if not explain:
+            rows += [
+                ft.Row([app.text(t("Length"), 12, color=ft.Colors.ON_SURFACE_VARIANT),
+                        ft.SegmentedButton(segments=[ft.Segment("short", label=ft.Text(t("Short"))),
+                                                     ft.Segment("detailed", label=ft.Text(t("Detailed")))],
+                                           selected=["detailed" if ui.get("ai_summary_detailed") else "short"],
+                                           on_change=self.on_ai_length)], spacing=10),
+                ft.Switch(label=t("Plain language (short sentences, easy words)"),
+                          value=bool(ui.get("ai_summary_plain", True)), on_change=self.on_ai_plain,
+                          label_text_style=ft.TextStyle(size=app.fs(13)))]
         span = self._scope_span(self._ai_scope)
         words = (span[1] - span[0] + 1) if span else 0
+        if explain and words > EXPLAIN_WORDS:
+            rows.append(app.text(t("Only the first {n} words are explained. Select a shorter part to explain all "
+                                   "of it.", n=EXPLAIN_WORDS), 12, color=ft.Colors.ON_SURFACE_VARIANT))
+            words = EXPLAIN_WORDS
         provider = PROVIDERS.get(app.ai_settings.provider)
         where = f"{provider.label if provider else app.ai_settings.provider}"
         model = app.ai_settings.model or (provider.default_model if provider else "")
@@ -1579,10 +1695,12 @@ class FocusMode:
                       "privacy log.", n=words, provider=where, model=model), size=app.fs(12), expand=True,
                     color="#4A3A10")], vertical_alignment=ft.CrossAxisAlignment.START),
             bgcolor="#FFF3D6", border_radius=8, padding=10))
-        busy = ft.Row([ft.ProgressRing(width=18, height=18, stroke_width=2), app.text(t("Summarising..."), 13)],
+        busy = ft.Row([ft.ProgressRing(width=18, height=18, stroke_width=2),
+                       app.text(t("Explaining...") if explain else t("Summarising..."), 13)],
                       visible=self._ai_busy)
-        rows += [ft.FilledButton(t("Summarise"), icon=ft.Icons.SMART_TOY_OUTLINED, on_click=self.run_summary,
-                                 disabled=self._ai_busy or not words), busy]
+        rows += [ft.FilledButton(t("Explain") if explain else t("Summarise"),
+                                 icon=ft.Icons.LIGHTBULB_OUTLINE if explain else ft.Icons.SMART_TOY_OUTLINED,
+                                 on_click=self.run_summary, disabled=self._ai_busy or not words), busy]
         if self._ai_error:
             rows.append(ft.Text(self._ai_error, size=app.fs(13), color=ft.Colors.ERROR))
         if self._ai_result:
@@ -1611,7 +1729,9 @@ class FocusMode:
             ft.Container(width=4, height=40, bgcolor="#E0A100", border_radius=2),
             ft.Icon(ft.Icons.WARNING_AMBER_ROUNDED, color="#B77900", size=22),
             ft.Column([ft.Text(t("Made by AI"), size=app.fs(13), weight=ft.FontWeight.BOLD, color="#5C4200"),
-                       ft.Text(t("AI can make mistakes. Check the summary against the text before you use it."),
+                       ft.Text(t("AI can make mistakes. Check the explanation against the text before you use it.")
+                               if self._ai_mode == "explain" else
+                               t("AI can make mistakes. Check the summary against the text before you use it."),
                                size=app.fs(12), color="#5C4200")], spacing=2, tight=True, expand=True),
         ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),
             bgcolor="#FFF4D6", border=ft.Border.all(1, "#F1D48A"), border_radius=10,
@@ -1622,6 +1742,18 @@ class FocusMode:
         """A summary as plain text (title, then one point per line)."""
         lines = [summary.title] if summary.title else []
         return "\n".join(lines + [f"- {p}" for p in summary.points])
+
+    def on_ai_mode(self, e) -> None:
+        """Summarise or Explain."""
+        self._ai_mode = (e.control.selected or ["summary"])[0]
+        self._ai_result, self._ai_error = None, ""
+        self._open_side("ai")
+
+    async def explain_selection(self, a: int, b: int) -> None:
+        """"Explain" on the selection toolbar: open the AI panel in Explain mode for the selection."""
+        self._ai_mode = "explain"
+        self._ai_result, self._ai_error = None, ""
+        await self.summarise_selection(a, b)
 
     def on_ai_scope(self, e) -> None:
         """A scope chip: summarise this page, this section, the selection or the whole document."""
@@ -1657,9 +1789,12 @@ class FocusMode:
         self._ai_busy, self._ai_error = True, ""
         self._open_side("ai")
         try:
-            summary = await app.in_thread(app.assistant.summarise, hl.text_of(self.words, a, b), language,
-                                          bool(app.ui.get("ai_summary_detailed")),
-                                          bool(app.ui.get("ai_summary_plain", True)))
+            if self._ai_mode == "explain":
+                summary = await app.in_thread(app.assistant.explain, hl.text_of(self.words, a, b), language)
+            else:
+                summary = await app.in_thread(app.assistant.summarise, hl.text_of(self.words, a, b), language,
+                                              bool(app.ui.get("ai_summary_detailed")),
+                                              bool(app.ui.get("ai_summary_plain", True)))
             self._ai_result = (summary, a, b)
         except ConsentRequired:
             self._ai_error = t("AI is off. Choose 'AI-assisted' in AI settings to use it.")
@@ -1684,7 +1819,9 @@ class FocusMode:
             return
         summary, a, _ = self._ai_result
         s0, s1 = hl.span_at(self._sentences, a)
-        note = self.app.t("AI summary (check it against the text):") + "\n" + self._summary_text(summary)
+        label = self.app.t("AI explanation (check it against the text):") if self._ai_mode == "explain" \
+            else self.app.t("AI summary (check it against the text):")
+        note = label + "\n" + self._summary_text(summary)
         k = self._exact(s0, s1)
         if k is None:
             self.highlights = hl.add(self.highlights, s0, s1, "blue", self.words, note)
@@ -1707,7 +1844,11 @@ class FocusMode:
         return side.data if side is not None and side.content is not None else None
 
     def _open_side(self, mode: Optional[str]) -> None:
-        """Show the notes list, the AI summary or the original page beside the pages (or neither)."""
+        """Show the notes list, the AI summary or the original page beside the pages (or neither); the panels
+        above the pages fold away, so one panel is open at a time."""
+        if mode:
+            self._close_panels(keep=mode)
+            self.app.store.save_ui(self.app.ui)
         self.notes_toggle.selected = mode == "notes"
         self.ai_toggle.selected = mode == "ai"
         self.orig_toggle.selected = mode == "original"
@@ -1804,16 +1945,16 @@ class FocusMode:
     async def _show_original(self, index: int) -> None:
         """Show page ``index`` of the original (rendered sharp enough to zoom in)."""
         app = self.app
-        total = preview.page_count(app.source_path) if app.source_path else 0
+        total = preview.page_count(app.original_view) if app.source_path else 0
         if not total or self._side_mode != "original":
             return
         index = max(0, min(total - 1, index))
         self._orig_idx = index
         self.orig_label.value = app.t("page {n} of {total}", n=index + 1, total=total)
-        w, h = await app.in_thread(preview.page_size, app.source_path, index)
+        w, h = await app.in_thread(preview.page_size, app.original_view, index)
         self._orig_aspect = h / w if w else 1.414
         self._orig_px = 3000 if self._orig_zoom > 2 else 1600
-        self.orig_image.src = await app.in_thread(preview.render_page, app.source_path, index, self._orig_px)
+        self.orig_image.src = await app.in_thread(preview.render_page, app.original_view, index, self._orig_px)
         self._size_original()
         try:
             self.side.update()
@@ -1836,8 +1977,14 @@ class FocusMode:
                     ft.IconButton(ft.Icons.CLOSE, tooltip=t("Close"), on_click=self.on_notes_panel)]),
             ft.Row([self.filter_notes, *colour_dots], spacing=6, wrap=True),
             self.notes_list,
-            ft.OutlinedButton(t("Export notes as a list"), icon=ft.Icons.DOWNLOAD, on_click=self.on_export_notes,
-                              tooltip=t("Save your highlights and notes as a Word document")),
+            ft.Row([
+                ft.FilledTonalButton(t("Study sheet"), icon=ft.Icons.SCHOOL_OUTLINED, on_click=self.on_study_sheet,
+                                     tooltip=t("Your highlights and notes gathered under the headings they are "
+                                               "in, as a Word document to study from")),
+                ft.OutlinedButton(t("Export notes as a list"), icon=ft.Icons.DOWNLOAD,
+                                  on_click=self.on_export_notes,
+                                  tooltip=t("Save your highlights and notes as a Word document"))],
+                wrap=True, spacing=8, run_spacing=8),
         ], spacing=10, expand=True)
 
     def _note_entries(self) -> list[tuple[int, int, int, hl.Highlight]]:
@@ -1907,6 +2054,36 @@ class FocusMode:
         stem = Path(app.source_path).stem if app.source_path else "document"
         data = await app.in_thread(hl.notes_docx, t("Notes on {name}", name=stem), entries)
         await app.save_bytes(data, f"{stem}_notes.docx", "docx")
+
+    def study_sections(self) -> list[tuple[str, list[tuple[int, str, str, str]]]]:
+        """The highlights (with the filters applied) grouped under the heading each one is in, in reading order:
+        (heading, [(page number, colour, quote, note)])."""
+        starts = sorted(self._toc_titles)
+        sections: list[tuple[str, list]] = []
+        current = None
+        for a, b, page, h in self._note_entries():
+            if (self._notes_only and not h.note) or (self._colour_filter and h.colour not in self._colour_filter):
+                continue
+            head = max([s for s in starts if s <= a], default=None)
+            if head != current or not sections:
+                current = head
+                sections.append((self._toc_titles[head][1] if head is not None else "", []))
+            sections[-1][1].append((page + 1, h.colour, hl.text_of(self.words, a, b), h.note))
+        return sections
+
+    async def on_study_sheet(self, e) -> None:
+        """Save a study sheet: the highlights and notes gathered under their headings, as a Word document."""
+        app, t = self.app, self.app.t
+        sections = self.study_sections()
+        if not any(items for _, items in sections):
+            app.notify(t("Nothing highlighted yet. Hold a word and drag to select text."))
+            return
+        stem = Path(app.source_path).stem if app.source_path else "document"
+        labels = {"summary": t("{highlights} highlights, {notes} with a note"), "note": t("Note:"),
+                  "page": t("(page {page})"), "start": t("Before the first heading"),
+                  **{c: t(c.capitalize()) for c in hl.COLOURS}}
+        data = await app.in_thread(hl.study_sheet_docx, t("Study sheet: {name}", name=stem), sections, labels)
+        await app.save_bytes(data, f"{stem}_study_sheet.docx", "docx")
 
     # ------------------------------------------------------------------ highlighter
     def _toggle_style(self) -> ft.ButtonStyle:
@@ -2016,12 +2193,29 @@ class FocusMode:
 
     # ------------------------------------------------------------------ fold-out panels
     def on_read_panel(self, e) -> None:
-        """The read-aloud button: fold the read-aloud controls out or away."""
-        self._fold(self.read_panel, not self._is_open(self.read_panel))
-        self.read_toggle.selected = self._is_open(self.read_panel)
-        self.app.ui["read_panel_open"] = self.read_toggle.selected
+        """The read-aloud button: fold the read-aloud controls out (closing any other panel) or away."""
+        opening = not self._is_open(self.read_panel)
+        if opening:
+            self._close_panels(keep="read")
+        self._fold(self.read_panel, opening)
+        self.read_toggle.selected = opening
+        self.app.ui["read_panel_open"] = opening
         self.app.store.save_ui(self.app.ui)
         self.app.page.update()
+
+    def _close_panels(self, keep: Optional[str] = None) -> None:
+        """One panel at a time: fold away the read-aloud and settings panels and the side panel (notes, original,
+        AI), except ``keep`` ("read", "settings" or a side panel's name), so the pages keep their room."""
+        for name, panel, toggle, key in (("read", self.read_panel, self.read_toggle, "read_panel_open"),
+                                         ("settings", self.settings_panel, self.settings_toggle,
+                                          "focus_settings_open")):
+            if name != keep and self._is_open(panel):
+                self._fold(panel, False)
+                toggle.selected = False
+                self.app.ui[key] = False
+        if self._side_mode and self._side_mode != keep:
+            self.side.data, self.side.content, self.side.width, self.side.padding = None, None, 0, 0
+            self.notes_toggle.selected = self.ai_toggle.selected = self.orig_toggle.selected = False
 
     # ------------------------------------------------------------------ view: page colour, layout, rotation
     def _page_buttons(self) -> list[ft.Control]:
@@ -2072,16 +2266,23 @@ class FocusMode:
         self.body.bgcolor = around
         for frame in self.frames:
             frame.bgcolor = page_bg
+        light = self.tint not in ("white", "dark")
+        for img in self.images:  # a light colour multiplies the white page: the paper takes it, the text stays black
+            img.color = page_bg if light else None
+            img.color_blend_mode = ft.BlendMode.MULTIPLY if light else None
 
     def on_tint(self, e) -> None:
-        """A page colour button: use it for all pages."""
+        """A page colour button: use it for all pages. Between the light colours this is instant; to or from dark
+        the pages are drawn again (or taken from the disk)."""
+        drawn = self._drawn_tint
         self._save("focus_tint", e.control.data)
         self._apply_tint()
         for i, marks in enumerate(self.marks):  # the ruler and the reading box follow the page colour
             marks.controls = self._mark_shapes(i)
         self._refresh_view_row()
         self.app.page.update()
-        self._start_rendering()
+        if self._drawn_tint != drawn:
+            self._start_rendering()
 
     async def on_layout(self, e) -> None:
         """The layout button: switch between one scrolling column and one page at a time."""
@@ -2149,10 +2350,13 @@ class FocusMode:
         self.app.page.update()
 
     def on_settings_panel(self, e) -> None:
-        """The reading settings button: fold the settings out or away."""
-        self._fold(self.settings_panel, not self._is_open(self.settings_panel))
-        self.settings_toggle.selected = self._is_open(self.settings_panel)
-        self.app.ui["focus_settings_open"] = self.settings_toggle.selected
+        """The reading settings button: fold the settings out (closing any other panel) or away."""
+        opening = not self._is_open(self.settings_panel)
+        if opening:
+            self._close_panels(keep="settings")
+        self._fold(self.settings_panel, opening)
+        self.settings_toggle.selected = opening
+        self.app.ui["focus_settings_open"] = opening
         self.app.store.save_ui(self.app.ui)
         self.app.page.update()
 
