@@ -2017,12 +2017,14 @@ class ConverterApp:
         self.page.update()
 
     async def on_read_panel(self, e):
-        """The Read aloud button: fold the read-aloud controls out or away."""
+        """The Read aloud button: fold the read-aloud controls out and start reading, or fold them away."""
         open_ = not bool(self.ui.get("read_panel_open", False))
         self.ui["read_panel_open"] = open_
         self.store.save_ui(self.ui)
         self.read_panel.visible = open_
         self.page.update()
+        if open_ and not self._reading and self._speech_allowed() and self.speaker.voices():
+            await self.start_reading()  # pressing Read aloud starts reading
 
     async def on_focus(self, e):
         """The Focus mode button."""
@@ -2146,6 +2148,14 @@ class ConverterApp:
         if not units:
             self.notify(self.t("There is no text to read on these pages."))
             return
+        ruler = self.focus.ruler_sentence(units) if self.focus.active else None
+        if start is None and ruler is not None:
+            # with the ruler on, read from the ruler's line (or go on where reading was paused, if that is there)
+            at = self._read_pos
+            line = self.focus.ruler
+            start = at if at is not None and at < len(units) and any(
+                w.page == line[0] and self.focus._line_at(w.page, (w.rects[0][1] + w.rects[0][3]) / 2) == line[1]
+                for w in units[at].words if w.rects) else ruler
         if start is None:
             start = self._read_pos
             viewed = self.focus.current if self.focus.active else self.conv_page

@@ -187,6 +187,24 @@ async def _read_everywhere(app, path):
             await dialog.actions[1].on_click(None)
             assert any(c.source == "user" for c in app.session.document.corrections)
         app.page.show_dialog = show
+    # the reading ruler: reading starts at its line, and it follows the line being read
+    await f.on_ruler(None)
+    if f.ruler:
+        await f.move_ruler(1)
+        await f.move_ruler(1)
+        units = await app._units()
+        si = f.ruler_sentence(units)
+        assert si is not None and any(w.page == f.ruler[0] for w in units[si].words)
+        page, line = f.ruler
+        later = [w for s in units for w in s.words if w.page == page and w.rects
+                 and f._line_at(page, (w.rects[0][1] + w.rects[0][3]) / 2) not in (None, line)]
+        if later:
+            w = later[-1]
+            await f.show_reading(page, list(w.rects), list(w.rects), False)
+            assert f.ruler == (page, f._line_at(page, (w.rects[0][1] + w.rects[0][3]) / 2))
+            await f.reading_done()
+        await f.on_ruler(None)
+        assert not f.ruler
     f._zoom_by(1.2)
     await f.on_layout(None)
     await f.turn(1)
