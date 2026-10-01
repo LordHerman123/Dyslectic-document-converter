@@ -841,11 +841,36 @@ class FocusMode:
                 self.ruler = (page, line)
                 if old != page:
                     await self.redraw(old)
-        if follow and page != self.current:
-            await self.scroll_to(page)
+        if follow or self.ruler:
+            await self._keep_reading_in_view(page, word)
         if previous is not None and previous != page:
             await self.redraw(previous)  # take the reading highlight off the previous page
         await self.redraw(page)
+
+    async def _keep_reading_in_view(self, page: int, word: list) -> None:
+        """Keep the line being read (and the ruler on it) on screen: turn to its page, and while scrolling, move
+        the view when the line goes below the lower part of the window (or above it)."""
+        if self.layout == "pages" or not word:
+            if page != self.current:
+                await self.scroll_to(page)
+            return
+        y = (word[0][1] + word[0][3]) / 2
+        pw, _ = self.sizes[page]
+        pos = self._offset(page) + y * self._page_w(page) / pw - self._scroll_px  # pixels from the window top
+        h = self._avail()[1]
+        if pos < 0.1 * h or pos > 0.75 * h:
+            await self.scroll_to(page, within=y)
+
+    def ruler_sentence(self, units: list) -> Optional[int]:
+        """The sentence to read from when the ruler is on: the one at the start of the ruler's line."""
+        if not self.ruler:
+            return None
+        page, line = self.ruler
+        lines = self._lines_of(page)
+        if not lines:
+            return None
+        top, bottom = lines[min(line, len(lines) - 1)]
+        return sentence_at(units, page, 0.0, (top + bottom) / 2)
 
     async def reading_done(self) -> None:
         """Reading aloud stopped: take the reading highlight off the page."""
@@ -2193,7 +2218,8 @@ class FocusMode:
 
     # ------------------------------------------------------------------ fold-out panels
     def on_read_panel(self, e) -> None:
-        """The read-aloud button: fold the read-aloud controls out (closing any other panel) or away."""
+        """The read-aloud button: fold the read-aloud controls out (closing any other panel) and start reading (from
+        the ruler's line when the ruler is on), or fold them away."""
         opening = not self._is_open(self.read_panel)
         if opening:
             self._close_panels(keep="read")
@@ -2202,6 +2228,9 @@ class FocusMode:
         self.app.ui["read_panel_open"] = opening
         self.app.store.save_ui(self.app.ui)
         self.app.page.update()
+        if opening and e is not None and not self.app._reading and self.app._speech_allowed() \
+                and self.app.speaker.voices():
+            self.app.page.run_task(self.app.start_reading)  # pressing Read aloud starts reading
 
     def _close_panels(self, keep: Optional[str] = None) -> None:
         """One panel at a time: fold away the read-aloud and settings panels and the side panel (notes, original,
