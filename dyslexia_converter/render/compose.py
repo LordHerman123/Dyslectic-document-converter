@@ -24,6 +24,7 @@ from ..transform.bionic import bold_ranges
 from ..transform.citations import Citation, find_citations, match_reference
 from ..structure.detector import LIST_RE, FOOTNOTE_START_RE
 from .labels import label as doc_label
+from .popups import REF_NUMBER, Popups
 
 
 @dataclass
@@ -71,6 +72,7 @@ class ComposeResult:
     language: str = "en"  # language of the words the converter adds (Contents, Notes, ...)
     inline_images: dict[str, ImageData] = field(default_factory=dict)  # small formulas inside the text
     block_pages: dict[str, int] = field(default_factory=dict)  # block id -> page of the original it came from
+    popups: Popups = field(default_factory=Popups)  # what citations and note markers point to (tap to see)
 
 
 # -------------------------------------------------------------------- helpers
@@ -158,6 +160,11 @@ def compose(doc: Document, settings: FormatSettings, ai_citation_decisions: Opti
     references = [b for b in doc.blocks if b.kind == BlockKind.REFERENCE]
     ref_texts = [doc.display_text(b) for b in references]
     n_refs = len(references)
+    popups = Popups()
+    numbered_refs = any(REF_NUMBER.match(t) for t in ref_texts)
+    for i, t in enumerate(ref_texts):
+        m = REF_NUMBER.match(t)
+        popups.add_reference(int(m.group(1)) if numbered_refs and m else i + 1, t)
 
     # ---- footnotes
     footnotes = [b for b in blocks if b.kind == BlockKind.FOOTNOTE]
@@ -252,6 +259,15 @@ def compose(doc: Document, settings: FormatSettings, ai_citation_decisions: Opti
                 marks = "".join(f"[{citation_number(it)}]" for it in c.items)
                 # keep the space before the citation, drop the parentheses only
                 replacements.append((c.start, c.end, marks))
+        if not is_ref and b.kind not in (BlockKind.TITLE, BlockKind.HEADING):
+            # citations left in the text: what they point to, to show when tapped
+            moved = {(r[0], r[1]) for r in replacements}
+            for c in find_citations(text, n_refs):
+                if c.kind == "author_date" and (c.start, c.end) not in moved:
+                    found = [match_reference(it, ref_texts) for it in c.items]
+                    entries = [popups.references.get(k + 1) or ref_texts[k] for k in found if k >= 0]
+                    if entries and not numbered_refs:
+                        popups.citations.setdefault(" ".join(text[c.start:c.end].split()), entries)
         replacements.sort()
         # drop overlapping replacements
         clean: list[tuple[int, int, str]] = []
@@ -341,6 +357,8 @@ def compose(doc: Document, settings: FormatSettings, ai_citation_decisions: Opti
             # page notes without a marker (affiliations, licences) keep a plain bullet
             marker = f"[{doc_label(lang, 'note', n=n)}]" if n else "\u2013"
             items.append(RItem("endnote", runs, marker=marker, block_id=fn.id))
+            if n:
+                popups.notes[marker] = "".join(r.text for r in runs).strip()
 
     extra_citations = [c for c in citation_list if c[2] is None]
     if extra_citations:
@@ -348,12 +366,13 @@ def compose(doc: Document, settings: FormatSettings, ai_citation_decisions: Opti
         headings.append((2, doc_label(lang, "unmatched")))
         for num, item_text, _ in sorted(extra_citations):
             items.append(RItem("endnote", [Run(item_text + ".")], marker=f"[{num}]"))
+            popups.references.setdefault(num, item_text + ".")
 
     if settings.about_note:
         items.append(RItem("about", [Run(_about_text(doc, settings, bool(citation_numbers)))]))
 
     return ComposeResult(items, headings, uncertain, lang, dict(doc.inline_images),
-                         {b.id: _physical_page(doc, b.page) for b in doc.blocks})
+                         {b.id: _physical_page(doc, b.page) for b in doc.blocks}, popups)
 
 
 def _physical_page(doc: Document, page: int) -> int:

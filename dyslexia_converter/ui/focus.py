@@ -911,6 +911,11 @@ class FocusMode:
             self._anchor, self.sel_unit = n, None
             await self.open_selection(*hl.resolve(self.highlights[k], self.words))
             return
+        if n is not None:  # a tap on a citation or note marker: what it points to
+            popup = await self._popup_at(n)
+            if popup is not None:
+                await self.open_reference(i, n, popup)
+                return
         if self.ruler:
             line = self._line_at(i, pt[1])
             if line is not None:
@@ -926,6 +931,67 @@ class FocusMode:
             app.speaker.stop()
         self.current = i
         await app.start_reading(si)
+
+    # ------------------------------------------------------------------ references and notes
+    async def _popup_at(self, n: int):
+        """The reference or note that a citation or note marker at word ``n`` points to, or None."""
+        popups = await self.app.popups()
+        if not popups or not self.words:
+            return None
+        text, pos = "", 0
+        for k in range(max(0, n - 30), min(len(self.words), n + 31)):  # the words around it (a long citation)
+            if k == n:
+                pos = len(text) + len(self.words[k][1]) // 2
+            text += self.words[k][1] + " "
+        return popups.at(text, pos)
+
+    async def open_reference(self, page: int, n: int, popup) -> None:
+        """A card with what a tapped citation or note marker points to: the reference(s) or the note, to read,
+        copy, or find in the list at the end."""
+        app, t = self.app, self.app.t
+        old = self._marked_pages()
+        self.sel, self.card_word = None, (page, n)
+        body = "\n\n".join(popup.entries)
+        title = t("Note") if popup.kind == "note" else (t("Reference") if len(popup.entries) == 1
+                                                        else t("References"))
+        rows: list[ft.Control] = [
+            ft.Row([app.text(title, 16, weight=ft.FontWeight.BOLD),
+                    app.text(popup.label, 13, color=ft.Colors.ON_SURFACE_VARIANT)], spacing=8, wrap=True),
+            ft.Column([ft.Text(body, size=app.fs(15), selectable=True)], scroll=ft.ScrollMode.AUTO, tight=True,
+                      height=None if len(body) < 600 else 260),
+        ]
+        target = self._find_entry(popup.entries[0], n)
+        actions = [
+            ft.TextButton(t("Read"), icon=ft.Icons.VOLUME_UP, on_click=lambda e: app.say_word(body),
+                          visible=app._speech_allowed()),
+            ft.TextButton(t("Copy"), icon=ft.Icons.CONTENT_COPY,
+                          on_click=lambda e: app.page.run_task(self._copy_text, body)),
+            ft.TextButton(t("Show in the list"), icon=ft.Icons.FORMAT_LIST_NUMBERED, visible=target is not None,
+                          on_click=lambda e: app.page.run_task(self._go_to_word, target)),
+            ft.IconButton(ft.Icons.CLOSE, tooltip=t("Close (Esc)"), on_click=self.close_card),
+        ]
+        rows.append(ft.Row(actions, spacing=4, wrap=True))
+        self._show_card(self._card_box(rows), "reference")
+        self._paint_selection(old | {page})
+
+    def _find_entry(self, entry: str, after: int) -> Optional[int]:
+        """Where a reference or note's text is in the document (its first words), preferring a place after word
+        ``after`` (the list is at the end), or None."""
+        import re as _re
+
+        want = [w for w in _re.sub(r"^\[\d+\]\s*", "", entry).split()][:5]
+        if len(want) < 2:
+            return None
+        texts = [w[1] for w in self.words]
+        hits = [k for k in range(len(texts) - len(want) + 1) if texts[k:k + len(want)] == want]
+        later = [k for k in hits if k > after]
+        return (later or hits or [None])[0]
+
+    async def _go_to_word(self, k: int) -> None:
+        """Close the card and show word ``k`` (a reference in the list, a note at the end)."""
+        await self.close_card()
+        page, _, rects = self.words[k]
+        await self.scroll_to(page, within=rects[0][1] if rects else 0.0)
 
     # ------------------------------------------------------------------ reading ruler
     def _line_at(self, i: int, y: float) -> Optional[int]:
@@ -1834,7 +1900,7 @@ class FocusMode:
         app.refresh_ai_log()
 
     async def _copy_text(self, text: str) -> None:
-        """Copy some text (the summary) to the clipboard."""
+        """Copy some text (a summary, a reference) to the clipboard."""
         await self.app.clipboard.set(text)
         self._toast(self.app.t("Copied."))
 

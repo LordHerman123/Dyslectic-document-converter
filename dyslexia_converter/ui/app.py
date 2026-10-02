@@ -113,6 +113,7 @@ class ConverterApp:
         self.reflow = ReflowMode(self)  # the reading view: the text itself, flowing to fit the window
         self.checker = CheckPanel(self)  # the whole-document AI check
         self._read_units: Optional[list] = None  # sentences of the converted PDF, made when reading starts
+        self._popups = None  # what citations and note markers point to (focus mode shows it when tapped)
         self._read_pos: Optional[int] = None  # sentence being read (kept when paused)
         self._reading = False
         self._hl_busy = False
@@ -2121,6 +2122,13 @@ class ConverterApp:
                                                                                  skip_pages=skip))
         return self._read_units
 
+    async def popups(self):
+        """What the citations and note markers of the converted document point to (worked out once per
+        conversion)."""
+        if self._popups is None and self.session is not None:
+            self._popups = await self.in_thread(lambda: self.session.compose(self.settings).popups)
+        return self._popups
+
     def _contents_pages(self) -> frozenset:
         """The contents page(s) at the start of the converted document (not read aloud, no highlights)."""
         pages = sorted(self._page_map())
@@ -2265,6 +2273,7 @@ class ConverterApp:
         self.speaker.stop()
         self._read_pos = None
         self._read_units = None
+        self._popups = None
         if hasattr(self, "read_btn"):
             self._update_read_buttons()
 

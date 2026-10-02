@@ -1763,6 +1763,10 @@ T: dict[str, dict[str, str]] = {
         "it": "Queste voci suonano molto più naturali della maggior parte delle voci del computer. Ognuna si "
               "scarica una volta (circa 60 MB) e poi funziona offline: il testo che leggi non lascia mai questo "
               "dispositivo."},
+    "Reference": {"nl": "Bron", "fr": "Référence", "de": "Quelle", "es": "Referencia", "it": "Riferimento"},
+    "References": {"nl": "Bronnen", "fr": "Références", "de": "Quellen", "es": "Referencias", "it": "Riferimenti"},
+    "Show in the list": {"nl": "Tonen in de lijst", "fr": "Afficher dans la liste", "de": "In der Liste zeigen",
+                         "es": "Mostrar en la lista", "it": "Mostra nell'elenco"},
 }
 
 # messages from the processing core, matched in i18n.MESSAGE_PATTERNS; {0}, {1}... are the parts found

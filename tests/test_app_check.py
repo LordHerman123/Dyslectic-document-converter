@@ -187,6 +187,19 @@ async def _read_everywhere(app, path):
             await dialog.actions[1].on_click(None)
             assert any(c.source == "user" for c in app.session.document.corrections)
         app.page.show_dialog = show
+    # a tap on a citation or note marker shows what it points to
+    for n, w in enumerate(f.words):
+        if w[1].startswith(("[", "(")):
+            popup = await f._popup_at(n)
+            if popup is not None:
+                await f.open_reference(w[0], n, popup)
+                assert f.card_mode == "reference" and f.card_layer.visible
+                target = f._find_entry(popup.entries[0], n)
+                if target is not None:
+                    await f._go_to_word(target)
+                    assert not f.card_layer.visible
+                await f.close_card()
+                break
     # the reading ruler: reading starts at its line, and it follows the line being read
     await f.on_ruler(None)
     if f.ruler:
