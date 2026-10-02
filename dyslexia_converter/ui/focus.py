@@ -67,6 +67,7 @@ class FocusMode:
     GAP = 18
     READY_PAGES = 20  # a long document opens once this many pages are drawn; the rest follow while reading
     PAD = 20
+    NARROW = 600  # a window narrower than this (pixels) is a phone: the pages fit its width
 
     def __init__(self, app: "ConverterApp"):
         """Set up the state; nothing is shown until :meth:`open`."""
@@ -145,8 +146,12 @@ class FocusMode:
 
     @property
     def fit(self) -> bool:
-        """Whether the pages are as wide as the window (scrolling layout only)."""
-        return bool(self.app.ui.get("focus_fit", False))
+        """Whether the pages are as wide as the window (scrolling layout only). Not chosen yet: on a phone-sized
+        screen yes (a page at its normal size would be too small to read), else no."""
+        chosen = self.app.ui.get("focus_fit")
+        if chosen is None:
+            return bool(self.app.page.width) and self.app.page.width < self.NARROW
+        return bool(chosen)
 
     @property
     def turns(self) -> int:
@@ -214,7 +219,8 @@ class FocusMode:
             ft.IconButton(ft.Icons.ZOOM_IN, tooltip=t("Larger"), on_click=lambda e: self._zoom_by(1.1)),
             ft.IconButton(ft.Icons.FULLSCREEN, tooltip=t("Hide the bars (Esc brings them back)"),
                           on_click=self.on_hide_bars),
-        ], spacing=2, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+        ], spacing=2, vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            scroll=ft.ScrollMode.AUTO),  # on a phone the buttons that do not fit are a swipe away
             padding=ft.Padding.symmetric(horizontal=8, vertical=2), bgcolor=ft.Colors.SURFACE_CONTAINER_LOW,
             clip_behavior=ft.ClipBehavior.HARD_EDGE)
 
