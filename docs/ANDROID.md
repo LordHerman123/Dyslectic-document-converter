@@ -9,6 +9,23 @@ The code is split so the Android version doesn't need a rewrite:
 * **OCR** sits behind the `OcrEngine` interface in `extract/ocr.py`, so a phone-friendly engine can be
   plugged in without touching the rest.
 
+## Status (branch `android_dev`)
+
+* **Building:** the *Android build* workflow (`.github/workflows/android-build.yml`) runs `flet build apk` on
+  every push to `android_dev`. The APKs (one per processor type; phones and tablets almost always need
+  `arm64-v8a`) are under the workflow run's *Artifacts*. Install one on a device with "install unknown apps"
+  allowed for your browser or file manager.
+* **Packages:** Flet's Android index (pypi.flet.dev) has every native package the converter needs for Python
+  3.12 to 3.14: PyMuPDF, NumPy, Pillow, RapidFuzz, lxml and pyjnius. The rest is pure Python.
+* **Reading aloud** uses the device's own voices (Android `TextToSpeech` through pyjnius, see
+  `AndroidEngine` in `speech.py`): every installed offline voice and language, at the chosen speed. Android
+  does not tell Python which word is being said, so the highlight is paced along the sentence. The natural
+  (Piper) voices are desktop-only for now: Piper's speech sounds component has no Android build.
+* **Phone screens:** focus mode fits the page to the screen width and its top bar scrolls sideways; the
+  reading view (*Read along*) suits a phone best, because the text itself reflows.
+* **Not yet:** OCR of scanned pages (no Tesseract on Android, see point 2 below), opening files shared from
+  other apps, and testing on real devices.
+
 ## Route 1: Flet APK (same code base)
 
 ```bash
