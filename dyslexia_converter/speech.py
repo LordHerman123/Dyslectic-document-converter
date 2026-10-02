@@ -649,6 +649,103 @@ class PiperEngine:
         self._stopped = True
 
 
+def on_android() -> bool:
+    """Whether the app runs on Android (a Flet build for phones and tablets)."""
+    import os
+
+    return os.environ.get("FLET_PLATFORM") == "android" or sys.platform == "android"
+
+
+class AndroidEngine:
+    """The phone's or tablet's own text-to-speech (Android ``TextToSpeech``, through pyjnius). It speaks every
+    installed voice and language; Android does not tell Python which word it is on, so the Speaker paces the
+    highlight by the length of the words. Offers the part of the pyttsx3 engine interface the Speaker uses."""
+
+    DEFAULT_WPM = 165  # speaking rate 1.0
+    _tts = None  # one speech engine for the app: starting one takes a moment
+    _ready = None
+
+    def __init__(self, jnius=None):
+        """Start (or reuse) Android's speech engine; ``jnius`` can be replaced in tests."""
+        if jnius is None:
+            import jnius
+        self._j = jnius
+        self._text = ""
+        self._stopped = False
+        self._rate = 1.0
+        if AndroidEngine._tts is None:
+            AndroidEngine._ready = threading.Event()
+            ready = AndroidEngine._ready
+
+            class Init(jnius.PythonJavaClass):
+                """Android calls this when its speech engine has started."""
+                __javainterfaces__ = ["android/speech/tts/TextToSpeech$OnInitListener"]
+                __javacontext__ = "app"
+
+                @jnius.java_method("(I)V")
+                def onInit(self, status):
+                    ready.set()
+
+            context = jnius.autoclass("android.app.ActivityThread").currentApplication()
+            self._listener = Init()  # kept alive while Android may call it
+            AndroidEngine._tts = jnius.autoclass("android.speech.tts.TextToSpeech")(context, self._listener)
+        AndroidEngine._ready.wait(5.0)
+        self._tts = AndroidEngine._tts
+
+    def getProperty(self, key: str):
+        """pyttsx3-style: every installed voice with its language (``key`` = "voices")."""
+        if key != "voices":
+            return None
+        out = []
+        voices = self._tts.getVoices()
+        for v in (voices.toArray() if voices is not None else []):
+            if v.isNetworkConnectionRequired():
+                continue  # only voices that work offline
+            tag = v.getLocale().toLanguageTag()
+            out.append(_VoiceInfo(v.getName(), f"{v.getLocale().getDisplayName()} ({v.getName()})",
+                                  [tag.split("-")[0].lower(), tag.lower()]))
+        return sorted(out, key=lambda v: v.name)
+
+    def setProperty(self, key: str, value) -> None:
+        """pyttsx3-style: the speed (words per minute) or the voice (its name)."""
+        if key == "rate":
+            self._rate = max(0.4, min(2.5, float(value) / self.DEFAULT_WPM))
+            self._tts.setSpeechRate(self._rate)
+        elif key == "voice":
+            voices = self._tts.getVoices()
+            for v in (voices.toArray() if voices is not None else []):
+                if v.getName() == value:
+                    self._tts.setVoice(v)
+                    break
+
+    def connect(self, name: str, cb) -> None:
+        """pyttsx3-style: word callbacks are not available (the Speaker paces the highlight instead)."""
+
+    def say(self, text: str) -> None:
+        """pyttsx3-style: the text to speak on the next :meth:`runAndWait`."""
+        self._text = text
+
+    def runAndWait(self) -> None:
+        """Speak the text and wait until it has been said (or reading was stopped)."""
+        if self._stopped or not self._text.strip():
+            return
+        flush = self._j.autoclass("android.speech.tts.TextToSpeech").QUEUE_FLUSH
+        self._tts.speak(self._text, flush, None, "dyslexia-converter")
+        t0 = time.monotonic()
+        while not self._tts.isSpeaking() and time.monotonic() - t0 < 2.0 and not self._stopped:
+            time.sleep(0.02)  # it takes a moment to start
+        while self._tts.isSpeaking() and not self._stopped:
+            time.sleep(0.05)
+
+    def stop(self) -> None:
+        """Stop speaking (from another thread)."""
+        self._stopped = True
+        try:
+            self._tts.stop()
+        except Exception:
+            pass
+
+
 def _wav_seconds(data: bytes) -> float:
     """Length of a WAV file's sound."""
     import io
@@ -701,6 +798,8 @@ class Speaker:
         nv = natural.voice_of(voice)
         if nv is not None:
             return PiperEngine(nv.key)
+        if on_android():
+            return AndroidEngine()  # the phone's own voices
         if sys.platform == "win32":
             try:
                 eng = WinRtEngine()  # all installed voices, exact word timings
