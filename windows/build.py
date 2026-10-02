@@ -33,7 +33,8 @@ PYINSTALLER_EXTRA = ["--collect-data=spellchecker", "--collect-data=pyphen", "--
                      "--collect-submodules=dyslexia_converter", "--hidden-import=pytesseract",
                      "--collect-submodules=pyttsx3", "--collect-submodules=comtypes",
                      "--hidden-import=win32com.client", "--hidden-import=pythoncom", "--hidden-import=pywintypes",
-                     "--collect-all=winrt"]  # speech drivers load by name
+                     "--collect-all=winrt",  # speech drivers load by name
+                     "--collect-all=piper", "--collect-all=onnxruntime"]  # natural voices (espeak data, models)
 TESSDATA_URL = "https://github.com/tesseract-ocr/tessdata/raw/main/{lang}.traineddata"
 
 

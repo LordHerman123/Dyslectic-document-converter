@@ -16,6 +16,11 @@ NumPy                       BSD                    https://numpy.org
 pytesseract                 Apache License 2.0     https://github.com/madmaze/pytesseract
 httpx                       BSD                    https://www.python-httpx.org
 Flet / Flutter              Apache License 2.0     https://flet.dev
+Piper (natural voices)      GNU GPL 3.0            https://github.com/OHF-Voice/piper1-gpl
+  eSpeak NG (in Piper)      GNU GPL 3.0            https://github.com/espeak-ng/espeak-ng
+ONNX Runtime                MIT                    https://onnxruntime.ai
+Piper voices (downloaded    see each voice's       https://huggingface.co/rhasspy/piper-voices
+  only on request)          MODEL_CARD
 Python                      PSF License            https://www.python.org
 Fonts                       see the LICENSE-*.txt files in this folder
                             (Atkinson Hyperlegible: SIL OFL 1.1; OpenDyslexic: Bitstream Vera

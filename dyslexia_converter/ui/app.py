@@ -15,6 +15,7 @@ from typing import Callable, Optional
 import flet as ft
 
 from .. import highlights, pipeline, speech
+from .. import voices as natural_voices
 from ..ai.assistant import PRIVACY_NOTICE, AIAssistant, ConsentRequired
 from ..ai import keys
 from ..ai.keystore import ENV_VARS, KeyStore, install_log_redaction, redact
@@ -1915,11 +1916,15 @@ class ConverterApp:
                                       on_change_end=self.on_read_speed)
         voices = self.speaker.voices() if self._speech_allowed() else []
         self.voice_dd = ft.Dropdown(label=t("Voice"), width=260, text_size=self.fs(13), dense=True,
-                                    options=[ft.DropdownOption(key="auto", text=t("Automatic"))]
-                                    + [ft.DropdownOption(key=vid, text=name) for vid, name in voices],
+                                    options=self._voice_options() if voices else
+                                    [ft.DropdownOption(key="auto", text=t("Automatic"))],
                                     value=self.ui.get("read_voice", "auto"), on_select=self.on_read_voice)
         self.follow_cb = ft.Checkbox(label=t("Turn pages along"), value=bool(self.ui.get("read_follow", True)),
                                      on_change=self.on_read_follow)
+        self.natural_btn = ft.IconButton(ft.Icons.RECORD_VOICE_OVER_OUTLINED, on_click=self.on_natural_voices,
+                                         visible=natural_voices.supported(),
+                                         tooltip=t("Natural voices") + ": "
+                                         + t("Download natural-sounding voices that work offline"))
         if not voices:
             self.read_btn.disabled = True
             self.read_btn.tooltip = t("No speech voices were found on this device.") + (
@@ -1930,7 +1935,8 @@ class ConverterApp:
                       "marked; size, spacing and colours change at once"))
         controls = ft.Row([
             self.read_btn, self.stop_btn, self.tap_btn, ft.Container(width=6),
-            self.text(t("Speed"), 13), self.speed_slider, self.speed_label, self.voice_dd, self.follow_cb,
+            self.text(t("Speed"), 13), self.speed_slider, self.speed_label, self.voice_dd, self.natural_btn,
+            self.follow_cb,
         ], wrap=True, spacing=6, expand=True, vertical_alignment=ft.CrossAxisAlignment.CENTER)
         # Read along on the right of the first line (the controls wrap under themselves, not under it)
         self.read_row = ft.Row([controls, ft.Container(self.read_along_btn, padding=ft.Padding.only(top=8))],
@@ -2083,6 +2089,11 @@ class ConverterApp:
         if getattr(self, "_voice_warned", None) == (self.source_path, lang) or self.speaker.voice_for(lang):
             return
         self._voice_warned = (self.source_path, lang)
+        if natural_voices.supported() and any(v.language == lang for v in natural_voices.CATALOG):
+            self.notify(self.t("No {language} voice is installed, so another voice reads the text. Download a "
+                               "natural {language} voice with Natural voices in the read-aloud panel.",
+                               language=self.lang_name(lang)), error=True)
+            return
         self.notify(self.t("No {language} voice is installed on this computer, so another voice reads the text. "
                            "You can add one in Windows Settings > Time & language > Speech > Add voices, then "
                            "restart the app.", language=self.lang_name(lang)), error=True)
@@ -2295,6 +2306,101 @@ class ConverterApp:
         self.ui["read_voice"] = e.control.value
         self.store.save_ui(self.ui)
         await self._restart_reading()
+
+    def _voice_options(self) -> list:
+        """The voice menu: Automatic, then every voice (natural voices first)."""
+        return [ft.DropdownOption(key="auto", text=self.t("Automatic"))] + [
+            ft.DropdownOption(key=vid, text=name) for vid, name in self.speaker.voices()]
+
+    async def on_natural_voices(self, e):
+        """Natural voices: download (or remove) Piper voices, the document's language first. They are used
+        offline; Automatic picks one for the document's language."""
+        t = self.t
+        lang = self.session.document.language if self.session else self.ui.get("app_language", "en")
+        rows = ft.Column(spacing=6, tight=True, scroll=ft.ScrollMode.AUTO)
+        busy: dict[str, float] = {}  # voices being downloaded: progress 0..1
+
+        def fill():
+            """The list of voices with what can be done with each."""
+            have = {v.key for v in natural_voices.installed()}
+            order = sorted(natural_voices.CATALOG, key=lambda v: (v.language != lang, v.language, not v.woman))
+            rows.controls = []
+            for v in order:
+                kind = t("woman") if v.woman else t("man")
+                label = ft.Column([self.text(f"{v.name} · {self.lang_name(v.language)}", 14,
+                                             weight=ft.FontWeight.BOLD),
+                                   self.text(f"{v.region} · {kind} · {v.megabytes} MB", 12,
+                                             color=ft.Colors.ON_SURFACE_VARIANT)], spacing=0, expand=True)
+                if v.key in busy:
+                    action = ft.ProgressBar(value=busy[v.key], width=140)
+                elif v.key in have:
+                    action = ft.Row([ft.Icon(ft.Icons.CHECK_CIRCLE, color=ft.Colors.PRIMARY, size=20,
+                                             tooltip=t("Downloaded")),
+                                     ft.TextButton(t("Remove"), data=v.key, on_click=remove)], spacing=4, tight=True)
+                else:
+                    action = ft.OutlinedButton(t("Download"), icon=ft.Icons.DOWNLOAD, data=v.key, on_click=get,
+                                               disabled=bool(busy))
+                rows.controls.append(ft.Row([label, action], vertical_alignment=ft.CrossAxisAlignment.CENTER))
+
+        def voices_changed():
+            """Look for voices again and put them in the voice menu."""
+            self.speaker.refresh()
+            self.voice_dd.options = self._voice_options()
+            if self.voice_dd.value not in {o.key for o in self.voice_dd.options}:
+                self.voice_dd.value = "auto"
+                self.ui["read_voice"] = "auto"
+                self.store.save_ui(self.ui)
+            self._update_read_buttons()
+
+        async def get(ev):
+            """Download one voice, showing how far it is."""
+            key = ev.control.data
+            busy[key] = 0.0
+            fill()
+            self.page.update()
+
+            def progress(f):
+                busy[key] = f
+
+            job = asyncio.ensure_future(self.in_thread(natural_voices.download, key, progress,
+                                                       lambda: not dialog.open))
+            while not job.done():
+                await asyncio.sleep(0.3)
+                fill()
+                self.page.update()
+            busy.pop(key, None)
+            try:
+                v = job.result()
+                voices_changed()
+                self.notify(t("The natural voice {name} is ready. With the voice on Automatic it reads "
+                              "{language} documents.", name=v.name, language=self.lang_name(v.language)))
+            except natural_voices.VoiceDownloadError as ex:
+                if str(ex) != "cancelled":
+                    self.notify(t("The voice could not be downloaded:") + " " + str(ex), error=True)
+            fill()
+            self.page.update()
+
+        async def remove(ev):
+            """Delete a downloaded voice."""
+            self.stop_reading()
+            natural_voices.remove(ev.control.data)
+            voices_changed()
+            fill()
+            self.page.update()
+
+        def close(_):
+            self.page.pop_dialog()
+
+        fill()
+        dialog = ft.AlertDialog(
+            title=self.text(t("Natural voices"), 18, weight=ft.FontWeight.BOLD),
+            content=ft.Container(ft.Column([
+                self.text(t("These voices sound much more natural than most voices built into the computer. "
+                            "Each is downloaded once (about 60 MB) and then works offline: the text you read "
+                            "never leaves this device."), 13),
+                ft.Container(rows, height=380)], tight=True, spacing=12), width=520),
+            actions=[ft.TextButton(t("Close"), on_click=close)])
+        self.page.show_dialog(dialog)
 
     async def on_read_follow(self, e):
         """"Turn pages along" on or off."""

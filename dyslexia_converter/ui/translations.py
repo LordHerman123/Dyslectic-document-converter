@@ -1712,6 +1712,57 @@ T: dict[str, dict[str, str]] = {
                                            "de": "Wörter, die durch ein Leerzeichen getrennt sein können",
                                            "es": "Palabras que quizá estén separadas por un espacio",
                                            "it": "Parole forse divise da uno spazio"},
+    "Natural voices": {"nl": "Natuurlijke stemmen", "fr": "Voix naturelles", "de": "Natürliche Stimmen",
+                       "es": "Voces naturales", "it": "Voci naturali"},
+    "Download natural-sounding voices that work offline": {
+        "nl": "Natuurlijk klinkende stemmen downloaden die offline werken",
+        "fr": "Télécharger des voix au son naturel qui fonctionnent hors ligne",
+        "de": "Natürlich klingende Stimmen herunterladen, die offline funktionieren",
+        "es": "Descargar voces de sonido natural que funcionan sin conexión",
+        "it": "Scarica voci dal suono naturale che funzionano offline"},
+    "Downloaded": {"nl": "Gedownload", "fr": "Téléchargée", "de": "Heruntergeladen", "es": "Descargada",
+                   "it": "Scaricata"},
+    "man": {"nl": "man", "fr": "homme", "de": "Mann", "es": "hombre", "it": "uomo"},
+    "woman": {"nl": "vrouw", "fr": "femme", "de": "Frau", "es": "mujer", "it": "donna"},
+    "The voice could not be downloaded:": {"nl": "De stem kon niet gedownload worden:",
+                                           "fr": "La voix n'a pas pu être téléchargée :",
+                                           "de": "Die Stimme konnte nicht heruntergeladen werden:",
+                                           "es": "No se pudo descargar la voz:",
+                                           "it": "Non è stato possibile scaricare la voce:"},
+    "The natural voice {name} is ready. With the voice on Automatic it reads {language} documents.": {
+        "nl": "De natuurlijke stem {name} is klaar. Met de stem op Automatisch leest ze {language} documenten voor.",
+        "fr": "La voix naturelle {name} est prête. Avec la voix sur Automatique, elle lit les documents en {language}.",
+        "de": "Die natürliche Stimme {name} ist bereit. Mit der Stimme auf Automatisch liest sie Dokumente auf "
+              "{language} vor.",
+        "es": "La voz natural {name} está lista. Con la voz en Automática, lee los documentos en {language}.",
+        "it": "La voce naturale {name} è pronta. Con la voce su Automatica legge i documenti in {language}."},
+    "No {language} voice is installed, so another voice reads the text. Download a natural {language} voice with Natural voices in the read-aloud panel.": {
+        "nl": "Er is geen stem voor {language} geïnstalleerd, dus een andere stem leest de tekst voor. Download een "
+              "natuurlijke stem voor {language} met Natuurlijke stemmen in het voorleespaneel.",
+        "fr": "Aucune voix {language} n'est installée, une autre voix lit donc le texte. Téléchargez une voix "
+              "naturelle {language} avec Voix naturelles dans le panneau de lecture.",
+        "de": "Es ist keine Stimme für {language} installiert, daher liest eine andere Stimme den Text. Laden Sie "
+              "mit Natürliche Stimmen im Vorlesebereich eine natürliche Stimme für {language} herunter.",
+        "es": "No hay ninguna voz en {language} instalada, así que otra voz lee el texto. Descargue una voz "
+              "natural en {language} con Voces naturales en el panel de lectura.",
+        "it": "Non è installata nessuna voce in {language}, quindi un'altra voce legge il testo. Scarica una voce "
+              "naturale in {language} con Voci naturali nel pannello di lettura."},
+    "These voices sound much more natural than most voices built into the computer. Each is downloaded once (about 60 MB) and then works offline: the text you read never leaves this device.": {
+        "nl": "Deze stemmen klinken veel natuurlijker dan de meeste stemmen van de computer. Elke stem wordt één "
+              "keer gedownload (ongeveer 60 MB) en werkt daarna offline: de tekst die u leest verlaat dit apparaat "
+              "nooit.",
+        "fr": "Ces voix sont bien plus naturelles que la plupart des voix de l'ordinateur. Chacune est téléchargée "
+              "une fois (environ 60 Mo) puis fonctionne hors ligne : le texte que vous lisez ne quitte jamais cet "
+              "appareil.",
+        "de": "Diese Stimmen klingen viel natürlicher als die meisten Stimmen des Computers. Jede wird einmal "
+              "heruntergeladen (etwa 60 MB) und funktioniert dann offline: Der Text, den Sie lesen, verlässt "
+              "dieses Gerät nie.",
+        "es": "Estas voces suenan mucho más naturales que la mayoría de las voces del ordenador. Cada una se "
+              "descarga una vez (unos 60 MB) y luego funciona sin conexión: el texto que lee nunca sale de este "
+              "dispositivo.",
+        "it": "Queste voci suonano molto più naturali della maggior parte delle voci del computer. Ognuna si "
+              "scarica una volta (circa 60 MB) e poi funziona offline: il testo che leggi non lascia mai questo "
+              "dispositivo."},
 }
 
 # messages from the processing core, matched in i18n.MESSAGE_PATTERNS; {0}, {1}... are the parts found
