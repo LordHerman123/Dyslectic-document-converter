@@ -15,6 +15,7 @@ from typing import Callable, Optional
 import flet as ft
 
 from .. import highlights, pipeline, speech
+from .. import audio_export
 from .. import voices as natural_voices
 from ..ai.assistant import PRIVACY_NOTICE, AIAssistant, ConsentRequired
 from ..ai import keys
@@ -1934,10 +1935,14 @@ class ConverterApp:
             t("Read along"), icon=ft.Icons.CHROME_READER_MODE_OUTLINED, on_click=self.on_reflow,
             tooltip=t("Read the text itself, flowing to fit the window, with the sentence and word being read "
                       "marked; size, spacing and colours change at once"))
+        self.audio_btn = ft.IconButton(ft.Icons.AUDIO_FILE_OUTLINED, on_click=self.on_audio_export,
+                                       visible=audio_export.supported() and bool(voices),
+                                       tooltip=t("Save as audio (MP3): the whole document, some pages or your "
+                                                 "selection"))
         controls = ft.Row([
             self.read_btn, self.stop_btn, self.tap_btn, ft.Container(width=6),
             self.text(t("Speed"), 13), self.speed_slider, self.speed_label, self.voice_dd, self.natural_btn,
-            self.follow_cb,
+            self.audio_btn, self.follow_cb,
         ], wrap=True, spacing=6, expand=True, vertical_alignment=ft.CrossAxisAlignment.CENTER)
         # Read along on the right of the first line (the controls wrap under themselves, not under it)
         self.read_row = ft.Row([controls, ft.Container(self.read_along_btn, padding=ft.Padding.only(top=8))],
@@ -2410,6 +2415,115 @@ class ConverterApp:
                 ft.Container(rows, height=380)], tight=True, spacing=12), width=520),
             actions=[ft.TextButton(t("Close"), on_click=close)])
         self.page.show_dialog(dialog)
+
+    async def on_audio_export(self, e):
+        """Save as audio: the whole document, some pages or the selection in focus mode, spoken with the voice
+        and speed of reading aloud, as one MP3 file."""
+        t = self.t
+        if not self.converted_pdf or not self.session:
+            self.notify(t("Open a PDF first."), error=True)
+            return
+        units = await self._units()
+        if not units:
+            self.notify(t("There is no text to read on these pages."))
+            return
+        sel = self.focus.sel if self.focus.active else None
+        pages = sorted({u.page for u in units})
+        first_page = self.focus.current if self.focus.active else self.conv_page
+        speed = float(self.ui.get("read_speed", 1.0))
+        voice = self._voice()
+        voice_name = next((name for vid, name in self.speaker.voices() if vid == voice), t("Automatic"))
+        what = ft.SegmentedButton(
+            segments=[ft.Segment("all", label=ft.Text(t("Whole document"))),
+                      ft.Segment("pages", label=ft.Text(t("Pages")))]
+            + ([ft.Segment("selection", label=ft.Text(t("Selection")))] if sel else []),
+            selected=["selection" if sel else "all"], show_selected_icon=False,
+            style=ft.ButtonStyle(visual_density=ft.VisualDensity.COMPACT))
+        page_from = ft.TextField(value=str(max(first_page, pages[0]) + 1), width=72, dense=True,
+                                 keyboard_type=ft.KeyboardType.NUMBER, text_align=ft.TextAlign.CENTER)
+        page_to = ft.TextField(value=str(max(first_page, pages[0]) + 1), width=72, dense=True,
+                               keyboard_type=ft.KeyboardType.NUMBER, text_align=ft.TextAlign.CENTER)
+        page_row = ft.Row([self.text(t("From page"), 13), page_from, self.text(t("to"), 13), page_to],
+                          spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+        info = self.text("", 13, color=ft.Colors.ON_SURFACE_VARIANT)
+        bar = ft.ProgressBar(value=0, visible=False)
+        state = {"cancel": False, "running": False}
+
+        def texts() -> list[str]:
+            """The parts to speak for the choice made."""
+            choice = (what.selected or ["all"])[0]
+            if choice == "selection" and sel:
+                return audio_export.parts(audio_export.split_sentences(highlights.text_of(self.focus.words,
+                                                                                        *sel)))
+            if choice == "pages":
+                try:
+                    a, b = int(page_from.value) - 1, int(page_to.value) - 1
+                except ValueError:
+                    return []
+                a, b = min(a, b), max(a, b)
+                return audio_export.parts(u.text for u in units if a <= u.page <= b)
+            return audio_export.parts(u.text for u in units)
+
+        def describe(_=None):
+            """How long the audio will be, with which voice and speed."""
+            page_row.visible = (what.selected or ["all"])[0] == "pages"
+            mins = audio_export.minutes(texts(), speed)
+            length = t("about {n} minutes", n=max(1, round(mins))) if mins >= 1 else t("under a minute")
+            info.value = f"{length} · {voice_name} · {_speed_text(speed)}"
+            self.page.update()
+
+        what.on_change = describe
+        page_from.on_change = page_to.on_change = describe
+
+        def close(_=None):
+            state["cancel"] = True
+            self.page.pop_dialog()
+
+        async def save(_):
+            """Make the MP3 (with progress), then ask where to save it."""
+            parts = texts()
+            if not parts or state["running"]:
+                return
+            state["running"] = True
+            save_btn.disabled, what.disabled, page_row.disabled = True, True, True
+            bar.visible, bar.value = True, 0
+            info.value = t("Making the audio...")
+            self.page.update()
+            self.stop_reading()
+
+            def progress(f):
+                bar.value = f
+
+            job = asyncio.ensure_future(self.in_thread(
+                audio_export.export_mp3, parts, lambda ts: self.speaker.render_many(ts, speed, voice), progress,
+                lambda: state["cancel"]))
+            while not job.done():
+                await asyncio.sleep(0.4)
+                info.value = t("Making the audio...") + f" {round((bar.value or 0) * 100)}%"
+                self.page.update()
+            try:
+                mp3 = job.result()
+            except audio_export.AudioExportError as ex:
+                if str(ex) != "cancelled":
+                    self.page.pop_dialog()
+                    self.notify(t("The audio could not be made:") + " " + str(ex), error=True)
+                return
+            except Exception as ex:
+                log.exception("audio export failed")
+                self.notify(t("The audio could not be made:") + " " + redact(str(ex)), error=True)
+                self.page.pop_dialog()
+                return
+            self.page.pop_dialog()
+            choice = (what.selected or ["all"])[0]
+            suffix = {"pages": f" p{page_from.value}-{page_to.value}", "selection": " selection"}.get(choice, "")
+            await self.save_bytes(mp3, f"{Path(self.source_path).stem}{suffix}.mp3", "mp3")
+
+        save_btn = ft.FilledButton(t("Save MP3"), icon=ft.Icons.DOWNLOAD, on_click=save)
+        self.page.show_dialog(ft.AlertDialog(
+            title=self.text(t("Save as audio"), 18, weight=ft.FontWeight.BOLD),
+            content=ft.Container(ft.Column([what, page_row, info, bar], spacing=14, tight=True), width=440),
+            actions=[ft.TextButton(t("Cancel"), on_click=close), save_btn]))
+        describe()
 
     async def on_read_follow(self, e):
         """"Turn pages along" on or off."""

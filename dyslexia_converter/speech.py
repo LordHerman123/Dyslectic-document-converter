@@ -14,7 +14,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Callable, Optional
+from typing import Callable, Iterable, Optional
 
 import pymupdf
 
@@ -395,6 +395,12 @@ class WinRtEngine:
         reader.read_bytes(buf)
         return bytes(buf), words
 
+    def to_wav(self, text: str) -> bytes:
+        """The spoken text as WAV bytes (for saving as audio), without playing it."""
+        import asyncio
+
+        return asyncio.run(self._synthesize(text))[0]
+
     def runAndWait(self) -> None:
         """Synthesise the text, then play it and report each word at its time (or report them at once without
         playing).
@@ -625,6 +631,10 @@ class PiperEngine:
             w.writeframes(bytes(audio))
         return buf.getvalue(), word_times(text, parts)
 
+    def to_wav(self, text: str) -> bytes:
+        """The spoken text as WAV bytes (for saving as audio), without playing it."""
+        return self.synthesize(text)[0]
+
     def runAndWait(self) -> None:
         """Make the sound of the text, then play it and report each word at its time (or report them at once
         without playing)."""
@@ -794,6 +804,56 @@ class Speaker:
             if score > best_score:
                 best, best_score = vid, score
         return best
+
+    def render_many(self, texts: Iterable[str], speed: float = 1.0, voice: Optional[str] = None):
+        """Speak ``texts`` into sound instead of the speakers: yields the WAV bytes of each text, in order (for
+        saving as audio; runs on a worker thread). Uses the same voice and speed as reading aloud."""
+        import os
+        import tempfile
+
+        com = _com_init()
+        try:
+            eng = self._make(voice)
+            if isinstance(eng, SapiEngine):  # SAPI speaks into a file: one per text
+                eng.close()
+                eng = None
+            else:
+                eng.setProperty("rate", int(self.BASE_RATE * max(0.4, min(2.5, speed))))
+                if voice:
+                    try:
+                        eng.setProperty("voice", voice)
+                    except Exception:
+                        pass
+            for text in texts:
+                if not text.strip():
+                    continue
+                if eng is not None and hasattr(eng, "to_wav"):
+                    yield eng.to_wav(text)
+                    continue
+                fd, path = tempfile.mkstemp(suffix=".wav", prefix="dc-audio-")
+                os.close(fd)
+                try:
+                    if eng is None:  # SAPI
+                        sapi = SapiEngine(output_wav=path)
+                        sapi.setProperty("rate", int(self.BASE_RATE * max(0.4, min(2.5, speed))))
+                        if voice:
+                            sapi.setProperty("voice", voice)
+                        sapi.say(text)
+                        sapi.runAndWait()
+                        sapi.close()
+                    else:  # pyttsx3 (eSpeak, macOS): its own way of saving
+                        eng.save_to_file(text, path)
+                        eng.runAndWait()
+                    with open(path, "rb") as f:
+                        yield f.read()
+                finally:
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
+        finally:
+            if com is not None:
+                com.CoUninitialize()
 
     @property
     def speaking(self) -> bool:
