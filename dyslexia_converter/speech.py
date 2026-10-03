@@ -129,6 +129,42 @@ def reading_units(pdf: bytes | str, max_words: int = MAX_WORDS, skip_pages: froz
     return sentences
 
 
+def prepare_reading(sentences: list[Sentence], skip_citations: bool = False,
+                    end: Optional[int] = None) -> tuple[list[Sentence], list[list[int]]]:
+    """The sentences as they are read aloud: without in-text citations ("(Smith, 2019)", "[3]", "[Note 2]") when
+    ``skip_citations``, and without anything from sentence ``end`` on (the reference list and notes at the end).
+    Returns them with, for each, the numbers of the original words kept, so the highlight marks the right word.
+    A sentence that was only a citation has no words left (it is passed over)."""
+    from .audio_export import citation_spans
+
+    out, maps = [], []
+    for si, s in enumerate(sentences if end is None else sentences[:end]):
+        keep = list(range(len(s.words)))
+        if skip_citations and s.words:
+            text, starts, pos = "", [], 0
+            for w in s.words:
+                starts.append(len(text))
+                text += w.text + " "
+            spans = citation_spans(text)
+            if spans:
+                keep = [k for k in keep if not any(a <= starts[k] < b or a < starts[k] + len(s.words[k].text) <= b
+                                                     for a, b in spans)]
+        words, pos, kept = [], 0, set(keep)
+        for k, w in enumerate(s.words):
+            if k in kept:
+                words.append(Word(w.text, w.page, w.rects, pos))
+                pos += len(w.text) + 1
+            elif words:
+                # punctuation after a citation ("2014).") stays with the word before it, so the sentence still ends
+                tail = re.sub(r"^.*?[)\]]", "", w.text) if re.search(r"[)\]]", w.text) else ""
+                if tail and not re.search(r"\w", tail):
+                    words[-1] = Word(words[-1].text + tail, words[-1].page, words[-1].rects, words[-1].start)
+                    pos += len(tail)
+        out.append(Sentence(words))
+        maps.append(keep)
+    return out, maps
+
+
 def sentence_at(sentences: list[Sentence], page: int, x: float, y: float) -> Optional[int]:
     """The sentence of the word nearest to a point on a page (a click on the preview)."""
     best, best_d = None, None
@@ -921,6 +957,8 @@ class Speaker:
                 for si in range(index, len(sentences)):
                     if stop.is_set():
                         break
+                    if not sentences[si].words:
+                        continue  # nothing left to say (only a citation)
                     current["s"] = si
                     on_sentence(si)
                     sentence_done = threading.Event()

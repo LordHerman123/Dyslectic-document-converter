@@ -114,6 +114,7 @@ class ConverterApp:
         self.reflow = ReflowMode(self)  # the reading view: the text itself, flowing to fit the window
         self.checker = CheckPanel(self)  # the whole-document AI check
         self._read_units: Optional[list] = None  # sentences of the converted PDF, made when reading starts
+        self._read_maps: list = []  # per sentence read: the numbers of its words that are said
         self._popups = None  # what citations and note markers point to (focus mode shows it when tapped)
         self._read_pos: Optional[int] = None  # sentence being read (kept when paused)
         self._reading = False
@@ -1935,12 +1936,12 @@ class ConverterApp:
             t("Read along"), icon=ft.Icons.CHROME_READER_MODE_OUTLINED, on_click=self.on_reflow,
             tooltip=t("Read the text itself, flowing to fit the window, with the sentence and word being read "
                       "marked; size, spacing and colours change at once"))
-        self.audio_btn = ft.IconButton(ft.Icons.AUDIO_FILE_OUTLINED, on_click=self.on_audio_export,
-                                       visible=audio_export.supported() and bool(voices),
-                                       tooltip=t("Save as audio (MP3): the whole document, some pages or your "
-                                                 "selection"))
+        self.audio_btn = ft.OutlinedButton(t("MP3"), icon=ft.Icons.AUDIO_FILE_OUTLINED, on_click=self.on_audio_export,
+                                           visible=bool(voices),
+                                           tooltip=t("Save as audio (MP3): the whole document, some pages or your "
+                                                     "selection"))
         controls = ft.Row([
-            self.read_btn, self.stop_btn, self.tap_btn, ft.Container(width=6),
+            self.read_btn, self.stop_btn, self.tap_btn, self.reading_options_menu(), ft.Container(width=6),
             self.text(t("Speed"), 13), self.speed_slider, self.speed_label, self.voice_dd, self.natural_btn,
             self.audio_btn, self.follow_cb,
         ], wrap=True, spacing=6, expand=True, vertical_alignment=ft.CrossAxisAlignment.CENTER)
@@ -1977,6 +1978,9 @@ class ConverterApp:
         t = self.t
         items = [ft.PopupMenuItem(t(label), icon=EXPORT_ICONS[fmt], data=fmt, on_click=self.on_export)
                  for fmt, label, _ in EXPORTS]
+        if self._speech_allowed():
+            items.append(ft.PopupMenuItem(t("MP3 (text to speech)"), icon=ft.Icons.AUDIO_FILE_OUTLINED,
+                                          on_click=self.on_audio_export))
         has = bool(self.doc_highlights())
         divider = ft.PopupMenuItem(visible=has)
         hl_item = ft.PopupMenuItem(t("Include my highlights (PDF)"), checked=bool(self.ui.get("export_highlights", True)),
@@ -2199,7 +2203,10 @@ class ConverterApp:
         self._read_pos = start
         self._update_read_buttons()
         self.page.update()
-        self.speaker.start(units, start, float(self.ui.get("read_speed", 1.0)), self._voice(),
+        end = self._end_unit(units) if self.reading_option("skip_end") else None
+        spoken, self._read_maps = speech.prepare_reading(
+            units, self.reading_option("skip_citations"), end if end is not None and start < end else None)
+        self.speaker.start(spoken, start, float(self.ui.get("read_speed", 1.0)), self._voice(),
                            on_word=lambda si, wi: post(self._show_word(si, wi)),
                            on_sentence=lambda si: post(self._show_word(si, 0)),
                            on_done=lambda finished: post(self._read_done(finished)))
@@ -2228,6 +2235,9 @@ class ConverterApp:
                 self._hl_next = None
                 self._read_pos = si
                 sentence = self._read_units[si]
+                kept = self._read_maps[si] if si < len(self._read_maps) else []
+                if kept:  # the word as numbered in the full sentence (citations may have been left out)
+                    wi = kept[min(wi, len(kept) - 1)]
                 word = sentence.words[min(wi, len(sentence.words) - 1)]
                 page = word.page
                 if self.focus.active:
@@ -2247,8 +2257,12 @@ class ConverterApp:
                                                                      self.orig_page, 800)
                             self.orig_label.value = f"{self.t('Original')} {self.orig_page + 1} / {self.orig_count}"
                 rects = [r for w in sentence.words if w.page == page for r in w.rects]
+                if not self.reading_option("reading_highlight"):
+                    rects, word_rects = [], []
+                else:
+                    word_rects = list(word.rects)
                 self.conv_img.src = await self.in_thread(preview.render_highlight, self.converted_pdf, page, 800,
-                                                         rects, [r for r in word.rects], bool(self.ui.get("dark_mode")))
+                                                         rects, word_rects, bool(self.ui.get("dark_mode")))
                 self.page.update()
         finally:
             self._hl_busy = False
@@ -2300,6 +2314,46 @@ class ConverterApp:
             self.page.update()
             return
         await self.show_pages()
+
+    # what reading aloud leaves out and shows (shared by reading aloud, focus mode, the reading view and MP3)
+    READING_OPTIONS = [("skip_citations", "Skip citations in the text, like (Smith, 2019) and [3]", False),
+                       ("skip_end", "Skip the reference list and notes at the end", False),
+                       ("reading_highlight", "Mark what is being read", True),
+                       ("ruler_follows", "The reading ruler follows the voice (focus mode)", True)]
+
+    def reading_option(self, key: str) -> bool:
+        """One of the reading options (see :attr:`READING_OPTIONS`)."""
+        default = next(d for k, _, d in self.READING_OPTIONS if k == key)
+        return bool(self.ui.get(key, default))
+
+    def reading_options_menu(self, keys: Optional[list[str]] = None, on_change=None) -> ft.PopupMenuButton:
+        """A small menu of reading options with a tick for each that is on; ``on_change`` is called (async) after
+        one changed (by default: the current sentence starts again, so it applies at once)."""
+        t = self.t
+        menu = ft.PopupMenuButton(icon=ft.Icons.TUNE, tooltip=t("Reading options"),
+                                  menu_position=ft.PopupMenuPosition.UNDER)
+
+        async def toggle(e):
+            key = e.control.data
+            self.ui[key] = not self.reading_option(key)
+            self.store.save_ui(self.ui)
+            for item in menu.items:
+                item.checked = self.reading_option(item.data)
+            menu.update()
+            await (on_change() if on_change else self._restart_reading())
+
+        menu.items = [ft.PopupMenuItem(t(label), data=key, checked=self.reading_option(key), on_click=toggle)
+                      for key, label, _ in self.READING_OPTIONS if keys is None or key in keys]
+        return menu
+
+    def _end_unit(self, units: list) -> Optional[int]:
+        """Where the reference list and notes at the end of the converted document start (a sentence number)."""
+        if getattr(self, "_end_cache", (None, None))[0] is not units:
+            import pymupdf
+
+            toc = pymupdf.open(stream=self.converted_pdf, filetype="pdf").get_toc() if self.converted_pdf else []
+            self._end_cache = (units, audio_export.end_part_start(units, toc))
+        return self._end_cache[1]
 
     async def _restart_reading(self) -> None:
         """Start the current sentence again (after the speed or voice changed while reading)."""
@@ -2417,63 +2471,117 @@ class ConverterApp:
         self.page.show_dialog(dialog)
 
     async def on_audio_export(self, e):
-        """Save as audio: the whole document, some pages or the selection in focus mode, spoken with the voice
-        and speed of reading aloud, as one MP3 file."""
+        """MP3 (text to speech): save the whole document, some pages or the selection in focus mode as one MP3,
+        with a voice of your choice (a natural Piper voice or one of the computer's), leaving out in-text
+        citations and the reference list and notes at the end if you like."""
         t = self.t
         if not self.converted_pdf or not self.session:
             self.notify(t("Open a PDF first."), error=True)
+            return
+        if not audio_export.supported():
+            self.notify(t("Saving MP3 files needs the lameenc package (pip install lameenc); the app download "
+                          "includes it."), error=True)
             return
         units = await self._units()
         if not units:
             self.notify(t("There is no text to read on these pages."))
             return
+        toc = await self.in_thread(lambda: __import__("pymupdf").open(stream=self.converted_pdf,
+                                                                      filetype="pdf").get_toc())
+        end_at = audio_export.end_part_start(units, toc)
         sel = self.focus.sel if self.focus.active else None
         pages = sorted({u.page for u in units})
-        first_page = self.focus.current if self.focus.active else self.conv_page
-        speed = float(self.ui.get("read_speed", 1.0))
-        voice = self._voice()
-        voice_name = next((name for vid, name in self.speaker.voices() if vid == voice), t("Automatic"))
+        here = max(self.focus.current if self.focus.active else self.conv_page, pages[0]) + 1
+        ui = self.ui
+        all_voices = self.speaker.voices()
+        natural = [(vid, name.replace(" - natural", "")) for vid, name in all_voices if vid.startswith("piper:")]
+        system = [(vid, name) for vid, name in all_voices if not vid.startswith("piper:")]
+        current = ui.get("audio_voice") or self._voice() or ""
+        engine0 = "natural" if (current.startswith("piper:") and natural) or (natural and not system) else "system"
+        system_label = t("Windows voices") if sys.platform == "win32" else t("Computer voices")
+
+        def section(title, *controls):
+            """A labelled group of the dialog."""
+            return ft.Column([self.text(title, 13, weight=ft.FontWeight.BOLD, color=ft.Colors.ON_SURFACE_VARIANT),
+                              *controls], spacing=6, tight=True)
+
+        compact = ft.ButtonStyle(visual_density=ft.VisualDensity.COMPACT)
         what = ft.SegmentedButton(
             segments=[ft.Segment("all", label=ft.Text(t("Whole document"))),
                       ft.Segment("pages", label=ft.Text(t("Pages")))]
             + ([ft.Segment("selection", label=ft.Text(t("Selection")))] if sel else []),
-            selected=["selection" if sel else "all"], show_selected_icon=False,
-            style=ft.ButtonStyle(visual_density=ft.VisualDensity.COMPACT))
-        page_from = ft.TextField(value=str(max(first_page, pages[0]) + 1), width=72, dense=True,
-                                 keyboard_type=ft.KeyboardType.NUMBER, text_align=ft.TextAlign.CENTER)
-        page_to = ft.TextField(value=str(max(first_page, pages[0]) + 1), width=72, dense=True,
-                               keyboard_type=ft.KeyboardType.NUMBER, text_align=ft.TextAlign.CENTER)
-        page_row = ft.Row([self.text(t("From page"), 13), page_from, self.text(t("to"), 13), page_to],
-                          spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+            selected=["selection" if sel else "all"], show_selected_icon=False, style=compact)
+        page_from = ft.TextField(value=str(here), width=64, dense=True, text_align=ft.TextAlign.CENTER,
+                                 keyboard_type=ft.KeyboardType.NUMBER)
+        page_to = ft.TextField(value=str(here), width=64, dense=True, text_align=ft.TextAlign.CENTER,
+                               keyboard_type=ft.KeyboardType.NUMBER)
+        page_row = ft.Row([self.text(t("From page"), 13), page_from, self.text(t("to"), 13), page_to], spacing=8,
+                          vertical_alignment=ft.CrossAxisAlignment.CENTER)
+        engine = ft.SegmentedButton(
+            segments=[ft.Segment("natural", label=ft.Text(t("Natural (Piper)"))),
+                      ft.Segment("system", label=ft.Text(system_label), disabled=not system)],
+            selected=[engine0], show_selected_icon=False, style=compact)
+        voice_dd = ft.Dropdown(width=300, dense=True, text_size=self.fs(13))
+        get_voices = ft.TextButton(t("Download natural voices"), icon=ft.Icons.RECORD_VOICE_OVER_OUTLINED,
+                                   on_click=lambda ev: (self.page.pop_dialog(),
+                                                        self.page.run_task(self.on_natural_voices, ev)))
+        speeds = [0.75, 0.9, 1.0, 1.15, 1.3, 1.5]
+        speed0 = float(ui.get("audio_speed", ui.get("read_speed", 1.0)))
+        speed_dd = ft.Dropdown(width=110, dense=True, text_size=self.fs(13), value=str(speed0),
+                               options=[ft.DropdownOption(key=str(v), text=_speed_text(v))
+                                        for v in sorted(set(speeds + [speed0]))])
+        skip_cites = ft.Checkbox(label=t("Skip citations in the text, like (Smith, 2019) and [3]"),
+                                 value=self.reading_option("skip_citations"))
+        cites_note = self.text(t("Most are found, but some unusual ones may still be read."), 12,
+                               color=ft.Colors.ON_SURFACE_VARIANT)
+        skip_end = ft.Checkbox(label=t("Skip the reference list and notes at the end"),
+                               value=self.reading_option("skip_end"), disabled=end_at is None,
+                               tooltip=None if end_at is not None else t("No reference list or notes were found"))
         info = self.text("", 13, color=ft.Colors.ON_SURFACE_VARIANT)
         bar = ft.ProgressBar(value=0, visible=False)
         state = {"cancel": False, "running": False}
 
-        def texts() -> list[str]:
-            """The parts to speak for the choice made."""
+        def fill_voices():
+            """The voices of the chosen kind."""
+            kind = (engine.selected or ["system"])[0]
+            options = natural if kind == "natural" else system
+            voice_dd.options = [ft.DropdownOption(key=vid, text=name) for vid, name in options]
+            keys = [vid for vid, _ in options]
+            lang = self.session.document.language if self.session else "en"
+            best = self.speaker.voice_for(lang)
+            voice_dd.value = current if current in keys else (best if best in keys else (keys[0] if keys else None))
+            voice_dd.visible = bool(options)
+            get_voices.visible = kind == "natural" and not natural
+
+        def chosen_texts() -> list[str]:
+            """The parts to speak for the choices made."""
             choice = (what.selected or ["all"])[0]
             if choice == "selection" and sel:
-                return audio_export.parts(audio_export.split_sentences(highlights.text_of(self.focus.words,
-                                                                                        *sel)))
-            if choice == "pages":
-                try:
-                    a, b = int(page_from.value) - 1, int(page_to.value) - 1
-                except ValueError:
-                    return []
-                a, b = min(a, b), max(a, b)
-                return audio_export.parts(u.text for u in units if a <= u.page <= b)
-            return audio_export.parts(u.text for u in units)
+                sentences = audio_export.split_sentences(highlights.text_of(self.focus.words, *sel))
+            else:
+                chosen = range(len(units))
+                if skip_end.value and end_at is not None:
+                    chosen = range(end_at)
+                if choice == "pages":
+                    try:
+                        a, b = int(page_from.value) - 1, int(page_to.value) - 1
+                    except ValueError:
+                        return []
+                    a, b = min(a, b), max(a, b)
+                    chosen = [i for i in chosen if a <= units[i].page <= b]
+                sentences = [units[i].text for i in chosen]
+            if skip_cites.value:
+                sentences = [audio_export.strip_citations(x) for x in sentences]
+            return audio_export.parts(sentences)
 
         def describe(_=None):
-            """How long the audio will be, with which voice and speed."""
+            """Show what fits the choices: the page range, the voices, and how long the audio will be."""
             page_row.visible = (what.selected or ["all"])[0] == "pages"
-            mins = audio_export.minutes(texts(), speed)
-            length = t("about {n} minutes", n=max(1, round(mins))) if mins >= 1 else t("under a minute")
-            info.value = f"{length} · {voice_name} · {_speed_text(speed)}"
+            fill_voices()
+            mins = audio_export.minutes(chosen_texts(), float(speed_dd.value or 1.0))
+            info.value = t("about {n} minutes", n=max(1, round(mins))) if mins >= 1 else t("under a minute")
+            save_btn.disabled = state["running"] or not voice_dd.value
             self.page.update()
-
-        what.on_change = describe
-        page_from.on_change = page_to.on_change = describe
 
         def close(_=None):
             state["cancel"] = True
@@ -2481,11 +2589,16 @@ class ConverterApp:
 
         async def save(_):
             """Make the MP3 (with progress), then ask where to save it."""
-            parts = texts()
-            if not parts or state["running"]:
+            parts = chosen_texts()
+            voice, speed = voice_dd.value, float(speed_dd.value or 1.0)
+            if not parts or not voice or state["running"]:
                 return
+            ui.update(audio_voice=voice, audio_speed=speed, skip_citations=bool(skip_cites.value),
+                      skip_end=bool(skip_end.value))
+            self.store.save_ui(ui)
             state["running"] = True
-            save_btn.disabled, what.disabled, page_row.disabled = True, True, True
+            for c in (what, page_row, engine, voice_dd, speed_dd, skip_cites, skip_end, save_btn):
+                c.disabled = True
             bar.visible, bar.value = True, 0
             info.value = t("Making the audio...")
             self.page.update()
@@ -2510,18 +2623,29 @@ class ConverterApp:
                 return
             except Exception as ex:
                 log.exception("audio export failed")
-                self.notify(t("The audio could not be made:") + " " + redact(str(ex)), error=True)
                 self.page.pop_dialog()
+                self.notify(t("The audio could not be made:") + " " + redact(str(ex)), error=True)
                 return
             self.page.pop_dialog()
             choice = (what.selected or ["all"])[0]
             suffix = {"pages": f" p{page_from.value}-{page_to.value}", "selection": " selection"}.get(choice, "")
             await self.save_bytes(mp3, f"{Path(self.source_path).stem}{suffix}.mp3", "mp3")
 
+        for c in (what, engine):
+            c.on_change = describe
+        for c in (page_from, page_to, skip_cites, skip_end):
+            c.on_change = describe
+        speed_dd.on_select = describe
+        voice_dd.on_select = describe
         save_btn = ft.FilledButton(t("Save MP3"), icon=ft.Icons.DOWNLOAD, on_click=save)
         self.page.show_dialog(ft.AlertDialog(
-            title=self.text(t("Save as audio"), 18, weight=ft.FontWeight.BOLD),
-            content=ft.Container(ft.Column([what, page_row, info, bar], spacing=14, tight=True), width=440),
+            title=self.text(t("MP3 (text to speech)"), 18, weight=ft.FontWeight.BOLD),
+            content=ft.Container(ft.Column([
+                section(t("What to read"), what, page_row),
+                section(t("Voice"), engine, ft.Row([voice_dd, speed_dd], spacing=8, wrap=True), get_voices),
+                section(t("Leave out"), skip_cites, ft.Container(cites_note, padding=ft.Padding.only(left=40)),
+                        skip_end),
+                info, bar], spacing=16, tight=True), width=480),
             actions=[ft.TextButton(t("Cancel"), on_click=close), save_btn]))
         describe()
 

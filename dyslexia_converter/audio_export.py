@@ -55,6 +55,57 @@ def split_sentences(text: str) -> list[str]:
     return [s for s in re.split(r"(?<=[.!?])\s+", " ".join(text.split())) if s]
 
 
+# headings of the parts at the end that are skipped on request: the reference list and the notes
+END_HEADINGS = re.compile(
+    r"^\s*(?:\d+(?:\.\d+)*\.?\s*)?(?:references?|bibliography|works cited|literature(?: cited)?|sources|notes|"
+    r"endnotes|footnotes|unmatched citations|citations without a reference|literatuur(?:lijst)?|bronnen|noten|"
+    r"bibliographie|r[ée]f[ée]rences|literatur(?:verzeichnis)?|quellen|anmerkungen|referencias|bibliograf[íi]a|"
+    r"notas|riferimenti(?: bibliografici)?|note|refer[êe]ncias)\s*:?\s*$", re.I)
+NOTE_MARK = re.compile(r"\s*\[(?:Note|Noot|Anm\.|Nota)\s*\d+\]")
+
+
+def citation_spans(text: str) -> list[tuple[int, int]]:
+    """Where the in-text citations ("(Smith, 2019)", "[3]", "[3-5]") and note markers ("[Note 2]") are in a
+    text. Found by the same rules as moving citations, so a few unusual ones may be missed."""
+    from .transform.citations import find_citations
+
+    spans = [(m.start(), m.end()) for m in NOTE_MARK.finditer(text)]
+    spans += [(c.start, c.end) for c in find_citations(text, 999)
+              if c.kind in ("author_date", "numeric") and c.confidence >= 0.5
+              and not any(a < c.end and c.start < b for a, b in spans)]
+    return sorted(spans)
+
+
+def strip_citations(text: str) -> str:
+    """The text without in-text citations and note markers (see :func:`citation_spans`), so they are not read
+    out."""
+    out = text
+    for a, b in reversed(citation_spans(text)):
+        out = out[:a] + out[b:]
+    out = re.sub(r"\s+([.,;:!?)])", r"\1", out)  # "results (Smith, 2019)." -> "results."
+    out = re.sub(r"\(\s*\)", "", out)
+    return " ".join(out.split())
+
+
+def end_part_start(units: list, toc: list) -> Optional[int]:
+    """Where the reference list or notes at the end start (the number of the first sentence there), from the
+    document's headings (``toc``: (level, title, page) as in the PDF outline), or None. Everything from there
+    on is skipped, except a later heading that is not a reference list or notes (an appendix)."""
+    positions = []  # (unit index, is an end part) of each heading found
+    k = 0
+    for _, title, page in toc:
+        want = " ".join(title.split()).lower()[:24]
+        for i in range(k, len(units)):
+            if units[i].page == page - 1 and " ".join(units[i].text.split()).lower().startswith(want[:12]):
+                positions.append((i, bool(END_HEADINGS.match(title))))
+                k = i
+                break
+    for n, (i, end) in enumerate(positions):
+        if end and all(e for _, e in positions[n:]):
+            return i
+    return None
+
+
 def _pcm(wav: bytes) -> tuple[np.ndarray, int]:
     """WAV bytes as mono 16-bit samples and their rate."""
     with wave.open(io.BytesIO(wav)) as w:
