@@ -449,6 +449,7 @@ def test_donation_reminder_every_tenth_start_and_never_again(isolated_home):
     asyncio.run(app.show_donate_reminder(delay=0))
     bar = app.page.shown[-1]
     assert isinstance(bar, ft.SnackBar) and bar.behavior == ft.SnackBarBehavior.FLOATING  # not a blocking dialog
+    assert bar.persist and bar.show_close_icon  # it stays until the reader closes it
     never = next(c for c in bar.content.controls if isinstance(c, ft.TextButton) and c.content == "Don't show again")
     never.on_click(None)
     assert app.ui["donate_reminder"] is False and app.page.popped == 1

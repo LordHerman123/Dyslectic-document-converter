@@ -1649,7 +1649,7 @@ class ConverterApp:
 
     async def show_donate_reminder(self, delay: float = 8.0) -> None:
         """A small, quiet note at the bottom of the window (not a dialog): the app is free, a donation helps.
-        It goes away by itself; Don't show again switches it off for good (it can be switched on again in
+        It stays until the reader closes it (×); Don't show again switches it off for good (it can be switched on again in
         Settings > Support)."""
         await asyncio.sleep(delay)  # after the start notice, once the window has settled
         t = self.t
@@ -1670,7 +1670,8 @@ class ConverterApp:
                     ft.TextButton(t("Don't show again"), on_click=never)],
                    spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),
             bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST, behavior=ft.SnackBarBehavior.FLOATING, width=720,
-            duration=ft.Duration(seconds=25), show_close_icon=True, close_icon_color=ft.Colors.ON_SURFACE_VARIANT)
+            duration=ft.Duration(hours=24), persist=True,  # stays until the reader closes it
+            show_close_icon=True, close_icon_color=ft.Colors.ON_SURFACE_VARIANT)
         self.page.show_dialog(bar)
 
     def _donate_switch(self) -> ft.Control:
