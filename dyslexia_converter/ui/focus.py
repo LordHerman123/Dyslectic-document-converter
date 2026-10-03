@@ -839,8 +839,9 @@ class FocusMode:
         ``follow``).
         """
         previous = self._reading[0] if self._reading else None
-        self._reading = (page, sentence, word)
-        if self.ruler and word:  # the ruler follows the voice
+        mark = self.app.reading_option("reading_highlight")
+        self._reading = (page, sentence, word) if mark else (page, [], [])  # the marks only when asked for
+        if self.ruler and word and self.app.reading_option("ruler_follows"):  # the ruler follows the voice
             line = self._line_at(page, (word[0][1] + word[0][3]) / 2)
             if line is not None and (page, line) != self.ruler:
                 old = self.ruler[0]

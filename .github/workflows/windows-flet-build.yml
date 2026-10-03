@@ -6,7 +6,7 @@ name: Windows build with drag and drop (experimental)
 # The result is a zip to try out, available under the workflow run's artifacts.
 on:
   push:
-    branches: [experimental]
+    branches: [experimental, experimental-read-aloud]
   workflow_dispatch:
 
 permissions:

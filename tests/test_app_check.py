@@ -215,6 +215,13 @@ async def _read_everywhere(app, path):
             w = later[-1]
             await f.show_reading(page, list(w.rects), list(w.rects), False)
             assert f.ruler == (page, f._line_at(page, (w.rects[0][1] + w.rects[0][3]) / 2))
+            # the toggles: the ruler stays put, and nothing is marked
+            app.ui["ruler_follows"], app.ui["reading_highlight"] = False, False
+            before = f.ruler
+            first = next((x for x in later if x is not w), w)
+            await f.show_reading(page, list(first.rects), list(first.rects), False)
+            assert f.ruler == before and f._reading == (page, [], [])
+            app.ui["ruler_follows"], app.ui["reading_highlight"] = True, True
             await f.reading_done()
         await f.on_ruler(None)
         assert not f.ruler
@@ -228,6 +235,10 @@ async def _read_everywhere(app, path):
     r = app.reflow
     await r.open()
     assert r.active and r.items
+    on = r.tap_to_read
+    r.on_tap_toggle(None)  # tap to read off: a continuous page
+    assert r.tap_to_read is not on and r.tap_btn.selected is not on
+    r.on_tap_toggle(None)
     r._size_by(2)
     r._line_by(0.15)
     r.on_width(None)

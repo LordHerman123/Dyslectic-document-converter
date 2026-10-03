@@ -141,6 +141,15 @@ class ReflowMode:
             icon=ft.Icons.PALETTE_OUTLINED, tooltip=t("Colour help: syllables or sentences in two colours"),
             items=[ft.PopupMenuItem(labels[m], data=m, checked=m == self.colour_help, on_click=self.on_colour_help)
                    for m in COLOUR_HELP])
+        # tap to read off: the reading view is one continuous page to scroll through, taps do nothing
+        self.tap_btn = ft.IconButton(ft.Icons.TOUCH_APP_OUTLINED, selected_icon=ft.Icons.TOUCH_APP,
+                                     selected=self.tap_to_read, on_click=self.on_tap_toggle,
+                                     visible=app._speech_allowed(),
+                                     style=ft.ButtonStyle(bgcolor={ft.ControlState.SELECTED: ft.Colors.PRIMARY_CONTAINER}))
+        self._tap_tooltip()
+        self.options_menu = app.reading_options_menu(["skip_citations", "skip_end", "reading_highlight"],
+                                                     on_change=self._options_changed)
+        self.options_menu.visible = app._speech_allowed()
         bar = ft.Row([
             ft.IconButton(ft.Icons.CLOSE, tooltip=t("Leave read along"), on_click=self.on_close),
             ft.IconButton(ft.Icons.TEXT_DECREASE, tooltip=t("Smaller text"), on_click=lambda e: self._size_by(-2)),
@@ -156,6 +165,8 @@ class ReflowMode:
             self.read_btn,
             self.stop_btn,
             self.speed_menu,
+            self.tap_btn,
+            self.options_menu,
             ft.IconButton(ft.Icons.AUTO_STORIES_OUTLINED, tooltip=t("Show the pages (focus mode)"),
                           on_click=self.on_pages),
             ft.Container(expand=True),
@@ -548,6 +559,44 @@ class ReflowMode:
                     cur, cur_spans = [], []
         self._units, self._unit_spans = units, spans
 
+    @property
+    def tap_to_read(self) -> bool:
+        """Whether a tap on a paragraph reads from there (off: one continuous page, taps do nothing)."""
+        return bool(self.app.ui.get("reflow_tap_read", True))
+
+    def _tap_tooltip(self) -> None:
+        t = self.app.t
+        self.tap_btn.tooltip = t("Tap to read: on (tap a paragraph to read from there)") if self.tap_to_read else \
+            t("Tap to read: off (the text is one continuous page; taps do nothing)")
+
+    def on_tap_toggle(self, e) -> None:
+        """Tap to read on or off."""
+        ft.context.disable_auto_update()
+        self.app.ui["reflow_tap_read"] = not self.tap_to_read
+        self.app.store.save_ui(self.app.ui)
+        self.tap_btn.selected = self.tap_to_read
+        self._tap_tooltip()
+        self._safe_update(self.tap_btn)
+
+    async def _options_changed(self) -> None:
+        """A reading option changed: while reading, the current sentence starts again with it."""
+        if self._reading and self._read_pos is not None:
+            self._start_reading(self._read_pos)
+
+    def _end_unit(self) -> Optional[int]:
+        """The first sentence of the reference list and notes at the end (None: there are none)."""
+        from ..audio_export import END_HEADINGS
+
+        first = next((i for i, it in enumerate(self.items) if it.kind in ("reference", "endnote")), None)
+        if first is None:
+            return None
+        while first > 0 and self.items[first - 1].kind == "heading" and END_HEADINGS.match(self.items[first - 1].text):
+            first -= 1
+        if any(it.kind not in ("reference", "endnote", "heading", "about", "small") for it in self.items[first:]) \
+                and not END_HEADINGS.match(self.items[first].text):
+            return None  # running text after it: not the end of the document
+        return next((k for k, u in enumerate(self._units) if u.page >= first), None)
+
     async def on_read(self, e) -> None:
         """The play / pause button: read aloud from the paragraph at the top, or from where it paused."""
         ft.context.disable_auto_update()
@@ -577,6 +626,8 @@ class ReflowMode:
     def on_item_click(self, e) -> None:
         """Clicking a paragraph while reading aloud (or paused, or with "tap to read" on) reads from there."""
         ft.context.disable_auto_update()
+        if not self.tap_to_read:
+            return  # a continuous page: taps do nothing
         if not (self._reading or self._read_pos is not None or self.app.ui.get("tap_to_read", False)):
             return
         if not self.app._speech_allowed():
@@ -622,7 +673,10 @@ class ReflowMode:
         self._read_pos = start
         self._update_read_btn()
         self._safe_update(self.top)
-        app.speaker.start(self._units, start, self.speed, app._voice(),
+        end = self._end_unit() if app.reading_option("skip_end") else None
+        spoken, self._maps = speech.prepare_reading(self._units, app.reading_option("skip_citations"),
+                                                    end if end is not None and start < end else None)
+        app.speaker.start(spoken, start, self.speed, app._voice(),
                           on_word=lambda si, wi: post(self._show_word(si, wi)),
                           on_sentence=lambda si: post(self._show_word(si, 0)),
                           on_done=lambda finished: post(self._read_done(finished)))
@@ -631,6 +685,9 @@ class ReflowMode:
         if not self._reading or si >= len(self._units):
             return
         self._read_pos = si
+        kept = self._maps[si] if si < len(getattr(self, "_maps", [])) else []
+        if kept:  # the word as numbered in the full sentence (citations may have been left out)
+            wi = kept[min(wi, len(kept) - 1)]
         self._mark_reading(si, wi)
 
     def _mark_reading(self, si: int, wi: int) -> None:
@@ -641,7 +698,10 @@ class ReflowMode:
         span = spans[min(wi, len(spans) - 1)]
         if self._lit is not None and self._lit != item:
             self._highlight(self._lit, None)
-        self._highlight(item, span, (spans[0][0], spans[-1][1]))
+        if self.app.reading_option("reading_highlight"):
+            self._highlight(item, span, (spans[0][0], spans[-1][1]))
+        elif self._lit is not None:
+            self._highlight(self._lit, None)
         if item != self.current:
             self.current = item
             self._update_progress()

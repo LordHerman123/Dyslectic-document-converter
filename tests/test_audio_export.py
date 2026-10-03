@@ -69,3 +69,29 @@ def test_the_speaker_renders_with_the_reading_voice_and_speed():
     out = list(sp.render_many(["One.", "", "Two."], 1.5, "voice-x"))
     assert len(out) == 2 and [t for t, _ in made] == ["One.", "Two."]
     assert made[0][1] == {"rate": int(speech.Speaker.BASE_RATE * 1.5), "voice": "voice-x"}
+
+
+def _sentence(text, page=0):
+    return speech.Sentence([speech.Word(w, page, [(0, 0, 1, 1)]) for w in text.split()])
+
+
+def test_citations_are_left_out_and_the_highlight_keeps_its_words():
+    s = [_sentence("Big data matters (Kitchin, 2014). Really, as in [3], yes."), _sentence("(Smith, 2019)"),
+         _sentence("Another sentence [Note 2] here.")]
+    out, maps = speech.prepare_reading(s, skip_citations=True)
+    assert out[0].text == "Big data matters. Really, as in, yes."
+    assert maps[0] == [0, 1, 2, 5, 6, 7, 9]  # "Really," is word 5 of the original sentence
+    assert out[1].words == [] and out[2].text == "Another sentence here."
+    assert [w.start for w in out[0].words] == [0, 4, 9, 18, 26, 29, 33]  # positions for the engine's word events
+    same, maps = speech.prepare_reading(s)
+    assert [x.text for x in same] == [x.text for x in s] and maps[0] == list(range(10))
+    assert len(speech.prepare_reading(s, end=1)[0]) == 1  # the reference list from sentence 1 on is left out
+    assert ae.strip_citations("Shown before (see Smith, 2019; Lee 2020), and [12-14].") == "Shown before, and."
+
+
+def test_the_end_part_is_found_from_the_headings():
+    units = [_sentence(t, p) for t, p in [("Introduction", 0), ("Text here.", 0), ("References", 1),
+                                           ("Smith J (2019) A paper.", 1), ("Notes", 2), ("1 A note.", 2)]]
+    toc = [(1, "Introduction", 1), (1, "References", 2), (1, "Notes", 3)]
+    assert ae.end_part_start(units, toc) == 2
+    assert ae.end_part_start(units, [(1, "Introduction", 1)]) is None
