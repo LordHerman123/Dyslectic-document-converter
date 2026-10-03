@@ -23,13 +23,54 @@ class AudioExportError(Exception):
     """The audio could not be made (no voice can save sound, the MP3 encoder is missing, or it was cancelled)."""
 
 
-def supported() -> bool:
-    """Whether MP3 files can be made here (the encoder is installed)."""
+def mp3_problem() -> Optional[str]:
+    """Why MP3 files cannot be made by this copy of the app (the encoder cannot be loaded), or None."""
     try:
         import lameenc  # noqa: F401
-    except Exception:
-        return False
-    return True
+    except Exception as e:  # missing, or installed for another Python than the one running the app
+        return f"{type(e).__name__}: {e}"
+    return None
+
+
+def supported() -> bool:
+    """Whether MP3 files can be made here (the encoder is installed)."""
+    return mp3_problem() is None
+
+
+def install_command() -> str:
+    """The command that installs the MP3 encoder for exactly the Python running this app."""
+    import sys
+
+    return f'"{sys.executable}" -m pip install lameenc'
+
+
+def export_wav(texts: list[str], render: Callable[[list[str]], Iterable[bytes]],
+               progress: Callable[[float], None] = lambda f: None,
+               cancelled: Callable[[], bool] = lambda: False) -> bytes:
+    """Like :func:`export_mp3`, but one WAV file (larger, and needs no encoder)."""
+    buf = io.BytesIO()
+    w: Optional[wave.Wave_write] = None
+    rate = 0
+    total = max(1, sum(len(t) for t in texts))
+    done = 0
+    for text, wav in zip(texts, render(texts)):
+        if cancelled():
+            raise AudioExportError("cancelled")
+        x, r = _pcm(wav)
+        if w is None:
+            rate = r
+            w = wave.open(buf, "wb")
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(rate)
+        x = np.concatenate([_resample(x, r, rate), np.zeros(int(PAUSE * rate), dtype=np.float32)])
+        w.writeframes(np.clip(x, -32768, 32767).astype("<i2").tobytes())
+        done += len(text)
+        progress(min(1.0, done / total))
+    if w is None:
+        raise AudioExportError("nothing to read")
+    w.close()
+    return buf.getvalue()
 
 
 def parts(sentences: Iterable[str], limit: int = PART_CHARS) -> list[str]:

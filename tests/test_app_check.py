@@ -187,6 +187,19 @@ async def _read_everywhere(app, path):
             await dialog.actions[1].on_click(None)
             assert any(c.source == "user" for c in app.session.document.corrections)
         app.page.show_dialog = show
+    # the reading options are chips in the read-aloud panel, which focus mode shows: each one switches on and off
+    f.on_read_panel(None)
+    assert f._is_open(f.read_panel)
+    for chip in app._option_chips:
+        was = app.reading_option(chip.data)
+
+        class Tap:
+            control = chip
+        await chip.on_select(Tap())
+        assert app.reading_option(chip.data) is not was and chip.selected is not was
+        await chip.on_select(Tap())
+        assert app.reading_option(chip.data) is was
+    f.on_read_panel(None)
     # a tap on a citation or note marker shows what it points to
     for n, w in enumerate(f.words):
         if w[1].startswith(("[", "(")):
@@ -404,3 +417,39 @@ def test_app_check_web_page(headless, tmp_path, monkeypatch):
         assert "web page" in app.doc_status()
         await _read_everywhere(app, app.source_path)
     headless(scenario)
+
+
+def test_donation_reminder_every_tenth_start_and_never_again(isolated_home):
+    import flet as ft
+
+    from dyslexia_converter.ui.app import ConverterApp
+
+    class Page:
+        web, width, height, platform = False, 1200, 800, None
+
+        def __init__(self):
+            self.shown, self.popped = [], 0
+
+        def show_dialog(self, d):
+            self.shown.append(d)
+
+        def pop_dialog(self):
+            self.popped += 1
+
+    app = ConverterApp.__new__(ConverterApp)
+    app.page, app.ui, app.t = Page(), {}, (lambda s, **k: s)
+    app.fs = lambda n: n
+
+    class Store:
+        def save_ui(self, ui):
+            pass
+    app.store = Store()
+    due = [app.count_start() for _ in range(25)]
+    assert [i + 1 for i, d in enumerate(due) if d] == [10, 20]
+    asyncio.run(app.show_donate_reminder(delay=0))
+    bar = app.page.shown[-1]
+    assert isinstance(bar, ft.SnackBar) and bar.behavior == ft.SnackBarBehavior.FLOATING  # not a blocking dialog
+    never = next(c for c in bar.content.controls if isinstance(c, ft.TextButton) and c.content == "Don't show again")
+    never.on_click(None)
+    assert app.ui["donate_reminder"] is False and app.page.popped == 1
+    assert not any(app.count_start() for _ in range(30))  # switched off for good

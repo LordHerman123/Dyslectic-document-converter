@@ -1858,6 +1858,87 @@ T: dict[str, dict[str, str]] = {
         "de": "Tippen zum Vorlesen: aus (der Text ist eine fortlaufende Seite; Tippen bewirkt nichts)",
         "es": "Tocar para leer: desactivado (el texto es una página continua; tocar no hace nada)",
         "it": "Tocca per leggere: disattivo (il testo è una pagina continua; toccare non fa nulla)"},
+    "Exit read along": {"nl": "Meelezen verlaten", "fr": "Quitter la lecture accompagnée", "de": "Mitlesen beenden",
+                        "es": "Salir de la lectura guiada", "it": "Esci dalla lettura guidata"},
+    "Back to where you came from": {"nl": "Terug naar waar u was", "fr": "Revenir là où vous étiez",
+                                    "de": "Zurück dorthin, wo Sie waren", "es": "Volver a donde estaba",
+                                    "it": "Torna dove eri"},
+    "Save WAV": {"nl": "WAV opslaan", "fr": "Enregistrer le WAV", "de": "WAV speichern", "es": "Guardar WAV",
+                 "it": "Salva WAV"},
+    "The MP3 encoder (lameenc) could not be loaded by the Python running this app, so the audio is saved as WAV (larger). To get MP3, run this command and restart the app:": {
+        "nl": "De MP3-encoder (lameenc) kon niet geladen worden door de Python waarmee deze app draait, dus de audio "
+              "wordt als WAV (groter) opgeslagen. Voor MP3: voer deze opdracht uit en start de app opnieuw:",
+        "fr": "L'encodeur MP3 (lameenc) n'a pas pu être chargé par le Python qui exécute cette application ; l'audio "
+              "est donc enregistré en WAV (plus lourd). Pour obtenir du MP3, lancez cette commande et redémarrez "
+              "l'application :",
+        "de": "Der MP3-Encoder (lameenc) konnte von dem Python, mit dem diese App läuft, nicht geladen werden; das "
+              "Audio wird daher als WAV (größer) gespeichert. Für MP3 diesen Befehl ausführen und die App neu starten:",
+        "es": "El codificador MP3 (lameenc) no se pudo cargar en el Python que ejecuta esta aplicación, así que el "
+              "audio se guarda como WAV (más grande). Para obtener MP3, ejecute este comando y reinicie la "
+              "aplicación:",
+        "it": "Il codificatore MP3 (lameenc) non è stato caricato dal Python che esegue questa app, quindi l'audio "
+              "viene salvato come WAV (più grande). Per avere l'MP3, esegui questo comando e riavvia l'app:"},
+    "The pages follow the voice": {"nl": "De pagina's volgen de stem", "fr": "Les pages suivent la voix",
+                                   "de": "Die Seiten folgen der Stimme", "es": "Las páginas siguen la voz",
+                                   "it": "Le pagine seguono la voce"},
+    "Skip citations": {"nl": "Verwijzingen overslaan", "fr": "Ignorer les citations", "de": "Zitate überspringen",
+                       "es": "Omitir citas", "it": "Salta le citazioni"},
+    "Leave out citations in the text, like (Smith, 2019) and [3]. Most are found, but some unusual ones may still be read.": {
+        "nl": "Verwijzingen in de tekst weglaten, zoals (Smith, 2019) en [3]. De meeste worden gevonden, maar "
+              "sommige ongewone kunnen toch voorgelezen worden.",
+        "fr": "Ne pas lire les citations dans le texte, comme (Smith, 2019) et [3]. La plupart sont trouvées, mais "
+              "certaines inhabituelles peuvent encore être lues.",
+        "de": "Zitate im Text auslassen, wie (Smith, 2019) und [3]. Die meisten werden gefunden, aber einige "
+              "ungewöhnliche werden vielleicht doch vorgelesen.",
+        "es": "Omitir las citas en el texto, como (Smith, 2019) y [3]. Se encuentran casi todas, pero algunas poco "
+              "habituales pueden leerse igualmente.",
+        "it": "Tralascia le citazioni nel testo, come (Smith, 2019) e [3]. Quasi tutte vengono trovate, ma alcune "
+              "insolite potrebbero essere lette comunque."},
+    "Skip references and notes": {"nl": "Literatuur en noten overslaan", "fr": "Ignorer références et notes",
+                                  "de": "Literatur und Anmerkungen überspringen", "es": "Omitir referencias y notas",
+                                  "it": "Salta riferimenti e note"},
+    "Stop before the reference list and the notes at the end": {
+        "nl": "Stoppen voor de literatuurlijst en de noten aan het eind",
+        "fr": "S'arrêter avant la bibliographie et les notes à la fin",
+        "de": "Vor dem Literaturverzeichnis und den Anmerkungen am Ende aufhören",
+        "es": "Parar antes de la lista de referencias y las notas del final",
+        "it": "Fermarsi prima della bibliografia e delle note alla fine"},
+    "Mark what is read": {"nl": "Markeren wat er gelezen wordt", "fr": "Marquer ce qui est lu",
+                          "de": "Markieren, was gelesen wird", "es": "Marcar lo que se lee", "it": "Evidenzia ciò che si legge"},
+    "Mark the sentence and word being read": {"nl": "De zin en het woord markeren die voorgelezen worden",
+                                              "fr": "Marquer la phrase et le mot en cours de lecture",
+                                              "de": "Den Satz und das Wort markieren, die vorgelesen werden",
+                                              "es": "Marcar la frase y la palabra que se están leyendo",
+                                              "it": "Evidenzia la frase e la parola che vengono lette"},
+    "Ruler follows the voice": {"nl": "Lineaal volgt de stem", "fr": "La règle suit la voix",
+                                "de": "Lineal folgt der Stimme", "es": "La regla sigue la voz",
+                                "it": "Il righello segue la voce"},
+    "In focus mode, the reading ruler moves along with the voice": {
+        "nl": "In de focusmodus beweegt de leeslineaal mee met de stem",
+        "fr": "En mode concentration, la règle de lecture avance avec la voix",
+        "de": "Im Fokusmodus bewegt sich das Leselineal mit der Stimme",
+        "es": "En el modo concentración, la regla de lectura avanza con la voz",
+        "it": "In modalità concentrazione il righello di lettura si muove con la voce"},
+    "Enjoying the app? It is free and made by one person. A small donation helps keep it going.": {
+        "nl": "Heb je iets aan de app? Hij is gratis en gemaakt door één persoon. Een kleine donatie helpt hem "
+              "verder te maken.",
+        "fr": "L'application vous plaît ? Elle est gratuite et faite par une seule personne. Un petit don aide à la "
+              "faire vivre.",
+        "de": "Gefällt Ihnen die App? Sie ist kostenlos und von einer Person gemacht. Eine kleine Spende hilft, sie "
+              "weiterzuführen.",
+        "es": "¿Le gusta la aplicación? Es gratuita y la hace una sola persona. Un pequeño donativo ayuda a "
+              "mantenerla.",
+        "it": "Ti piace l'app? È gratuita e fatta da una sola persona. Una piccola donazione aiuta a portarla "
+              "avanti."},
+    "Donate": {"nl": "Doneren", "fr": "Faire un don", "de": "Spenden", "es": "Donar", "it": "Dona"},
+    "Don't show again": {"nl": "Niet meer tonen", "fr": "Ne plus afficher", "de": "Nicht mehr zeigen",
+                         "es": "No volver a mostrar", "it": "Non mostrare più"},
+    "A small reminder now and then (every 10 starts)": {
+        "nl": "Af en toe een kleine herinnering (elke 10 keer starten)",
+        "fr": "Un petit rappel de temps en temps (tous les 10 démarrages)",
+        "de": "Ab und zu eine kleine Erinnerung (alle 10 Starts)",
+        "es": "Un pequeño recordatorio de vez en cuando (cada 10 inicios)",
+        "it": "Un piccolo promemoria ogni tanto (ogni 10 avvii)"},
 }
 
 # messages from the processing core, matched in i18n.MESSAGE_PATTERNS; {0}, {1}... are the parts found

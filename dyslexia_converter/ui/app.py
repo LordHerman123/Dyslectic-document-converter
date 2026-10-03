@@ -1327,7 +1327,8 @@ class ConverterApp:
             self.card(t("Support"), [
                 self.text(t("The app is free. If it helps you, you can buy the maker a coffee. This is "
                             "completely optional and changes nothing in the app."), 13),
-                ft.Row([self.coffee_button()])], ft.Icons.FAVORITE_BORDER),
+                ft.Row([self.coffee_button()]),
+                self._donate_switch()], ft.Icons.FAVORITE_BORDER),
             self.text(f"Dyslexia Converter {__version__}", 12, color=self.pal["muted"]),
         ])
 
@@ -1636,6 +1637,55 @@ class ConverterApp:
             modal=True, title=self.text(t("Good to know"), 20, weight=ft.FontWeight.BOLD), content=body,
             actions=[ft.FilledButton(t("OK"), on_click=close)]))
 
+    DONATE_EVERY = 10  # the donation reminder shows on every 10th start of the app
+
+    def count_start(self) -> bool:
+        """Count this start of the app; True when the small donation reminder is due (every 10th start, unless
+        the reader switched it off)."""
+        n = int(self.ui.get("starts", 0)) + 1
+        self.ui["starts"] = n
+        self.store.save_ui(self.ui)
+        return n % self.DONATE_EVERY == 0 and bool(self.ui.get("donate_reminder", True))
+
+    async def show_donate_reminder(self, delay: float = 8.0) -> None:
+        """A small, quiet note at the bottom of the window (not a dialog): the app is free, a donation helps.
+        It goes away by itself; Don't show again switches it off for good (it can be switched on again in
+        Settings > Support)."""
+        await asyncio.sleep(delay)  # after the start notice, once the window has settled
+        t = self.t
+
+        def never(_):
+            """Don't show again: switch the reminder off for good."""
+            self.ui["donate_reminder"] = False
+            self.store.save_ui(self.ui)
+            if getattr(self, "donate_switch", None) is not None:
+                self.donate_switch.value = False
+            self.page.pop_dialog()
+
+        bar = ft.SnackBar(
+            ft.Row([ft.Icon(ft.Icons.FAVORITE_BORDER, color=ft.Colors.PRIMARY, size=20),
+                    ft.Text(t("Enjoying the app? It is free and made by one person. A small donation helps keep it "
+                              "going."), size=self.fs(14), color=ft.Colors.ON_SURFACE, expand=True),
+                    ft.TextButton(t("Donate"), icon=ft.Icons.COFFEE, url=DONATE_URL),
+                    ft.TextButton(t("Don't show again"), on_click=never)],
+                   spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST, behavior=ft.SnackBarBehavior.FLOATING, width=720,
+            duration=ft.Duration(seconds=25), show_close_icon=True, close_icon_color=ft.Colors.ON_SURFACE_VARIANT)
+        self.page.show_dialog(bar)
+
+    def _donate_switch(self) -> ft.Control:
+        """Settings: the small reminder about donating, every 10 starts, on or off."""
+        self.donate_switch = ft.Switch(label=self.t("A small reminder now and then (every 10 starts)"),
+                                       value=bool(self.ui.get("donate_reminder", True)),
+                                       on_change=self.on_donate_reminder,
+                                       label_text_style=ft.TextStyle(size=self.fs(14)))
+        return self.donate_switch
+
+    async def on_donate_reminder(self, e):
+        """Settings: the donation reminder on or off."""
+        self.ui["donate_reminder"] = bool(e.control.value)
+        self.store.save_ui(self.ui)
+
     async def confirm(self, title: str, message, yes: str, no: str) -> bool:
         """Ask a yes/no question. ``message`` is text or a control (for longer content)."""
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
@@ -1922,8 +1972,6 @@ class ConverterApp:
                                     options=self._voice_options() if voices else
                                     [ft.DropdownOption(key="auto", text=t("Automatic"))],
                                     value=self.ui.get("read_voice", "auto"), on_select=self.on_read_voice)
-        self.follow_cb = ft.Checkbox(label=t("Turn pages along"), value=bool(self.ui.get("read_follow", True)),
-                                     on_change=self.on_read_follow)
         self.natural_btn = ft.IconButton(ft.Icons.RECORD_VOICE_OVER_OUTLINED, on_click=self.on_natural_voices,
                                          visible=natural_voices.supported(),
                                          tooltip=t("Natural voices") + ": "
@@ -1940,11 +1988,13 @@ class ConverterApp:
                                            visible=bool(voices),
                                            tooltip=t("Save as audio (MP3): the whole document, some pages or your "
                                                      "selection"))
-        controls = ft.Row([
-            self.read_btn, self.stop_btn, self.tap_btn, self.reading_options_menu(), ft.Container(width=6),
+        main = ft.Row([
+            self.read_btn, self.stop_btn, self.tap_btn, ft.Container(width=6),
             self.text(t("Speed"), 13), self.speed_slider, self.speed_label, self.voice_dd, self.natural_btn,
-            self.audio_btn, self.follow_cb,
-        ], wrap=True, spacing=6, expand=True, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+            self.audio_btn,
+        ], wrap=True, spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+        # the reading options as on/off chips under the controls (also in focus mode, which shows this panel)
+        controls = ft.Column([main, self.reading_option_chips()], spacing=4, expand=True, tight=True)
         # Read along on the right of the first line (the controls wrap under themselves, not under it)
         self.read_row = ft.Row([controls, ft.Container(self.read_along_btn, padding=ft.Padding.only(top=8))],
                                spacing=8, vertical_alignment=ft.CrossAxisAlignment.START)
@@ -2242,10 +2292,10 @@ class ConverterApp:
                 page = word.page
                 if self.focus.active:
                     rects = [r for w in sentence.words if w.page == page for r in w.rects]
-                    await self.focus.show_reading(page, rects, list(word.rects), bool(self.follow_cb.value))
+                    await self.focus.show_reading(page, rects, list(word.rects), self.reading_option("read_follow"))
                     continue
                 if page != self.conv_page:
-                    if not self.follow_cb.value:
+                    if not self.reading_option("read_follow"):
                         continue
                     self.conv_page = page
                     self.conv_label.value = f"{self.t('Converted')} {self.conv_page + 1} / {self.conv_count}"
@@ -2316,14 +2366,46 @@ class ConverterApp:
         await self.show_pages()
 
     # what reading aloud leaves out and shows (shared by reading aloud, focus mode, the reading view and MP3)
+    # (key, chip label, explanation, default)
+    READING_CHIPS = [("read_follow", "Turn pages along", "The pages follow the voice", True),
+                     ("skip_citations", "Skip citations",
+                      "Leave out citations in the text, like (Smith, 2019) and [3]. Most are found, but some "
+                      "unusual ones may still be read.", False),
+                     ("skip_end", "Skip references and notes",
+                      "Stop before the reference list and the notes at the end", False),
+                     ("reading_highlight", "Mark what is read", "Mark the sentence and word being read", True),
+                     ("ruler_follows", "Ruler follows the voice",
+                      "In focus mode, the reading ruler moves along with the voice", True)]
+
+    def reading_option_chips(self) -> ft.Row:
+        """The reading options as chips to switch on and off (a tick when on), one row that wraps."""
+        t = self.t
+        self._option_chips = []
+
+        async def toggle(e):
+            key = e.control.data
+            self.ui[key] = not self.reading_option(key)
+            self.store.save_ui(self.ui)
+            for chip in self._option_chips:
+                chip.selected = self.reading_option(chip.data)
+            self.page.update()
+            if key != "read_follow":
+                await self._restart_reading()  # applies at once to what is being read
+
+        for key, label, tip, _ in self.READING_CHIPS:
+            self._option_chips.append(ft.Chip(label=ft.Text(t(label), size=self.fs(13)), data=key,
+                                              selected=self.reading_option(key), tooltip=t(tip),
+                                              show_checkmark=True, on_select=toggle))
+        return ft.Row(self._option_chips, spacing=6, wrap=True, run_spacing=4)
+
     READING_OPTIONS = [("skip_citations", "Skip citations in the text, like (Smith, 2019) and [3]", False),
                        ("skip_end", "Skip the reference list and notes at the end", False),
                        ("reading_highlight", "Mark what is being read", True),
                        ("ruler_follows", "The reading ruler follows the voice (focus mode)", True)]
 
     def reading_option(self, key: str) -> bool:
-        """One of the reading options (see :attr:`READING_OPTIONS`)."""
-        default = next(d for k, _, d in self.READING_OPTIONS if k == key)
+        """One of the reading options (see :attr:`READING_CHIPS`)."""
+        default = next(d for k, _, _, d in self.READING_CHIPS if k == key)
         return bool(self.ui.get(key, default))
 
     def reading_options_menu(self, keys: Optional[list[str]] = None, on_change=None) -> ft.PopupMenuButton:
@@ -2478,10 +2560,8 @@ class ConverterApp:
         if not self.converted_pdf or not self.session:
             self.notify(t("Open a PDF first."), error=True)
             return
-        if not audio_export.supported():
-            self.notify(t("Saving MP3 files needs the lameenc package (pip install lameenc); the app download "
-                          "includes it."), error=True)
-            return
+        problem = audio_export.mp3_problem()
+        fmt = "wav" if problem else "mp3"
         units = await self._units()
         if not units:
             self.notify(t("There is no text to read on these pages."))
@@ -2540,6 +2620,13 @@ class ConverterApp:
         info = self.text("", 13, color=ft.Colors.ON_SURFACE_VARIANT)
         bar = ft.ProgressBar(value=0, visible=False)
         state = {"cancel": False, "running": False}
+        # no MP3 encoder for this Python: say exactly why and how to add it; meanwhile save WAV (larger)
+        wav_note = ft.Container(ft.Column([
+            self.text(t("The MP3 encoder (lameenc) could not be loaded by the Python running this app, so the "
+                        "audio is saved as WAV (larger). To get MP3, run this command and restart the app:"), 12),
+            ft.Text(audio_export.install_command(), size=self.fs(12), selectable=True, font_family="monospace"),
+            self.text(problem or "", 11, color=ft.Colors.ON_SURFACE_VARIANT)], spacing=4, tight=True),
+            padding=10, border_radius=8, bgcolor=ft.Colors.SURFACE_CONTAINER_HIGH, visible=bool(problem))
 
         def fill_voices():
             """The voices of the chosen kind."""
@@ -2608,8 +2695,8 @@ class ConverterApp:
                 bar.value = f
 
             job = asyncio.ensure_future(self.in_thread(
-                audio_export.export_mp3, parts, lambda ts: self.speaker.render_many(ts, speed, voice), progress,
-                lambda: state["cancel"]))
+                audio_export.export_wav if fmt == "wav" else audio_export.export_mp3, parts,
+                lambda ts: self.speaker.render_many(ts, speed, voice), progress, lambda: state["cancel"]))
             while not job.done():
                 await asyncio.sleep(0.4)
                 info.value = t("Making the audio...") + f" {round((bar.value or 0) * 100)}%"
@@ -2629,7 +2716,7 @@ class ConverterApp:
             self.page.pop_dialog()
             choice = (what.selected or ["all"])[0]
             suffix = {"pages": f" p{page_from.value}-{page_to.value}", "selection": " selection"}.get(choice, "")
-            await self.save_bytes(mp3, f"{Path(self.source_path).stem}{suffix}.mp3", "mp3")
+            await self.save_bytes(mp3, f"{Path(self.source_path).stem}{suffix}.{fmt}", fmt)
 
         for c in (what, engine):
             c.on_change = describe
@@ -2637,7 +2724,8 @@ class ConverterApp:
             c.on_change = describe
         speed_dd.on_select = describe
         voice_dd.on_select = describe
-        save_btn = ft.FilledButton(t("Save MP3"), icon=ft.Icons.DOWNLOAD, on_click=save)
+        save_btn = ft.FilledButton(t("Save WAV") if fmt == "wav" else t("Save MP3"), icon=ft.Icons.DOWNLOAD,
+                                   on_click=save)
         self.page.show_dialog(ft.AlertDialog(
             title=self.text(t("MP3 (text to speech)"), 18, weight=ft.FontWeight.BOLD),
             content=ft.Container(ft.Column([
@@ -2645,14 +2733,9 @@ class ConverterApp:
                 section(t("Voice"), engine, ft.Row([voice_dd, speed_dd], spacing=8, wrap=True), get_voices),
                 section(t("Leave out"), skip_cites, ft.Container(cites_note, padding=ft.Padding.only(left=40)),
                         skip_end),
-                info, bar], spacing=16, tight=True), width=480),
+                info, bar, wav_note], spacing=16, tight=True), width=480),
             actions=[ft.TextButton(t("Cancel"), on_click=close), save_btn]))
         describe()
-
-    async def on_read_follow(self, e):
-        """"Turn pages along" on or off."""
-        self.ui["read_follow"] = bool(e.control.value)
-        self.store.save_ui(self.ui)
 
     async def show_pages(self) -> None:
         """Render and show the current original and converted pages in the preview."""
@@ -2838,6 +2921,8 @@ def main(page: ft.Page) -> None:
                                    encoding="utf-8")
         page.run_task(report)
     app.show_start_notice()
+    if app.count_start() and not os.environ.get("DYSLEXIA_CONVERTER_SELFTEST"):
+        page.run_task(app.show_donate_reminder)
     page.run_task(app.check_for_update)
     start_file = file_from_args(sys.argv[1:])
     if start_file:  # a file dropped on the app's icon, or opened with "Open with": convert it straight away
