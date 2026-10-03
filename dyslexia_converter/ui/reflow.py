@@ -109,8 +109,9 @@ class ReflowMode:
         return float(self.app.reading_position("speed", self.app.ui.get("read_speed", 1.0)))
 
     # ------------------------------------------------------------------ open / close
-    async def open(self) -> None:
-        """Show the reading view of the converted document, at the place it was left last time."""
+    async def open(self, start_text: Optional[str] = None) -> None:
+        """Show the reading view of the converted document, at the place it was left last time, or at the
+        paragraph that holds ``start_text`` (the first words of the page shown in focus mode)."""
         app, t = self.app, self.app.t
         if not app.session:
             app.notify(t("Open a PDF first."), error=True)
@@ -120,6 +121,10 @@ class ReflowMode:
         self.result = await app.in_thread(app.session.compose, app.settings)
         self.items = [it for it in self.result.items if it.kind != "equation" or it.image is not None]
         self.current = int(app.reading_position("reflow", 0))
+        if start_text:
+            found = self._item_with(start_text)
+            if found is not None:
+                self.current = found
         self.current = min(self.current, max(0, len(self.items) - 1))
         self._units, self._unit_spans = [], []
         self._reading, self._read_pos, self._lit = False, None, None
@@ -230,6 +235,21 @@ class ReflowMode:
         if page is not None:
             self.app.conv_page = page
         await self.app.focus.open()
+
+    def _item_with(self, text: str) -> Optional[int]:
+        """The first paragraph (item) that holds ``text`` (letters compared only), or None."""
+        def norm(x: str) -> str:
+            return re.sub(r"\W+", "", x.lower())
+
+        probe = norm(text)
+        for size in (40, 24, 12):  # a page may start halfway a paragraph that began on the page before
+            p = probe[:size]
+            if len(p) < 8:
+                continue
+            for i, it in enumerate(self.items):
+                if p in norm(self.plain(it)):
+                    return i
+        return None
 
     def _page_of(self, index: int) -> Optional[int]:
         """The page of the converted document that holds item ``index`` (from its block), if known."""

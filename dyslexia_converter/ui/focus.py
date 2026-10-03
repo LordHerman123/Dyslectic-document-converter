@@ -10,6 +10,7 @@ it) opens a card with its syllables, its meaning and a way to hear it; a reading
 from __future__ import annotations
 
 import asyncio
+import re
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Iterable, Optional
@@ -199,12 +200,16 @@ class FocusMode:
         self.ruler_toggle = ft.IconButton(ft.Icons.STRAIGHTEN, tooltip=t("Reading ruler (move it with the arrow "
                                                                          "keys or by tapping a line)"),
                                           on_click=self.on_ruler, style=self._toggle_style())
+        self.continuous_btn = ft.IconButton(ft.Icons.CHROME_READER_MODE_OUTLINED, on_click=self.on_continuous,
+                                            tooltip=t("Continuous page: the text as one long page, from here "
+                                                      "(Exit read along comes back to the pages)"))
         self.back_btn = ft.FilledTonalButton(t("Back to the converted text"), icon=ft.Icons.ARROW_BACK,
                                              on_click=self.on_back_to_converted, visible=False)
         self.top = ft.Container(ft.Row([
             ft.IconButton(ft.Icons.CLOSE, tooltip=t("Leave focus mode"), on_click=self.on_close),
             ft.Container(width=4),
-            self.back_btn, self.read_toggle, self.settings_toggle, self.mark_toggle, self.swatches,
+            self.back_btn, self.read_toggle, self.continuous_btn, self.settings_toggle, self.mark_toggle,
+            self.swatches,
             self.ruler_toggle, self.notes_toggle, self._original_button(), self._ai_button(),
             ft.Container(expand=True),
             self.page_label,
@@ -978,9 +983,7 @@ class FocusMode:
     def _find_entry(self, entry: str, after: int) -> Optional[int]:
         """Where a reference or note's text is in the document (its first words), preferring a place after word
         ``after`` (the list is at the end), or None."""
-        import re as _re
-
-        want = [w for w in _re.sub(r"^\[\d+\]\s*", "", entry).split()][:5]
+        want = [w for w in re.sub(r"^\[\d+\]\s*", "", entry).split()][:5]
         if len(want) < 2:
             return None
         texts = [w[1] for w in self.words]
@@ -993,6 +996,22 @@ class FocusMode:
         await self.close_card()
         page, _, rects = self.words[k]
         await self.scroll_to(page, within=rects[0][1] if rects else 0.0)
+
+    def page_start_text(self, i: int) -> str:
+        """The first words of page ``i`` (not a page number), to find the same place in the reading view."""
+        words = [w[1] for w in self.words if w[0] == i]
+        while words and re.fullmatch(r"[\d\W]+", words[0]):
+            words.pop(0)
+        return " ".join(words[:12])
+
+    async def on_continuous(self, e=None) -> None:
+        """Continuous page: the reading view (the text as one long page) from the page shown here; nothing is
+        read aloud. Exit read along comes back to focus mode at the same place."""
+        start = self.page_start_text(self.current)
+        app = self.app
+        await self.close()
+        await app.reflow.open(start_text=start)
+        app.reflow.from_focus = True
 
     # ------------------------------------------------------------------ reading ruler
     def _line_at(self, i: int, y: float) -> Optional[int]:

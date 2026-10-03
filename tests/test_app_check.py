@@ -276,6 +276,17 @@ async def _read_everywhere(app, path):
     await r.on_close()  # Exit read along: back to focus mode, where it was opened from
     assert app.focus.active and not r.active
     await app.focus.close()
+    # Continuous page from focus mode: the reading view at the page shown, nothing read aloud; Exit comes back
+    await app.focus.open()
+    f.current = min(2, len(f.sizes) - 1)
+    start = f.page_start_text(f.current)
+    await f.on_continuous()
+    assert r.active and not app.focus.active and not r._reading
+    if start and r._item_with(start) is not None:
+        assert r.current == r._item_with(start)
+    await r.on_close()
+    assert app.focus.active
+    await app.focus.close()
     await r.open()  # opened from the main screen: Exit read along goes back there
     await r.on_close()
     assert not r.active and not app.focus.active

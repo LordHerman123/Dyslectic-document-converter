@@ -1939,6 +1939,17 @@ T: dict[str, dict[str, str]] = {
         "de": "Ab und zu eine kleine Erinnerung (alle 10 Starts)",
         "es": "Un pequeño recordatorio de vez en cuando (cada 10 inicios)",
         "it": "Un piccolo promemoria ogni tanto (ogni 10 avvii)"},
+    "Continuous page: the text as one long page, from here (Exit read along comes back to the pages)": {
+        "nl": "Doorlopende pagina: de tekst als één lange pagina, vanaf hier (Meelezen verlaten brengt je terug "
+              "naar de pagina's)",
+        "fr": "Page continue : le texte en une seule longue page, à partir d'ici (Quitter la lecture accompagnée "
+              "ramène aux pages)",
+        "de": "Fortlaufende Seite: der Text als eine lange Seite, ab hier (Mitlesen beenden führt zurück zu den "
+              "Seiten)",
+        "es": "Página continua: el texto como una sola página larga, desde aquí (Salir de la lectura guiada vuelve "
+              "a las páginas)",
+        "it": "Pagina continua: il testo come un'unica lunga pagina, da qui (Esci dalla lettura guidata torna alle "
+              "pagine)"},
 }
 
 # messages from the processing core, matched in i18n.MESSAGE_PATTERNS; {0}, {1}... are the parts found
