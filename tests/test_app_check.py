@@ -273,7 +273,12 @@ async def _read_everywhere(app, path):
     await app.focus.open()
     await app.on_reflow(None)
     assert r.active and not app.focus.active
-    await r.close()
+    await r.on_close()  # Exit read along: back to focus mode, where it was opened from
+    assert app.focus.active and not r.active
+    await app.focus.close()
+    await r.open()  # opened from the main screen: Exit read along goes back there
+    await r.on_close()
+    assert not r.active and not app.focus.active
 
 
 def test_app_check_pdf(headless, paper):

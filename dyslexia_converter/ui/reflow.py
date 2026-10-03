@@ -49,6 +49,7 @@ class ReflowMode:
 
     def __init__(self, app: "ConverterApp"):
         self.app = app
+        self.from_focus = False  # opened from focus mode: leaving goes back to focus mode
         self.active = False
         self.items: list[RItem] = []
         self.result: Optional[ComposeResult] = None
@@ -214,6 +215,12 @@ class ReflowMode:
         app.page.update()
 
     async def on_close(self, e=None) -> None:
+        """Exit read along: back to focus mode at the same place when it was opened from there, else back to the
+        main screen."""
+        if self.from_focus:
+            self.from_focus = False
+            await self.on_pages()
+            return
         await self.close()
 
     async def on_pages(self, e=None) -> None:

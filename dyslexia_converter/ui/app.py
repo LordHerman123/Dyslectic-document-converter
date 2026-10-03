@@ -2099,9 +2099,11 @@ class ConverterApp:
 
     async def on_reflow(self, e):
         """The Read along button (in the read-aloud panel, also in focus mode)."""
-        if self.focus.active:
+        from_focus = self.focus.active
+        if from_focus:
             await self.focus.close()
         await self.reflow.open()
+        self.reflow.from_focus = from_focus  # Exit read along goes back there
 
     # ---------------------------------------------------------------- where each document was left
     POSITIONS_KEPT = 200
