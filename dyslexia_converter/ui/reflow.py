@@ -172,6 +172,11 @@ class ReflowMode:
             ft.Container(expand=True),
             self.progress,
         ], spacing=2, scroll=ft.ScrollMode.AUTO, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+        # leaving is always on the right, outside the part of the bar that scrolls on a narrow window
+        exit_btn = ft.FilledTonalButton(t("Exit read along"), icon=ft.Icons.LOGOUT, on_click=self.on_close,
+                                        tooltip=t("Back to where you came from"))
+        bar = ft.Row([ft.Container(bar, expand=True), exit_btn], spacing=8,
+                     vertical_alignment=ft.CrossAxisAlignment.CENTER)
         self.top = ft.Container(bar, padding=ft.Padding.symmetric(horizontal=6, vertical=2),
                                 bgcolor=ft.Colors.SURFACE_CONTAINER_LOW,
                                 border=ft.Border.only(bottom=ft.BorderSide(1, ft.Colors.OUTLINE_VARIANT)))
