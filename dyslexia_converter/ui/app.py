@@ -1665,7 +1665,8 @@ class ConverterApp:
         bar = ft.SnackBar(
             ft.Row([ft.Icon(ft.Icons.FAVORITE_BORDER, color=ft.Colors.PRIMARY, size=20),
                     ft.Text(t("Enjoying the app? It is free and made by one person. A small donation helps keep it "
-                              "going."), size=self.fs(14), color=ft.Colors.ON_SURFACE, expand=True),
+                              "going, and helps make more useful tools like this free and open for everyone in the "
+                              "future."), size=self.fs(14), color=ft.Colors.ON_SURFACE, expand=True),
                     ft.TextButton(t("Donate"), icon=ft.Icons.COFFEE, url=DONATE_URL),
                     ft.TextButton(t("Don't show again"), on_click=never)],
                    spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER),

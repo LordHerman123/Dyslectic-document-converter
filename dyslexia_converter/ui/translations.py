@@ -1919,17 +1919,20 @@ T: dict[str, dict[str, str]] = {
         "de": "Im Fokusmodus bewegt sich das Leselineal mit der Stimme",
         "es": "En el modo concentración, la regla de lectura avanza con la voz",
         "it": "In modalità concentrazione il righello di lettura si muove con la voce"},
-    "Enjoying the app? It is free and made by one person. A small donation helps keep it going.": {
-        "nl": "Heb je iets aan de app? Hij is gratis en gemaakt door één persoon. Een kleine donatie helpt hem "
-              "verder te maken.",
+    "Enjoying the app? It is free and made by one person. A small donation helps keep it going, and helps make more useful tools like this free and open for everyone in the future.": {
+        "nl": "Heb je iets aan de app? Hij is gratis en gemaakt door één persoon. Een kleine donatie helpt hem verder "
+              "te maken, en helpt om in de toekomst meer handige hulpmiddelen zoals deze gratis en open voor iedereen "
+              "te maken.",
         "fr": "L'application vous plaît ? Elle est gratuite et faite par une seule personne. Un petit don aide à la "
-              "faire vivre.",
+              "faire vivre, et à rendre d'autres outils utiles comme celui-ci gratuits et ouverts à tous à l'avenir.",
         "de": "Gefällt Ihnen die App? Sie ist kostenlos und von einer Person gemacht. Eine kleine Spende hilft, sie "
-              "weiterzuführen.",
+              "weiterzuführen, und hilft, künftig weitere nützliche Werkzeuge wie dieses kostenlos und offen für "
+              "alle zu machen.",
         "es": "¿Le gusta la aplicación? Es gratuita y la hace una sola persona. Un pequeño donativo ayuda a "
-              "mantenerla.",
-        "it": "Ti piace l'app? È gratuita e fatta da una sola persona. Una piccola donazione aiuta a portarla "
-              "avanti."},
+              "mantenerla, y a que en el futuro haya más herramientas útiles como esta, gratuitas y abiertas para "
+              "todos.",
+        "it": "Ti piace l'app? È gratuita e fatta da una sola persona. Una piccola donazione aiuta a portarla avanti, "
+              "e a rendere in futuro altri strumenti utili come questo gratuiti e aperti a tutti."},
     "Donate": {"nl": "Doneren", "fr": "Faire un don", "de": "Spenden", "es": "Donar", "it": "Dona"},
     "Don't show again": {"nl": "Niet meer tonen", "fr": "Ne plus afficher", "de": "Nicht mehr zeigen",
                          "es": "No volver a mostrar", "it": "Non mostrare più"},
