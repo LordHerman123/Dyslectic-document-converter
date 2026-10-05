@@ -199,28 +199,66 @@ async def _scenario_reading_view(app, path):
 
 
 async def _scenario_greyed_out(app, path):
-    # before a document is open, the reading controls cannot be used
+    # before a document is open, the reading controls are greyed out (they work once one is open)
     assert app.read_btn.disabled and app.tap_btn.disabled and app.audio_btn.disabled
     assert app.read_along_btn.disabled
     ruler_chip = next(c for c in app._option_chips if c.data == "ruler_follows")
-    assert ruler_chip.disabled  # the ruler only exists in focus mode
+    assert not ruler_chip.visible  # the ruler only exists in focus mode: left out of the main screen
     app.speaker = _speaker()
     app._speech_allowed = lambda: True
     app.source_path = str(path)
     await app.load_document()
     assert not app.read_btn.disabled and not app.audio_btn.disabled and app.stop_btn.disabled
+    assert app.audio_btn.visible and any(i.on_click == app.on_audio_export for i in app.export_menu.items)
     await app.focus.open()
-    assert not ruler_chip.disabled
+    assert ruler_chip.visible and not app.audio_btn.visible  # focus mode: the ruler option, but no MP3
+    focus_menu = next(c for c in app.focus.top.content.controls if isinstance(c, ft.PopupMenuButton)
+                      and any(getattr(i, "on_click", None) == app.on_export for i in (c.items or [])))
+    assert not any(getattr(i, "on_click", None) == app.on_audio_export for i in focus_menu.items)
     await app.focus.close()
-    assert ruler_chip.disabled
-    # no voices at all: greyed out, with the reason in the tooltip
+    assert not ruler_chip.visible and app.audio_btn.visible
+    # no voices at all: the controls that could never work are left out; the red note says why
     app.speaker.voices = lambda: []
     app._update_read_buttons()
-    assert app.read_btn.disabled and app.audio_btn.disabled and app.tap_btn.disabled
-    assert "voices" in app.read_btn.tooltip.lower()
+    assert not app.read_btn.visible and not app.tap_btn.visible and not app.audio_btn.visible
+    assert not app.voice_dd.visible and not app.speed_slider.visible
+
+
+async def _scenario_ruler_switches_on(app, path):
+    app.speaker = _speaker()
+    app._speech_allowed = lambda: True
+    app.source_path = str(path)
+    await app.load_document()
+    f = app.focus
+    await f.open()
+    await _until(lambda: not f.loading.visible, 10)
+    assert not f.ruler
+    # reading starts with "Ruler follows" on: the ruler switches on at the first sentence read
+    await app.on_read(None)
+    assert _playing(app)
+    first = app._read_units[app._read_pos].words[0]
+    assert f.ruler and f.ruler[0] == first.page and f.ruler_toggle.selected
+    await app.on_read_stop(None)
+    # switching "Ruler follows" on (with the ruler off) switches the ruler on, at the spot being read
+    await f.on_ruler(None)
+    assert not f.ruler
+    chip = next(c for c in app._option_chips if c.data == "ruler_follows")
+
+    class Tap:
+        control = chip
+    await chip.on_select(Tap())  # off
+    assert not f.ruler
+    await app.on_read(None)
+    assert _playing(app) and not f.ruler  # off: reading does not switch the ruler on
+    assert await _until(lambda: app._read_pos is not None)
+    await chip.on_select(Tap())  # on, while reading
+    assert f.ruler and f.ruler[0] == app._read_units[app._read_pos].words[0].page
+    assert _playing(app)  # and reading goes on
+    await app.on_read_stop(None)
+    await f.close()
 
 
 @pytest.mark.parametrize("scenario", [_scenario_focus, _scenario_main_view, _scenario_reading_view,
-                                      _scenario_greyed_out])
+                                      _scenario_greyed_out, _scenario_ruler_switches_on])
 def test_reading_aloud_behaves_like_a_reader_expects(headless, paper, scenario):  # noqa: F811
     headless(lambda app: scenario(app, paper), timeout=120)

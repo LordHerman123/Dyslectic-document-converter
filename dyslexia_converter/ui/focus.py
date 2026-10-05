@@ -1040,6 +1040,18 @@ class FocusMode:
         self.ruler_toggle.update()
         await self._set_ruler(i, 0)
 
+    async def ruler_on_at(self, page: int, y: Optional[float] = None) -> None:
+        """Switch the ruler on (if it is off) at the line of page ``page`` nearest to height ``y`` (the start of the
+        page when not given): used when "Ruler follows" is switched on, or reading starts with it on."""
+        if not self.active or not self.words or not (0 <= page < len(self.sizes)):
+            return
+        line = self._line_at(page, y) if y is not None else (0 if self._lines_of(page) else None)
+        if line is None:
+            return
+        self.ruler_toggle.selected = True
+        self.ruler_toggle.update()
+        await self._set_ruler(page, line)
+
     async def _set_ruler(self, page: int, line: int) -> None:
         """Put the ruler on a line and redraw the page(s) involved."""
         old = self.ruler

@@ -1973,6 +1973,7 @@ class ConverterApp:
         self._tap_tooltip()
         speed = float(self.ui.get("read_speed", 1.0))
         self.speed_label = self.text(_speed_text(speed), 13)
+        self.speed_title = self.text(t("Speed"), 13)
         self.speed_slider = ft.Slider(min=0.5, max=2.0, divisions=6, value=speed, width=150,
                                       on_change_end=self.on_read_speed)
         voices = self.speaker.voices() if self._speech_allowed() else []
@@ -1992,7 +1993,7 @@ class ConverterApp:
         self.audio_btn = ft.OutlinedButton(t("MP3"), icon=ft.Icons.AUDIO_FILE_OUTLINED, on_click=self.on_audio_export)
         main = ft.Row([
             self.read_btn, self.stop_btn, self.tap_btn, ft.Container(width=6),
-            self.text(t("Speed"), 13), self.speed_slider, self.speed_label, self.voice_dd, self.natural_btn,
+            self.speed_title, self.speed_slider, self.speed_label, self.voice_dd, self.natural_btn,
             self.audio_btn,
         ], wrap=True, spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER)
         # the reading options as on/off chips under the controls (also in focus mode, which shows this panel)
@@ -2041,7 +2042,7 @@ class ConverterApp:
         t = self.t
         items = [ft.PopupMenuItem(t(label), icon=EXPORT_ICONS[fmt], data=fmt, on_click=self.on_export)
                  for fmt, label, _ in EXPORTS]
-        if self._speech_allowed():
+        if self._speech_allowed() and not compact:  # not in focus mode's menu (compact)
             items.append(ft.PopupMenuItem(t("MP3 (text to speech)"), icon=ft.Icons.AUDIO_FILE_OUTLINED,
                                           on_click=self.on_audio_export))
         has = bool(self.doc_highlights())
@@ -2157,23 +2158,28 @@ class ConverterApp:
             self.read_btn.icon, self.read_btn.tooltip = ft.Icons.PLAY_ARROW_ROUNDED, t("Continue")
         else:
             self.read_btn.icon, self.read_btn.tooltip = ft.Icons.PLAY_ARROW_ROUNDED, t("Read aloud")
+        # a control that can never work on this screen is left out; one that needs a document first is greyed out
+        in_focus = self.focus.active
         self.read_btn.disabled = why is not None
         if why:
             self.read_btn.tooltip = why
         self.stop_btn.disabled = not self._reading and self._read_pos is None
         self.tap_btn.disabled = why is not None
-        for c in (self.speed_slider, self.voice_dd):
-            c.disabled = not voices
-        self.audio_btn.disabled = why is not None
-        self.audio_btn.tooltip = why or t("Save as audio (MP3): the whole document, some pages or your selection")
-        natural = natural_voices.supported()
-        self.natural_btn.disabled = not natural
-        self.natural_btn.tooltip = t("Natural voices") + ": " + (
-            t("Download natural-sounding voices that work offline") if natural
-            else t("not available in this copy of the app"))
+        for c in (self.read_btn, self.stop_btn, self.tap_btn, self.speed_title, self.speed_slider,
+                  self.speed_label, self.voice_dd):
+            c.visible = voices  # no voices at all: the red note says why, instead of controls that never work
+        if getattr(self, "no_voice_note", None) is not None:
+            self.no_voice_note.visible = self._speech_allowed() and not voices
+        self.audio_btn.visible = voices and not in_focus  # saving audio belongs to the main screen
+        self.audio_btn.disabled = not doc
+        self.audio_btn.tooltip = t("Save as audio (MP3): the whole document, some pages or your selection") \
+            if doc else t("Open a PDF first.")
+        self.natural_btn.visible = natural_voices.supported()
+        self.natural_btn.tooltip = t("Natural voices") + ": " + t("Download natural-sounding voices that work offline")
         self.read_along_btn.disabled = not doc
         for chip in getattr(self, "_option_chips", []):  # the ruler only exists in focus mode
-            chip.disabled = chip.data == "ruler_follows" and not self.focus.active
+            if chip.data == "ruler_follows":
+                chip.visible = in_focus
         self.read_toggle.icon = ft.Icons.GRAPHIC_EQ if self._reading else ft.Icons.VOLUME_UP
 
     def _check_voice_language(self) -> None:
@@ -2318,6 +2324,8 @@ class ConverterApp:
                 coro.close()  # the app is closing
 
         # the ruler and the marks go to the first sentence at once, before the voice is heard
+        if self.focus.active and self.reading_option("ruler_follows") and not self.focus.ruler:
+            await self._ruler_to_reading()
         await self._show_word(start, 0, gen)
         self.speaker.start(spoken, start, float(self.ui.get("read_speed", 1.0)), self._voice(),
                            on_word=lambda si, wi: post(self._show_word(si, wi, gen)),
@@ -2462,7 +2470,9 @@ class ConverterApp:
             for chip in self._option_chips:
                 chip.selected = self.reading_option(chip.data)
             self.page.update()
-            if key != "read_follow":
+            if key == "ruler_follows" and self.reading_option(key) and self.focus.active:
+                await self._ruler_to_reading()  # the ruler goes on, at the spot being read
+            if key not in ("read_follow", "ruler_follows"):
                 await self._restart_reading()  # applies at once to what is being read
 
         for key, label, tip, _ in self.READING_CHIPS:
@@ -2628,6 +2638,18 @@ class ConverterApp:
                 ft.Container(rows, height=380)], tight=True, spacing=12), width=520),
             actions=[ft.TextButton(t("Close"), on_click=close)])
         self.page.show_dialog(dialog)
+
+    async def _ruler_to_reading(self) -> None:
+        """Focus mode: switch the ruler on at the sentence being read (or where reading paused), else at the top
+        of the page shown."""
+        f = self.focus
+        units, pos = self._read_units, self._read_pos
+        if units and pos is not None and pos < len(units):
+            word = next((w for w in units[pos].words if w.rects), None)
+            if word is not None:
+                await f.ruler_on_at(word.page, (word.rects[0][1] + word.rects[0][3]) / 2)
+                return
+        await f.ruler_on_at(f.current)
 
     async def on_audio_export(self, e):
         """MP3 (text to speech): save the whole document, some pages or the selection in focus mode as one MP3,

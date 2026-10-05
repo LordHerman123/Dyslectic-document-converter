@@ -1976,11 +1976,6 @@ T: dict[str, dict[str, str]] = {
         "it": "Il righello segue la voce: in modalità concentrazione il righello di lettura si muove con essa"},
     "Python: {path}": {"nl": "Python: {path}", "fr": "Python : {path}", "de": "Python: {path}", "es": "Python: {path}",
                        "it": "Python: {path}"},
-    "not available in this copy of the app": {"nl": "niet beschikbaar in deze versie van de app",
-                                              "fr": "non disponible dans cette copie de l'application",
-                                              "de": "in dieser Kopie der App nicht verfügbar",
-                                              "es": "no disponible en esta copia de la aplicación",
-                                              "it": "non disponibile in questa copia dell'app"},
 }
 
 # messages from the processing core, matched in i18n.MESSAGE_PATTERNS; {0}, {1}... are the parts found
