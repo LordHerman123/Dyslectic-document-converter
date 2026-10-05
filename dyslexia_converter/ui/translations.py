@@ -1712,6 +1712,270 @@ T: dict[str, dict[str, str]] = {
                                            "de": "Wörter, die durch ein Leerzeichen getrennt sein können",
                                            "es": "Palabras que quizá estén separadas por un espacio",
                                            "it": "Parole forse divise da uno spazio"},
+    "Natural voices": {"nl": "Natuurlijke stemmen", "fr": "Voix naturelles", "de": "Natürliche Stimmen",
+                       "es": "Voces naturales", "it": "Voci naturali"},
+    "Download natural-sounding voices that work offline": {
+        "nl": "Natuurlijk klinkende stemmen downloaden die offline werken",
+        "fr": "Télécharger des voix au son naturel qui fonctionnent hors ligne",
+        "de": "Natürlich klingende Stimmen herunterladen, die offline funktionieren",
+        "es": "Descargar voces de sonido natural que funcionan sin conexión",
+        "it": "Scarica voci dal suono naturale che funzionano offline"},
+    "Downloaded": {"nl": "Gedownload", "fr": "Téléchargée", "de": "Heruntergeladen", "es": "Descargada",
+                   "it": "Scaricata"},
+    "man": {"nl": "man", "fr": "homme", "de": "Mann", "es": "hombre", "it": "uomo"},
+    "woman": {"nl": "vrouw", "fr": "femme", "de": "Frau", "es": "mujer", "it": "donna"},
+    "The voice could not be downloaded:": {"nl": "De stem kon niet gedownload worden:",
+                                           "fr": "La voix n'a pas pu être téléchargée :",
+                                           "de": "Die Stimme konnte nicht heruntergeladen werden:",
+                                           "es": "No se pudo descargar la voz:",
+                                           "it": "Non è stato possibile scaricare la voce:"},
+    "The natural voice {name} is ready. With the voice on Automatic it reads {language} documents.": {
+        "nl": "De natuurlijke stem {name} is klaar. Met de stem op Automatisch leest ze {language} documenten voor.",
+        "fr": "La voix naturelle {name} est prête. Avec la voix sur Automatique, elle lit les documents en {language}.",
+        "de": "Die natürliche Stimme {name} ist bereit. Mit der Stimme auf Automatisch liest sie Dokumente auf "
+              "{language} vor.",
+        "es": "La voz natural {name} está lista. Con la voz en Automática, lee los documentos en {language}.",
+        "it": "La voce naturale {name} è pronta. Con la voce su Automatica legge i documenti in {language}."},
+    "No {language} voice is installed, so another voice reads the text. Download a natural {language} voice with Natural voices in the read-aloud panel.": {
+        "nl": "Er is geen stem voor {language} geïnstalleerd, dus een andere stem leest de tekst voor. Download een "
+              "natuurlijke stem voor {language} met Natuurlijke stemmen in het voorleespaneel.",
+        "fr": "Aucune voix {language} n'est installée, une autre voix lit donc le texte. Téléchargez une voix "
+              "naturelle {language} avec Voix naturelles dans le panneau de lecture.",
+        "de": "Es ist keine Stimme für {language} installiert, daher liest eine andere Stimme den Text. Laden Sie "
+              "mit Natürliche Stimmen im Vorlesebereich eine natürliche Stimme für {language} herunter.",
+        "es": "No hay ninguna voz en {language} instalada, así que otra voz lee el texto. Descargue una voz "
+              "natural en {language} con Voces naturales en el panel de lectura.",
+        "it": "Non è installata nessuna voce in {language}, quindi un'altra voce legge il testo. Scarica una voce "
+              "naturale in {language} con Voci naturali nel pannello di lettura."},
+    "These voices sound much more natural than most voices built into the computer. Each is downloaded once (about 60 MB) and then works offline: the text you read never leaves this device.": {
+        "nl": "Deze stemmen klinken veel natuurlijker dan de meeste stemmen van de computer. Elke stem wordt één "
+              "keer gedownload (ongeveer 60 MB) en werkt daarna offline: de tekst die u leest verlaat dit apparaat "
+              "nooit.",
+        "fr": "Ces voix sont bien plus naturelles que la plupart des voix de l'ordinateur. Chacune est téléchargée "
+              "une fois (environ 60 Mo) puis fonctionne hors ligne : le texte que vous lisez ne quitte jamais cet "
+              "appareil.",
+        "de": "Diese Stimmen klingen viel natürlicher als die meisten Stimmen des Computers. Jede wird einmal "
+              "heruntergeladen (etwa 60 MB) und funktioniert dann offline: Der Text, den Sie lesen, verlässt "
+              "dieses Gerät nie.",
+        "es": "Estas voces suenan mucho más naturales que la mayoría de las voces del ordenador. Cada una se "
+              "descarga una vez (unos 60 MB) y luego funciona sin conexión: el texto que lee nunca sale de este "
+              "dispositivo.",
+        "it": "Queste voci suonano molto più naturali della maggior parte delle voci del computer. Ognuna si "
+              "scarica una volta (circa 60 MB) e poi funziona offline: il testo che leggi non lascia mai questo "
+              "dispositivo."},
+    "Reference": {"nl": "Bron", "fr": "Référence", "de": "Quelle", "es": "Referencia", "it": "Riferimento"},
+    "References": {"nl": "Bronnen", "fr": "Références", "de": "Quellen", "es": "Referencias", "it": "Riferimenti"},
+    "Show in the list": {"nl": "Tonen in de lijst", "fr": "Afficher dans la liste", "de": "In der Liste zeigen",
+                         "es": "Mostrar en la lista", "it": "Mostra nell'elenco"},
+    "Save as audio": {"nl": "Opslaan als audio", "fr": "Enregistrer en audio", "de": "Als Audio speichern",
+                      "es": "Guardar como audio", "it": "Salva come audio"},
+    "Save as audio (MP3): the whole document, some pages or your selection": {
+        "nl": "Opslaan als audio (MP3): het hele document, een paar pagina's of uw selectie",
+        "fr": "Enregistrer en audio (MP3) : tout le document, quelques pages ou votre sélection",
+        "de": "Als Audio speichern (MP3): das ganze Dokument, einige Seiten oder Ihre Auswahl",
+        "es": "Guardar como audio (MP3): todo el documento, algunas páginas o su selección",
+        "it": "Salva come audio (MP3): tutto il documento, alcune pagine o la tua selezione"},
+    "Save MP3": {"nl": "MP3 opslaan", "fr": "Enregistrer le MP3", "de": "MP3 speichern", "es": "Guardar MP3",
+                 "it": "Salva MP3"},
+    "Whole document": {"nl": "Hele document", "fr": "Tout le document", "de": "Ganzes Dokument",
+                       "es": "Todo el documento", "it": "Tutto il documento"},
+    "Pages": {"nl": "Pagina's", "fr": "Pages", "de": "Seiten", "es": "Páginas", "it": "Pagine"},
+    "to": {"nl": "tot", "fr": "à", "de": "bis", "es": "a", "it": "a"},
+    "about {n} minutes": {"nl": "ongeveer {n} minuten", "fr": "environ {n} minutes", "de": "etwa {n} Minuten",
+                          "es": "unos {n} minutos", "it": "circa {n} minuti"},
+    "under a minute": {"nl": "minder dan een minuut", "fr": "moins d'une minute", "de": "unter einer Minute",
+                       "es": "menos de un minuto", "it": "meno di un minuto"},
+    "Making the audio...": {"nl": "De audio wordt gemaakt...", "fr": "Création de l'audio...",
+                            "de": "Audio wird erstellt...", "es": "Creando el audio...", "it": "Creazione dell'audio..."},
+    "The audio could not be made:": {"nl": "De audio kon niet gemaakt worden:", "fr": "L'audio n'a pas pu être créé :",
+                                     "de": "Das Audio konnte nicht erstellt werden:",
+                                     "es": "No se pudo crear el audio:", "it": "Non è stato possibile creare l'audio:"},
+    "MP3": {"nl": "MP3", "fr": "MP3", "de": "MP3", "es": "MP3", "it": "MP3"},
+    "MP3 (text to speech)": {"nl": "MP3 (tekst naar spraak)", "fr": "MP3 (synthèse vocale)",
+                             "de": "MP3 (Sprachausgabe)", "es": "MP3 (texto a voz)", "it": "MP3 (sintesi vocale)"},
+    "What to read": {"nl": "Wat voorlezen", "fr": "Que lire", "de": "Was vorlesen", "es": "Qué leer",
+                     "it": "Cosa leggere"},
+    "Leave out": {"nl": "Weglaten", "fr": "Laisser de côté", "de": "Weglassen", "es": "Omitir", "it": "Tralascia"},
+    "Natural (Piper)": {"nl": "Natuurlijk (Piper)", "fr": "Naturelles (Piper)", "de": "Natürlich (Piper)",
+                        "es": "Naturales (Piper)", "it": "Naturali (Piper)"},
+    "Windows voices": {"nl": "Windows-stemmen", "fr": "Voix Windows", "de": "Windows-Stimmen", "es": "Voces de Windows",
+                       "it": "Voci di Windows"},
+    "Computer voices": {"nl": "Computerstemmen", "fr": "Voix de l'ordinateur", "de": "Computerstimmen",
+                        "es": "Voces del ordenador", "it": "Voci del computer"},
+    "Download natural voices": {"nl": "Natuurlijke stemmen downloaden", "fr": "Télécharger des voix naturelles",
+                                "de": "Natürliche Stimmen herunterladen", "es": "Descargar voces naturales",
+                                "it": "Scarica voci naturali"},
+    "Skip citations in the text, like (Smith, 2019) and [3]": {
+        "nl": "Verwijzingen in de tekst overslaan, zoals (Smith, 2019) en [3]",
+        "fr": "Ignorer les citations dans le texte, comme (Smith, 2019) et [3]",
+        "de": "Zitate im Text überspringen, wie (Smith, 2019) und [3]",
+        "es": "Omitir las citas en el texto, como (Smith, 2019) y [3]",
+        "it": "Salta le citazioni nel testo, come (Smith, 2019) e [3]"},
+    "Most are found, but some unusual ones may still be read.": {
+        "nl": "De meeste worden gevonden, maar sommige ongewone kunnen toch voorgelezen worden.",
+        "fr": "La plupart sont trouvées, mais certaines inhabituelles peuvent encore être lues.",
+        "de": "Die meisten werden gefunden, aber einige ungewöhnliche werden vielleicht doch vorgelesen.",
+        "es": "Se encuentran casi todas, pero algunas poco habituales pueden leerse igualmente.",
+        "it": "Quasi tutte vengono trovate, ma alcune insolite potrebbero essere lette comunque."},
+    "Skip the reference list and notes at the end": {
+        "nl": "De literatuurlijst en noten aan het eind overslaan",
+        "fr": "Ignorer la bibliographie et les notes à la fin",
+        "de": "Literaturverzeichnis und Anmerkungen am Ende überspringen",
+        "es": "Omitir la lista de referencias y las notas del final",
+        "it": "Salta la bibliografia e le note alla fine"},
+    "No reference list or notes were found": {"nl": "Er is geen literatuurlijst of noten gevonden",
+                                              "fr": "Aucune bibliographie ni note n'a été trouvée",
+                                              "de": "Kein Literaturverzeichnis und keine Anmerkungen gefunden",
+                                              "es": "No se encontraron referencias ni notas",
+                                              "it": "Nessuna bibliografia o nota trovata"},
+    "Saving MP3 files needs the lameenc package (pip install lameenc); the app download includes it.": {
+        "nl": "Voor MP3-bestanden is het pakket lameenc nodig (pip install lameenc); de app-download bevat het.",
+        "fr": "L'enregistrement en MP3 nécessite le paquet lameenc (pip install lameenc) ; l'application "
+              "téléchargée l'inclut.",
+        "de": "Zum Speichern als MP3 wird das Paket lameenc benötigt (pip install lameenc); der App-Download "
+              "enthält es.",
+        "es": "Para guardar MP3 hace falta el paquete lameenc (pip install lameenc); la aplicación descargada lo "
+              "incluye.",
+        "it": "Per salvare MP3 serve il pacchetto lameenc (pip install lameenc); l'app scaricata lo include."},
+    "Reading options": {"nl": "Voorleesopties", "fr": "Options de lecture", "de": "Vorleseoptionen",
+                        "es": "Opciones de lectura", "it": "Opzioni di lettura"},
+    "Mark what is being read": {"nl": "Markeren wat er voorgelezen wordt", "fr": "Marquer ce qui est lu",
+                                "de": "Markieren, was vorgelesen wird", "es": "Marcar lo que se está leyendo",
+                                "it": "Evidenzia ciò che viene letto"},
+    "The reading ruler follows the voice (focus mode)": {
+        "nl": "De leeslineaal volgt de stem (focusmodus)", "fr": "La règle de lecture suit la voix (mode concentration)",
+        "de": "Das Leselineal folgt der Stimme (Fokusmodus)", "es": "La regla de lectura sigue la voz (modo concentración)",
+        "it": "Il righello di lettura segue la voce (modalità concentrazione)"},
+    "Tap to read: on (tap a paragraph to read from there)": {
+        "nl": "Tikken om voor te lezen: aan (tik op een alinea om vanaf daar voor te lezen)",
+        "fr": "Toucher pour lire : activé (touchez un paragraphe pour lire à partir de là)",
+        "de": "Tippen zum Vorlesen: an (tippen Sie auf einen Absatz, um ab dort vorzulesen)",
+        "es": "Tocar para leer: activado (toque un párrafo para leer desde ahí)",
+        "it": "Tocca per leggere: attivo (tocca un paragrafo per leggere da lì)"},
+    "Tap to read: off (the text is one continuous page; taps do nothing)": {
+        "nl": "Tikken om voor te lezen: uit (de tekst is één doorlopende pagina; tikken doet niets)",
+        "fr": "Toucher pour lire : désactivé (le texte est une page continue ; toucher ne fait rien)",
+        "de": "Tippen zum Vorlesen: aus (der Text ist eine fortlaufende Seite; Tippen bewirkt nichts)",
+        "es": "Tocar para leer: desactivado (el texto es una página continua; tocar no hace nada)",
+        "it": "Tocca per leggere: disattivo (il testo è una pagina continua; toccare non fa nulla)"},
+    "Exit read along": {"nl": "Meelezen verlaten", "fr": "Quitter la lecture accompagnée", "de": "Mitlesen beenden",
+                        "es": "Salir de la lectura guiada", "it": "Esci dalla lettura guidata"},
+    "Back to where you came from": {"nl": "Terug naar waar u was", "fr": "Revenir là où vous étiez",
+                                    "de": "Zurück dorthin, wo Sie waren", "es": "Volver a donde estaba",
+                                    "it": "Torna dove eri"},
+    "Save WAV": {"nl": "WAV opslaan", "fr": "Enregistrer le WAV", "de": "WAV speichern", "es": "Guardar WAV",
+                 "it": "Salva WAV"},
+    "The MP3 encoder (lameenc) could not be loaded by the Python running this app, so the audio is saved as WAV (larger). To get MP3, run this command and restart the app:": {
+        "nl": "De MP3-encoder (lameenc) kon niet geladen worden door de Python waarmee deze app draait, dus de audio "
+              "wordt als WAV (groter) opgeslagen. Voor MP3: voer deze opdracht uit en start de app opnieuw:",
+        "fr": "L'encodeur MP3 (lameenc) n'a pas pu être chargé par le Python qui exécute cette application ; l'audio "
+              "est donc enregistré en WAV (plus lourd). Pour obtenir du MP3, lancez cette commande et redémarrez "
+              "l'application :",
+        "de": "Der MP3-Encoder (lameenc) konnte von dem Python, mit dem diese App läuft, nicht geladen werden; das "
+              "Audio wird daher als WAV (größer) gespeichert. Für MP3 diesen Befehl ausführen und die App neu starten:",
+        "es": "El codificador MP3 (lameenc) no se pudo cargar en el Python que ejecuta esta aplicación, así que el "
+              "audio se guarda como WAV (más grande). Para obtener MP3, ejecute este comando y reinicie la "
+              "aplicación:",
+        "it": "Il codificatore MP3 (lameenc) non è stato caricato dal Python che esegue questa app, quindi l'audio "
+              "viene salvato come WAV (più grande). Per avere l'MP3, esegui questo comando e riavvia l'app:"},
+    "The pages follow the voice": {"nl": "De pagina's volgen de stem", "fr": "Les pages suivent la voix",
+                                   "de": "Die Seiten folgen der Stimme", "es": "Las páginas siguen la voz",
+                                   "it": "Le pagine seguono la voce"},
+    "Skip citations": {"nl": "Verwijzingen overslaan", "fr": "Ignorer les citations", "de": "Zitate überspringen",
+                       "es": "Omitir citas", "it": "Salta le citazioni"},
+    "Leave out citations in the text, like (Smith, 2019) and [3]. Most are found, but some unusual ones may still be read.": {
+        "nl": "Verwijzingen in de tekst weglaten, zoals (Smith, 2019) en [3]. De meeste worden gevonden, maar "
+              "sommige ongewone kunnen toch voorgelezen worden.",
+        "fr": "Ne pas lire les citations dans le texte, comme (Smith, 2019) et [3]. La plupart sont trouvées, mais "
+              "certaines inhabituelles peuvent encore être lues.",
+        "de": "Zitate im Text auslassen, wie (Smith, 2019) und [3]. Die meisten werden gefunden, aber einige "
+              "ungewöhnliche werden vielleicht doch vorgelesen.",
+        "es": "Omitir las citas en el texto, como (Smith, 2019) y [3]. Se encuentran casi todas, pero algunas poco "
+              "habituales pueden leerse igualmente.",
+        "it": "Tralascia le citazioni nel testo, come (Smith, 2019) e [3]. Quasi tutte vengono trovate, ma alcune "
+              "insolite potrebbero essere lette comunque."},
+    "Skip references and notes": {"nl": "Literatuur en noten overslaan", "fr": "Ignorer références et notes",
+                                  "de": "Literatur und Anmerkungen überspringen", "es": "Omitir referencias y notas",
+                                  "it": "Salta riferimenti e note"},
+    "Stop before the reference list and the notes at the end": {
+        "nl": "Stoppen voor de literatuurlijst en de noten aan het eind",
+        "fr": "S'arrêter avant la bibliographie et les notes à la fin",
+        "de": "Vor dem Literaturverzeichnis und den Anmerkungen am Ende aufhören",
+        "es": "Parar antes de la lista de referencias y las notas del final",
+        "it": "Fermarsi prima della bibliografia e delle note alla fine"},
+    "Mark what is read": {"nl": "Markeren wat er gelezen wordt", "fr": "Marquer ce qui est lu",
+                          "de": "Markieren, was gelesen wird", "es": "Marcar lo que se lee", "it": "Evidenzia ciò che si legge"},
+    "Mark the sentence and word being read": {"nl": "De zin en het woord markeren die voorgelezen worden",
+                                              "fr": "Marquer la phrase et le mot en cours de lecture",
+                                              "de": "Den Satz und das Wort markieren, die vorgelesen werden",
+                                              "es": "Marcar la frase y la palabra que se están leyendo",
+                                              "it": "Evidenzia la frase e la parola che vengono lette"},
+    "Ruler follows the voice": {"nl": "Lineaal volgt de stem", "fr": "La règle suit la voix",
+                                "de": "Lineal folgt der Stimme", "es": "La regla sigue la voz",
+                                "it": "Il righello segue la voce"},
+    "In focus mode, the reading ruler moves along with the voice": {
+        "nl": "In de focusmodus beweegt de leeslineaal mee met de stem",
+        "fr": "En mode concentration, la règle de lecture avance avec la voix",
+        "de": "Im Fokusmodus bewegt sich das Leselineal mit der Stimme",
+        "es": "En el modo concentración, la regla de lectura avanza con la voz",
+        "it": "In modalità concentrazione il righello di lettura si muove con la voce"},
+    "Enjoying the app? It is free and made by one person. A small donation helps keep it going.": {
+        "nl": "Heb je iets aan de app? Hij is gratis en gemaakt door één persoon. Een kleine donatie helpt hem "
+              "verder te maken.",
+        "fr": "L'application vous plaît ? Elle est gratuite et faite par une seule personne. Un petit don aide à la "
+              "faire vivre.",
+        "de": "Gefällt Ihnen die App? Sie ist kostenlos und von einer Person gemacht. Eine kleine Spende hilft, sie "
+              "weiterzuführen.",
+        "es": "¿Le gusta la aplicación? Es gratuita y la hace una sola persona. Un pequeño donativo ayuda a "
+              "mantenerla.",
+        "it": "Ti piace l'app? È gratuita e fatta da una sola persona. Una piccola donazione aiuta a portarla "
+              "avanti."},
+    "Donate": {"nl": "Doneren", "fr": "Faire un don", "de": "Spenden", "es": "Donar", "it": "Dona"},
+    "Don't show again": {"nl": "Niet meer tonen", "fr": "Ne plus afficher", "de": "Nicht mehr zeigen",
+                         "es": "No volver a mostrar", "it": "Non mostrare più"},
+    "A small reminder now and then (every 10 starts)": {
+        "nl": "Af en toe een kleine herinnering (elke 10 keer starten)",
+        "fr": "Un petit rappel de temps en temps (tous les 10 démarrages)",
+        "de": "Ab und zu eine kleine Erinnerung (alle 10 Starts)",
+        "es": "Un pequeño recordatorio de vez en cuando (cada 10 inicios)",
+        "it": "Un piccolo promemoria ogni tanto (ogni 10 avvii)"},
+    "Continuous page: the text as one long page, from here (Exit read along comes back to the pages)": {
+        "nl": "Doorlopende pagina: de tekst als één lange pagina, vanaf hier (Meelezen verlaten brengt je terug "
+              "naar de pagina's)",
+        "fr": "Page continue : le texte en une seule longue page, à partir d'ici (Quitter la lecture accompagnée "
+              "ramène aux pages)",
+        "de": "Fortlaufende Seite: der Text als eine lange Seite, ab hier (Mitlesen beenden führt zurück zu den "
+              "Seiten)",
+        "es": "Página continua: el texto como una sola página larga, desde aquí (Salir de la lectura guiada vuelve "
+              "a las páginas)",
+        "it": "Pagina continua: il testo come un'unica lunga pagina, da qui (Esci dalla lettura guidata torna alle "
+              "pagine)"},
+    "Follow pages": {"nl": "Pagina's volgen", "fr": "Suivre les pages", "de": "Seiten folgen", "es": "Seguir páginas",
+                     "it": "Segui le pagine"},
+    "Turn pages along: the pages follow the voice": {
+        "nl": "Pagina's mee omslaan: de pagina's volgen de stem", "fr": "Tourner les pages : les pages suivent la voix",
+        "de": "Seiten mitblättern: die Seiten folgen der Stimme", "es": "Pasar las páginas: las páginas siguen la voz",
+        "it": "Girare le pagine: le pagine seguono la voce"},
+    "Skip references": {"nl": "Literatuur overslaan", "fr": "Ignorer les références", "de": "Literatur überspringen",
+                        "es": "Omitir referencias", "it": "Salta i riferimenti"},
+    "Skip the reference list and notes: stop before them at the end": {
+        "nl": "De literatuurlijst en noten overslaan: stoppen voor ze aan het eind beginnen",
+        "fr": "Ignorer la bibliographie et les notes : s'arrêter avant elles à la fin",
+        "de": "Literaturverzeichnis und Anmerkungen überspringen: am Ende davor aufhören",
+        "es": "Omitir la lista de referencias y las notas: parar antes de ellas al final",
+        "it": "Salta la bibliografia e le note: fermarsi prima di esse alla fine"},
+    "Mark reading": {"nl": "Lezen markeren", "fr": "Marquer la lecture", "de": "Lesen markieren", "es": "Marcar lectura",
+                     "it": "Evidenzia lettura"},
+    "Ruler follows": {"nl": "Lineaal volgt", "fr": "Règle suit", "de": "Lineal folgt", "es": "Regla sigue",
+                      "it": "Righello segue"},
+    "Ruler follows the voice: in focus mode, the reading ruler moves along with it": {
+        "nl": "Lineaal volgt de stem: in de focusmodus beweegt de leeslineaal mee",
+        "fr": "La règle suit la voix : en mode concentration, la règle de lecture avance avec elle",
+        "de": "Lineal folgt der Stimme: im Fokusmodus bewegt sich das Leselineal mit",
+        "es": "La regla sigue la voz: en el modo concentración, la regla de lectura avanza con ella",
+        "it": "Il righello segue la voce: in modalità concentrazione il righello di lettura si muove con essa"},
+    "Python: {path}": {"nl": "Python: {path}", "fr": "Python : {path}", "de": "Python: {path}", "es": "Python: {path}",
+                       "it": "Python: {path}"},
 }
 
 # messages from the processing core, matched in i18n.MESSAGE_PATTERNS; {0}, {1}... are the parts found

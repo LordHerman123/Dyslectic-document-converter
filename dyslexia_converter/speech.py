@@ -14,7 +14,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Callable, Optional
+from typing import Callable, Iterable, Optional
 
 import pymupdf
 
@@ -127,6 +127,42 @@ def reading_units(pdf: bytes | str, max_words: int = MAX_WORDS, skip_pages: froz
             w.start = pos
             pos += len(w.text) + 1
     return sentences
+
+
+def prepare_reading(sentences: list[Sentence], skip_citations: bool = False,
+                    end: Optional[int] = None) -> tuple[list[Sentence], list[list[int]]]:
+    """The sentences as they are read aloud: without in-text citations ("(Smith, 2019)", "[3]", "[Note 2]") when
+    ``skip_citations``, and without anything from sentence ``end`` on (the reference list and notes at the end).
+    Returns them with, for each, the numbers of the original words kept, so the highlight marks the right word.
+    A sentence that was only a citation has no words left (it is passed over)."""
+    from .audio_export import citation_spans
+
+    out, maps = [], []
+    for si, s in enumerate(sentences if end is None else sentences[:end]):
+        keep = list(range(len(s.words)))
+        if skip_citations and s.words:
+            text, starts, pos = "", [], 0
+            for w in s.words:
+                starts.append(len(text))
+                text += w.text + " "
+            spans = citation_spans(text)
+            if spans:
+                keep = [k for k in keep if not any(a <= starts[k] < b or a < starts[k] + len(s.words[k].text) <= b
+                                                     for a, b in spans)]
+        words, pos, kept = [], 0, set(keep)
+        for k, w in enumerate(s.words):
+            if k in kept:
+                words.append(Word(w.text, w.page, w.rects, pos))
+                pos += len(w.text) + 1
+            elif words:
+                # punctuation after a citation ("2014).") stays with the word before it, so the sentence still ends
+                tail = re.sub(r"^.*?[)\]]", "", w.text) if re.search(r"[)\]]", w.text) else ""
+                if tail and not re.search(r"\w", tail):
+                    words[-1] = Word(words[-1].text + tail, words[-1].page, words[-1].rects, words[-1].start)
+                    pos += len(tail)
+        out.append(Sentence(words))
+        maps.append(keep)
+    return out, maps
 
 
 def sentence_at(sentences: list[Sentence], page: int, x: float, y: float) -> Optional[int]:
@@ -395,6 +431,12 @@ class WinRtEngine:
         reader.read_bytes(buf)
         return bytes(buf), words
 
+    def to_wav(self, text: str) -> bytes:
+        """The spoken text as WAV bytes (for saving as audio), without playing it."""
+        import asyncio
+
+        return asyncio.run(self._synthesize(text))[0]
+
     def runAndWait(self) -> None:
         """Synthesise the text, then play it and report each word at its time (or report them at once without
         playing).
@@ -415,36 +457,238 @@ class WinRtEngine:
 
     def _play_and_follow(self) -> None:
         """Play the WAV and call the word callback as each word's time comes; stops the sound when stopped."""
-        import os
-        import tempfile
-        import winsound
+        play_following(self.last_wav, self.last_words, self._cb, lambda: self._stopped)
 
-        duration = _wav_seconds(self.last_wav)
-        fd, path = tempfile.mkstemp(suffix=".wav", prefix="dc-read-")
-        try:
-            with os.fdopen(fd, "wb") as f:
-                f.write(self.last_wav)
+    def stop(self) -> None:
+        """Stop speaking (from another thread)."""
+        self._stopped = True
+
+
+def _player() -> Optional[list[str]]:
+    """A command that plays a WAV file on Linux or macOS (Windows plays it itself), or None."""
+    import shutil
+
+    for cmd in (["afplay"], ["paplay"], ["aplay", "-q"], ["pw-play"], ["ffplay", "-nodisp", "-autoexit", "-loglevel",
+                                                                      "quiet"]):
+        if shutil.which(cmd[0]):
+            return cmd
+    return None
+
+
+def play_following(wav: bytes, words: list[tuple[float, int, int]], cb, stopped: Callable[[], bool]) -> None:
+    """Play ``wav`` and call ``cb(None, position, length)`` as each word's time (seconds) comes; stops the sound
+    as soon as ``stopped()`` is true."""
+    import os
+    import subprocess
+    import tempfile
+
+    duration = _wav_seconds(wav)
+    fd, path = tempfile.mkstemp(suffix=".wav", prefix="dc-read-")
+    proc = None
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(wav)
+        if sys.platform == "win32":
+            import winsound
+
             winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_NODEFAULT)
-            t0 = time.monotonic()
-            pending = list(self.last_words)
-            while True:
-                now = time.monotonic() - t0
-                while pending and pending[0][0] <= now:
-                    _, pos, length = pending.pop(0)
-                    if self._cb is not None:
-                        self._cb(None, pos, length)
-                if self._stopped:
-                    winsound.PlaySound(None, 0)  # stop the sound
-                    return
-                if now >= duration:
-                    return
-                nxt = pending[0][0] - now if pending else duration - now
-                time.sleep(max(0.01, min(0.05, nxt)))
-        finally:
+        else:
+            cmd = _player()
+            if cmd is None:
+                raise RuntimeError("no program to play sound was found (install pulseaudio-utils or alsa-utils)")
+            proc = subprocess.Popen(cmd + [path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        t0 = time.monotonic()
+        pending = list(words)
+        while True:
+            now = time.monotonic() - t0
+            while pending and pending[0][0] <= now:
+                _, pos, length = pending.pop(0)
+                if cb is not None:
+                    cb(None, pos, length)
+            if stopped():
+                return
+            if now >= duration and (proc is None or proc.poll() is not None):
+                return
+            nxt = pending[0][0] - now if pending else max(0.0, duration - now)
+            time.sleep(max(0.01, min(0.05, nxt)))
+    finally:
+        if sys.platform == "win32":
             try:
-                os.remove(path)
-            except OSError:
+                import winsound
+
+                winsound.PlaySound(None, 0)  # stop the sound
+            except Exception:
                 pass
+        if proc is not None and proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=1)
+            except Exception:
+                proc.kill()
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
+def word_times(text: str, parts: list[tuple[float, list[str]]]) -> list[tuple[float, int, int]]:
+    """When each word of ``text`` starts, for a voice that does not say so itself: ``parts`` are the pieces it
+    spoke, each (seconds of sound, its sounds (phonemes) with " " between words). Each word gets time in
+    proportion to its sounds, with a pause after commas and full stops; when the voice split the words
+    differently (it says "2019" as two words), in proportion to its letters. (seconds, position, length)."""
+    words = [(m.start(), m.end() - m.start(), m.group()) for m in re.finditer(r"\S+", text)]
+    if not words:
+        return []
+    spoken: list[tuple[float, float]] = []  # (start, weight) of each spoken word, in the order said
+    weights: list[list[float]] = []
+    t0 = 0.0
+    for seconds, phonemes in parts:
+        groups, cur = [], 0.0
+        for ph in phonemes:
+            if ph == " ":
+                groups.append(cur)
+                cur = 0.0
+            elif ph in ",;:":
+                cur += 3.0  # a short pause
+            elif ph in ".!?":
+                cur += 5.0
+            elif not ph.strip() or ph in "ˈˌː":
+                continue  # stress and length marks take no time of their own
+            else:
+                cur += 1.0
+        groups.append(cur)
+        groups = [g for g in groups if g > 0]
+        weights.append(groups)
+        total = sum(groups) or 1.0
+        acc = 0.0
+        for g in groups:
+            spoken.append((t0 + seconds * acc / total, g))
+            acc += g
+        t0 += seconds
+    if len(spoken) == len(words):
+        return [(start, pos, length) for (start, _), (pos, length, _) in zip(spoken, words)]
+    total_s = sum(seconds for seconds, _ in parts)
+    letters = [len(w) + (3 if w[-1] in ",;:" else 5 if w[-1] in ".!?" else 1) for _, _, w in words]
+    out, acc, total = [], 0.0, float(sum(letters))
+    for (pos, length, _), n in zip(words, letters):
+        out.append((total_s * acc / total, pos, length))
+        acc += n
+    return out
+
+
+class PiperEngine:
+    """A natural (Piper) voice, offline: it makes the sound of each sentence on this device, plays it and reports
+    each word as it comes (times worked out from the sounds of the words, see :func:`word_times`). Offers the
+    part of the pyttsx3 engine interface the Speaker uses. ``play=False`` only makes the sound (tests)."""
+
+    DEFAULT_WPM = 165  # speaking rate 1.0
+    reports_words = True  # every word is reported (the Speaker need not guess the pace)
+    _models: dict = {}  # loaded voices, kept: loading takes a second
+
+    def __init__(self, key: str, play: bool = True):
+        """Use the downloaded natural voice ``key`` (see :mod:`dyslexia_converter.voices`)."""
+        from . import voices
+
+        self.key = key
+        self._path = str(voices.model_path(key))
+        self._play = play
+        self._cb = None
+        self._text = ""
+        self._stopped = False
+        self._length = 1.0
+        self.last_wav = b""
+        self.last_words: list[tuple[float, int, int]] = []
+        self._ready: dict[str, threading.Thread] = {}  # sentences being made in advance
+        self._made: dict[str, tuple[bytes, list]] = {}
+
+    def prepare(self, text: str) -> None:
+        """Start making the sound of the next sentence while this one is said (no pause between them)."""
+        if text in self._ready or not text.strip():
+            return
+
+        def make():
+            try:
+                self._made[text] = self.synthesize(text)
+            except Exception:
+                log.debug("preparing the next sentence failed", exc_info=True)
+
+        th = threading.Thread(target=make, name="read-aloud-next", daemon=True)
+        self._ready[text] = th
+        th.start()
+
+    def _voice(self):
+        """The loaded voice (loaded once per app run)."""
+        from piper import PiperVoice
+
+        if self._path not in PiperEngine._models:
+            PiperEngine._models[self._path] = PiperVoice.load(self._path)
+        return PiperEngine._models[self._path]
+
+    def getProperty(self, key: str):
+        """pyttsx3-style: this voice (``key`` = "voices")."""
+        from . import voices
+
+        v = voices.BY_KEY.get(self.key)
+        return [_VoiceInfo(voices.PREFIX + self.key, v.name if v else self.key, [v.language] if v else [])] \
+            if key == "voices" else None
+
+    def setProperty(self, key: str, value) -> None:
+        """pyttsx3-style: the speed (words per minute); the voice is chosen when the engine is made."""
+        if key == "rate":
+            self._length = max(0.4, min(2.5, self.DEFAULT_WPM / max(1.0, float(value))))
+
+    def connect(self, name: str, cb) -> None:
+        """pyttsx3-style: the callback for each word ("started-word")."""
+        if name == "started-word":
+            self._cb = cb
+
+    def say(self, text: str) -> None:
+        """pyttsx3-style: the text to speak on the next :meth:`runAndWait`."""
+        self._text = text
+
+    def synthesize(self, text: str) -> tuple[bytes, list[tuple[float, int, int]]]:
+        """The spoken text as WAV bytes, and when each word starts."""
+        import io
+        import wave
+
+        from piper import SynthesisConfig
+
+        voice = self._voice()
+        audio, parts, rate = bytearray(), [], 22050
+        for chunk in voice.synthesize(text, syn_config=SynthesisConfig(length_scale=self._length)):
+            rate = chunk.sample_rate
+            audio += chunk.audio_int16_bytes
+            parts.append((len(chunk.audio_int16_bytes) / 2 / rate, list(chunk.phonemes or [])))
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(rate)
+            w.writeframes(bytes(audio))
+        return buf.getvalue(), word_times(text, parts)
+
+    def to_wav(self, text: str) -> bytes:
+        """The spoken text as WAV bytes (for saving as audio), without playing it."""
+        return self.synthesize(text)[0]
+
+    def runAndWait(self) -> None:
+        """Make the sound of the text, then play it and report each word at its time (or report them at once
+        without playing)."""
+        if self._stopped or not self._text.strip():
+            return
+        th = self._ready.pop(self._text, None)
+        if th is not None:
+            th.join()
+        made = self._made.pop(self._text, None)
+        self.last_wav, self.last_words = made if made is not None else self.synthesize(self._text)
+        if not self._play:
+            for _, pos, length in self.last_words:
+                if self._stopped:
+                    return
+                if self._cb is not None:
+                    self._cb(None, pos, length)
+            return
+        play_following(self.last_wav, self.last_words, self._cb, lambda: self._stopped)
 
     def stop(self) -> None:
         """Stop speaking (from another thread)."""
@@ -489,14 +733,22 @@ class Speaker:
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
         self._engine = None
+        self._run = None  # the identity of the run that may report to the app
+        self._engine_lock = threading.Lock()
         self._available: Optional[bool] = None
         self._voices: Optional[list[tuple[str, str, str]]] = None
         self.last_error = ""  # why speaking failed, for the user
 
-    def _make(self):
-        """A speech engine: on Windows the modern voices (exact word timings), else SAPI, else pyttsx3."""
+    def _make(self, voice: Optional[str] = None):
+        """A speech engine: a natural voice when ``voice`` is one, else on Windows the modern voices (exact word
+        timings), else SAPI, else pyttsx3."""
+        from . import voices as natural
+
         if self._factory is not None:
             return self._factory()
+        nv = natural.voice_of(voice)
+        if nv is not None:
+            return PiperEngine(nv.key)
         if sys.platform == "win32":
             try:
                 eng = WinRtEngine()  # all installed voices, exact word timings
@@ -533,7 +785,26 @@ class Speaker:
                 self.last_error = f"{type(e).__name__}: {e}"
                 self._available = False
                 self._voices = []
+            if self._factory is None:
+                natural = self._natural_voices()
+                if natural:  # natural voices first; they work without the computer's own voices too
+                    self._voices = natural + (self._voices or [])
+                    self._available = True
         return self._available
+
+    @staticmethod
+    def _natural_voices() -> list[tuple[str, str, str]]:
+        """The downloaded natural voices, as (id, name, language)."""
+        from . import voices as natural
+
+        if not natural.supported():
+            return []
+        return [(v.id, f"{v.name} ({v.region}) - natural", v.language) for v in natural.installed()]
+
+    def refresh(self) -> None:
+        """Look for voices again (after a natural voice was downloaded or removed)."""
+        self._available = None
+        self._voices = None
 
     def voices(self) -> list[tuple[str, str]]:
         """(id, name) of the installed voices."""
@@ -566,9 +837,61 @@ class Speaker:
                 score = 1
             if score and (vid.lower().endswith("/" + language) or vid.lower() == language):
                 score += 0.5  # the language's main voice, not a regional variant
+            if score and vid.startswith("piper:"):
+                score += 5  # a natural voice for the language sounds best
             if score > best_score:
                 best, best_score = vid, score
         return best
+
+    def render_many(self, texts: Iterable[str], speed: float = 1.0, voice: Optional[str] = None):
+        """Speak ``texts`` into sound instead of the speakers: yields the WAV bytes of each text, in order (for
+        saving as audio; runs on a worker thread). Uses the same voice and speed as reading aloud."""
+        import os
+        import tempfile
+
+        com = _com_init()
+        try:
+            eng = self._make(voice)
+            if isinstance(eng, SapiEngine):  # SAPI speaks into a file: one per text
+                eng.close()
+                eng = None
+            else:
+                eng.setProperty("rate", int(self.BASE_RATE * max(0.4, min(2.5, speed))))
+                if voice:
+                    try:
+                        eng.setProperty("voice", voice)
+                    except Exception:
+                        pass
+            for text in texts:
+                if not text.strip():
+                    continue
+                if eng is not None and hasattr(eng, "to_wav"):
+                    yield eng.to_wav(text)
+                    continue
+                fd, path = tempfile.mkstemp(suffix=".wav", prefix="dc-audio-")
+                os.close(fd)
+                try:
+                    if eng is None:  # SAPI
+                        sapi = SapiEngine(output_wav=path)
+                        sapi.setProperty("rate", int(self.BASE_RATE * max(0.4, min(2.5, speed))))
+                        if voice:
+                            sapi.setProperty("voice", voice)
+                        sapi.say(text)
+                        sapi.runAndWait()
+                        sapi.close()
+                    else:  # pyttsx3 (eSpeak, macOS): its own way of saving
+                        eng.save_to_file(text, path)
+                        eng.runAndWait()
+                    with open(path, "rb") as f:
+                        yield f.read()
+                finally:
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
+        finally:
+            if com is not None:
+                com.CoUninitialize()
 
     @property
     def speaking(self) -> bool:
@@ -584,23 +907,60 @@ class Speaker:
 
         ``speed`` is relative to normal (1.0); ``voice`` is a voice id. The callbacks are called from the
         speech thread: ``on_word(sentence, word)`` as each word is said, ``on_sentence(sentence)`` at the
-        start of each sentence and ``on_done(finished)`` at the end (False when stopped or failed;
-        ``last_error`` says why).
+        start of each sentence and ``on_done(finished)`` at the end (False when it failed; ``last_error``
+        says why). A run that is stopped or replaced by a new start reports nothing more.
         """
+        previous = self._thread
         self.stop()
         self._stop = threading.Event()
         stop = self._stop
         self.last_error = ""
+        # this run's identity: once reading is stopped or started again, an older run reports nothing more
+        # (its words, sentences or end would otherwise arrive after the new run started and confuse the app)
+        run_id = object()
+        self._run = run_id
+
+        def is_current() -> bool:
+            return self._run is run_id and not stop.is_set()
+
+        report_word, report_sentence, report_done = on_word, on_sentence, on_done
+
+        def on_word(s: int, w: int) -> None:
+            if is_current():
+                report_word(s, w)
+
+        def on_sentence(s: int) -> None:
+            if is_current():
+                report_sentence(s)
+
+        def on_done(finished: bool) -> None:
+            if self._run is run_id:
+                self._run = None
+                report_done(finished)
 
         def run():
             """The speech thread: speak sentence by sentence, reporting words (paced by an estimate when the
             engine reports none).
             """
             finished = False
+            eng = None
+            # the previous run first finishes stopping (on Windows its clean-up stops the one shared sound
+            # channel, which would cut off this run's sound); waited for here, not in the window
+            if previous is not None and previous is not threading.current_thread() and previous.is_alive():
+                previous.join(timeout=5.0)
+            if stop.is_set():
+                return
             com = _com_init()
             try:
-                eng = self._make()
-                self._engine = eng
+                eng = self._make(voice)
+                with self._engine_lock:  # stop() sees this engine, or this run sees that it was stopped
+                    if not is_current():
+                        try:
+                            eng.stop()
+                        except Exception:
+                            pass
+                        return  # stopped or replaced while the voice was being made: say nothing
+                    self._engine = eng
                 eng.setProperty("rate", int(self.BASE_RATE * max(0.4, min(2.5, speed))))
                 if voice:
                     try:
@@ -636,15 +996,19 @@ class Speaker:
                 for si in range(index, len(sentences)):
                     if stop.is_set():
                         break
+                    if not sentences[si].words:
+                        continue  # nothing left to say (only a citation)
                     current["s"] = si
                     on_sentence(si)
                     sentence_done = threading.Event()
                     t0 = time.monotonic()
                     pacer = None
-                    if not real["seen"]:
+                    if not real["seen"] and not getattr(eng, "reports_words", False):
                         pacer = threading.Thread(target=estimate, args=(si, t0, sentence_done), daemon=True)
                         pacer.start()
                     eng.say(sentences[si].text)
+                    if hasattr(eng, "prepare") and si + 1 < len(sentences):
+                        eng.prepare(sentences[si + 1].text)
                     eng.runAndWait()
                     took = time.monotonic() - t0
                     sentence_done.set()
@@ -659,11 +1023,11 @@ class Speaker:
                 self.last_error = f"{type(e).__name__}: {e}"
                 finished = False
             finally:
-                eng_done = self._engine
-                self._engine = None
-                if eng_done is not None and hasattr(eng_done, "close"):
+                if self._engine is eng:  # never the engine of a newer run
+                    self._engine = None
+                if eng is not None and hasattr(eng, "close"):
                     try:
-                        eng_done.close()
+                        eng.close()
                     except Exception:
                         pass
                 if com is not None:
@@ -673,16 +1037,18 @@ class Speaker:
         self._thread = threading.Thread(target=run, name="read-aloud", daemon=True)
         self._thread.start()
 
-    def stop(self) -> None:
-        """Stop reading and wait (briefly) for the speech thread to end."""
-        self._stop.set()
-        eng = self._engine
+    def stop(self, wait: float = 0.0) -> None:
+        """Stop reading at once. The speech thread ends by itself (the window never waits for it; a new start
+        waits for it on its own thread); ``wait`` seconds may be given to wait for it here (tests, closing)."""
+        with self._engine_lock:
+            self._run = None  # the stopped run reports nothing more
+            self._stop.set()
+            eng = self._engine
         if eng is not None:
             try:
                 eng.stop()
             except Exception:
                 pass
         t = self._thread
-        if t is not None and t is not threading.current_thread():
-            t.join(timeout=2.0)
-        self._thread = None
+        if wait and t is not None and t is not threading.current_thread():
+            t.join(timeout=wait)

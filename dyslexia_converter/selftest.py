@@ -81,6 +81,35 @@ def _dictionary_report() -> str:
     return f"Dictionary test: OK, '{entry.base}' has {len(entry.senses)} meanings, syllables {entry.syllables}"
 
 
+def _audio_report() -> tuple[bool, str]:
+    """Whether this build can save MP3 (the encoder works) and use natural voices (Piper loads)."""
+    from . import audio_export, voices
+
+    problem = audio_export.mp3_problem()
+    mp3 = "ok"
+    if problem is None:
+        try:
+            import io
+            import wave
+
+            buf = io.BytesIO()
+            with wave.open(buf, "wb") as w:
+                w.setnchannels(1), w.setsampwidth(2), w.setframerate(22050), w.writeframes(b"\0\0" * 2205)
+            data = audio_export.export_mp3(["test"], lambda ts: [buf.getvalue() for _ in ts])
+            mp3 = f"ok ({len(data)} bytes)"
+        except Exception as e:
+            problem = f"{type(e).__name__}: {e}"
+    if problem:
+        mp3 = "MISSING - " + problem
+    try:
+        import piper  # noqa: F401
+
+        natural = "ok"
+    except Exception as e:
+        natural = f"MISSING - {type(e).__name__}: {e}"
+    return problem is None and voices.supported(), f"MP3 encoder: {mp3}\nNatural voices (Piper): {natural}"
+
+
 def run(argv: list[str]) -> int:
     """``--selftest input.pdf output.pdf [log.txt]``: report the version, OCR engine, speech and dictionary, convert
     a PDF, and write the report (used on the packaged Windows app in CI). Returns the exit code.
@@ -97,6 +126,10 @@ def run(argv: list[str]) -> int:
         lines.append(f"Tesseract: {find_tesseract()}")
         lines.append(_speech_report())
         lines.append(_dictionary_report())
+        audio_ok, audio = _audio_report()
+        lines.append(audio)
+        if not audio_ok:
+            raise RuntimeError("saving audio or the natural voices do not work in this build")
         if src is None or out is None:
             raise SystemExit("usage: --selftest input.pdf output.pdf [log.txt]")
         session = pipeline.load(src)

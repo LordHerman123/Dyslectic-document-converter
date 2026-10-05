@@ -187,6 +187,57 @@ async def _read_everywhere(app, path):
             await dialog.actions[1].on_click(None)
             assert any(c.source == "user" for c in app.session.document.corrections)
         app.page.show_dialog = show
+    # the reading options are chips in the read-aloud panel, which focus mode shows: each one switches on and off
+    f.on_read_panel(None)
+    assert f._is_open(f.read_panel)
+    for chip in app._option_chips:
+        was = app.reading_option(chip.data)
+
+        class Tap:
+            control = chip
+        await chip.on_select(Tap())
+        assert app.reading_option(chip.data) is not was and chip.selected is not was
+        await chip.on_select(Tap())
+        assert app.reading_option(chip.data) is was
+    f.on_read_panel(None)
+    # a tap on a citation or note marker shows what it points to
+    for n, w in enumerate(f.words):
+        if w[1].startswith(("[", "(")):
+            popup = await f._popup_at(n)
+            if popup is not None:
+                await f.open_reference(w[0], n, popup)
+                assert f.card_mode == "reference" and f.card_layer.visible
+                target = f._find_entry(popup.entries[0], n)
+                if target is not None:
+                    await f._go_to_word(target)
+                    assert not f.card_layer.visible
+                await f.close_card()
+                break
+    # the reading ruler: reading starts at its line, and it follows the line being read
+    await f.on_ruler(None)
+    if f.ruler:
+        await f.move_ruler(1)
+        await f.move_ruler(1)
+        units = await app._units()
+        si = f.ruler_sentence(units)
+        assert si is not None and any(w.page == f.ruler[0] for w in units[si].words)
+        page, line = f.ruler
+        later = [w for s in units for w in s.words if w.page == page and w.rects
+                 and f._line_at(page, (w.rects[0][1] + w.rects[0][3]) / 2) not in (None, line)]
+        if later:
+            w = later[-1]
+            await f.show_reading(page, list(w.rects), list(w.rects), False)
+            assert f.ruler == (page, f._line_at(page, (w.rects[0][1] + w.rects[0][3]) / 2))
+            # the toggles: the ruler stays put, and nothing is marked
+            app.ui["ruler_follows"], app.ui["reading_highlight"] = False, False
+            before = f.ruler
+            first = next((x for x in later if x is not w), w)
+            await f.show_reading(page, list(first.rects), list(first.rects), False)
+            assert f.ruler == before and f._reading == (page, [], [])
+            app.ui["ruler_follows"], app.ui["reading_highlight"] = True, True
+            await f.reading_done()
+        await f.on_ruler(None)
+        assert not f.ruler
     f._zoom_by(1.2)
     await f.on_layout(None)
     await f.turn(1)
@@ -197,6 +248,10 @@ async def _read_everywhere(app, path):
     r = app.reflow
     await r.open()
     assert r.active and r.items
+    on = r.tap_to_read
+    r.on_tap_toggle(None)  # tap to read off: a continuous page
+    assert r.tap_to_read is not on and r.tap_btn.selected is not on
+    r.on_tap_toggle(None)
     r._size_by(2)
     r._line_by(0.15)
     r.on_width(None)
@@ -218,7 +273,23 @@ async def _read_everywhere(app, path):
     await app.focus.open()
     await app.on_reflow(None)
     assert r.active and not app.focus.active
-    await r.close()
+    await r.on_close()  # Exit read along: back to focus mode, where it was opened from
+    assert app.focus.active and not r.active
+    await app.focus.close()
+    # Continuous page from focus mode: the reading view at the page shown, nothing read aloud; Exit comes back
+    await app.focus.open()
+    f.current = min(2, len(f.sizes) - 1)
+    start = f.page_start_text(f.current)
+    await f.on_continuous()
+    assert r.active and not app.focus.active and not r._reading
+    if start and r._item_with(start) is not None:
+        assert r.current == r._item_with(start)
+    await r.on_close()
+    assert app.focus.active
+    await app.focus.close()
+    await r.open()  # opened from the main screen: Exit read along goes back there
+    await r.on_close()
+    assert not r.active and not app.focus.active
 
 
 def test_app_check_pdf(headless, paper):
@@ -362,3 +433,40 @@ def test_app_check_web_page(headless, tmp_path, monkeypatch):
         assert "web page" in app.doc_status()
         await _read_everywhere(app, app.source_path)
     headless(scenario)
+
+
+def test_donation_reminder_every_tenth_start_and_never_again(isolated_home):
+    import flet as ft
+
+    from dyslexia_converter.ui.app import ConverterApp
+
+    class Page:
+        web, width, height, platform = False, 1200, 800, None
+
+        def __init__(self):
+            self.shown, self.popped = [], 0
+
+        def show_dialog(self, d):
+            self.shown.append(d)
+
+        def pop_dialog(self):
+            self.popped += 1
+
+    app = ConverterApp.__new__(ConverterApp)
+    app.page, app.ui, app.t = Page(), {}, (lambda s, **k: s)
+    app.fs = lambda n: n
+
+    class Store:
+        def save_ui(self, ui):
+            pass
+    app.store = Store()
+    due = [app.count_start() for _ in range(25)]
+    assert [i + 1 for i, d in enumerate(due) if d] == [10, 20]
+    asyncio.run(app.show_donate_reminder(delay=0))
+    bar = app.page.shown[-1]
+    assert isinstance(bar, ft.SnackBar) and bar.behavior == ft.SnackBarBehavior.FLOATING  # not a blocking dialog
+    assert bar.persist and bar.show_close_icon  # it stays until the reader closes it
+    never = next(c for c in bar.content.controls if isinstance(c, ft.TextButton) and c.content == "Don't show again")
+    never.on_click(None)
+    assert app.ui["donate_reminder"] is False and app.page.popped == 1
+    assert not any(app.count_start() for _ in range(30))  # switched off for good

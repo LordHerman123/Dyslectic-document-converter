@@ -10,6 +10,7 @@ it) opens a card with its syllables, its meaning and a way to hear it; a reading
 from __future__ import annotations
 
 import asyncio
+import re
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Iterable, Optional
@@ -172,6 +173,7 @@ class FocusMode:
             app.notify(t("Open a PDF first."), error=True)
             return
         self.active = True
+        self.app._update_read_buttons()
         self.current = app.conv_page
         self.highlights = app.doc_highlights()
         self.ruler, self.card_word, self._reading, self.bars_hidden = None, None, None, False
@@ -199,12 +201,16 @@ class FocusMode:
         self.ruler_toggle = ft.IconButton(ft.Icons.STRAIGHTEN, tooltip=t("Reading ruler (move it with the arrow "
                                                                          "keys or by tapping a line)"),
                                           on_click=self.on_ruler, style=self._toggle_style())
+        self.continuous_btn = ft.IconButton(ft.Icons.CHROME_READER_MODE_OUTLINED, on_click=self.on_continuous,
+                                            tooltip=t("Continuous page: the text as one long page, from here "
+                                                      "(Exit read along comes back to the pages)"))
         self.back_btn = ft.FilledTonalButton(t("Back to the converted text"), icon=ft.Icons.ARROW_BACK,
                                              on_click=self.on_back_to_converted, visible=False)
         self.top = ft.Container(ft.Row([
             ft.IconButton(ft.Icons.CLOSE, tooltip=t("Leave focus mode"), on_click=self.on_close),
             ft.Container(width=4),
-            self.back_btn, self.read_toggle, self.settings_toggle, self.mark_toggle, self.swatches,
+            self.back_btn, self.read_toggle, self.continuous_btn, self.settings_toggle, self.mark_toggle,
+            self.swatches,
             self.ruler_toggle, self.notes_toggle, self._original_button(), self._ai_button(),
             ft.Container(expand=True),
             self.page_label,
@@ -309,6 +315,7 @@ class FocusMode:
         if not self.active:
             return
         self.active = False
+        app._update_read_buttons()  # the ruler option is greyed out outside focus mode
         if self._render_task:
             self._render_task.cancel()
         if self.bars_hidden:
@@ -833,19 +840,45 @@ class FocusMode:
         ``follow``).
         """
         previous = self._reading[0] if self._reading else None
-        self._reading = (page, sentence, word)
-        if self.ruler and word:  # the ruler follows the voice
+        mark = self.app.reading_option("reading_highlight")
+        self._reading = (page, sentence, word) if mark else (page, [], [])  # the marks only when asked for
+        if self.ruler and word and self.app.reading_option("ruler_follows"):  # the ruler follows the voice
             line = self._line_at(page, (word[0][1] + word[0][3]) / 2)
             if line is not None and (page, line) != self.ruler:
                 old = self.ruler[0]
                 self.ruler = (page, line)
                 if old != page:
                     await self.redraw(old)
-        if follow and page != self.current:
-            await self.scroll_to(page)
+        if follow or self.ruler:
+            await self._keep_reading_in_view(page, word)
         if previous is not None and previous != page:
             await self.redraw(previous)  # take the reading highlight off the previous page
         await self.redraw(page)
+
+    async def _keep_reading_in_view(self, page: int, word: list) -> None:
+        """Keep the line being read (and the ruler on it) on screen: turn to its page, and while scrolling, move
+        the view when the line goes below the lower part of the window (or above it)."""
+        if self.layout == "pages" or not word:
+            if page != self.current:
+                await self.scroll_to(page)
+            return
+        y = (word[0][1] + word[0][3]) / 2
+        pw, _ = self.sizes[page]
+        pos = self._offset(page) + y * self._page_w(page) / pw - self._scroll_px  # pixels from the window top
+        h = self._avail()[1]
+        if pos < 0.1 * h or pos > 0.75 * h:
+            await self.scroll_to(page, within=y)
+
+    def ruler_sentence(self, units: list) -> Optional[int]:
+        """The sentence to read from when the ruler is on: the one at the start of the ruler's line."""
+        if not self.ruler:
+            return None
+        page, line = self.ruler
+        lines = self._lines_of(page)
+        if not lines:
+            return None
+        top, bottom = lines[min(line, len(lines) - 1)]
+        return sentence_at(units, page, 0.0, (top + bottom) / 2)
 
     async def reading_done(self) -> None:
         """Reading aloud stopped: take the reading highlight off the page."""
@@ -886,6 +919,11 @@ class FocusMode:
             self._anchor, self.sel_unit = n, None
             await self.open_selection(*hl.resolve(self.highlights[k], self.words))
             return
+        if n is not None:  # a tap on a citation or note marker: what it points to
+            popup = await self._popup_at(n)
+            if popup is not None:
+                await self.open_reference(i, n, popup)
+                return
         if self.ruler:
             line = self._line_at(i, pt[1])
             if line is not None:
@@ -901,6 +939,81 @@ class FocusMode:
             app.speaker.stop()
         self.current = i
         await app.start_reading(si)
+
+    # ------------------------------------------------------------------ references and notes
+    async def _popup_at(self, n: int):
+        """The reference or note that a citation or note marker at word ``n`` points to, or None."""
+        popups = await self.app.popups()
+        if not popups or not self.words:
+            return None
+        text, pos = "", 0
+        for k in range(max(0, n - 30), min(len(self.words), n + 31)):  # the words around it (a long citation)
+            if k == n:
+                pos = len(text) + len(self.words[k][1]) // 2
+            text += self.words[k][1] + " "
+        return popups.at(text, pos)
+
+    async def open_reference(self, page: int, n: int, popup) -> None:
+        """A card with what a tapped citation or note marker points to: the reference(s) or the note, to read,
+        copy, or find in the list at the end."""
+        app, t = self.app, self.app.t
+        old = self._marked_pages()
+        self.sel, self.card_word = None, (page, n)
+        body = "\n\n".join(popup.entries)
+        title = t("Note") if popup.kind == "note" else (t("Reference") if len(popup.entries) == 1
+                                                        else t("References"))
+        rows: list[ft.Control] = [
+            ft.Row([app.text(title, 16, weight=ft.FontWeight.BOLD),
+                    app.text(popup.label, 13, color=ft.Colors.ON_SURFACE_VARIANT)], spacing=8, wrap=True),
+            ft.Column([ft.Text(body, size=app.fs(15), selectable=True)], scroll=ft.ScrollMode.AUTO, tight=True,
+                      height=None if len(body) < 600 else 260),
+        ]
+        target = self._find_entry(popup.entries[0], n)
+        actions = [
+            ft.TextButton(t("Read"), icon=ft.Icons.VOLUME_UP, on_click=lambda e: app.say_word(body),
+                          visible=app._speech_allowed()),
+            ft.TextButton(t("Copy"), icon=ft.Icons.CONTENT_COPY,
+                          on_click=lambda e: app.page.run_task(self._copy_text, body)),
+            ft.TextButton(t("Show in the list"), icon=ft.Icons.FORMAT_LIST_NUMBERED, visible=target is not None,
+                          on_click=lambda e: app.page.run_task(self._go_to_word, target)),
+            ft.IconButton(ft.Icons.CLOSE, tooltip=t("Close (Esc)"), on_click=self.close_card),
+        ]
+        rows.append(ft.Row(actions, spacing=4, wrap=True))
+        self._show_card(self._card_box(rows), "reference")
+        self._paint_selection(old | {page})
+
+    def _find_entry(self, entry: str, after: int) -> Optional[int]:
+        """Where a reference or note's text is in the document (its first words), preferring a place after word
+        ``after`` (the list is at the end), or None."""
+        want = [w for w in re.sub(r"^\[\d+\]\s*", "", entry).split()][:5]
+        if len(want) < 2:
+            return None
+        texts = [w[1] for w in self.words]
+        hits = [k for k in range(len(texts) - len(want) + 1) if texts[k:k + len(want)] == want]
+        later = [k for k in hits if k > after]
+        return (later or hits or [None])[0]
+
+    async def _go_to_word(self, k: int) -> None:
+        """Close the card and show word ``k`` (a reference in the list, a note at the end)."""
+        await self.close_card()
+        page, _, rects = self.words[k]
+        await self.scroll_to(page, within=rects[0][1] if rects else 0.0)
+
+    def page_start_text(self, i: int) -> str:
+        """The first words of page ``i`` (not a page number), to find the same place in the reading view."""
+        words = [w[1] for w in self.words if w[0] == i]
+        while words and re.fullmatch(r"[\d\W]+", words[0]):
+            words.pop(0)
+        return " ".join(words[:12])
+
+    async def on_continuous(self, e=None) -> None:
+        """Continuous page: the reading view (the text as one long page) from the page shown here; nothing is
+        read aloud. Exit read along comes back to focus mode at the same place."""
+        start = self.page_start_text(self.current)
+        app = self.app
+        await self.close()
+        await app.reflow.open(start_text=start)
+        app.reflow.from_focus = True
 
     # ------------------------------------------------------------------ reading ruler
     def _line_at(self, i: int, y: float) -> Optional[int]:
@@ -926,6 +1039,18 @@ class FocusMode:
         self.ruler_toggle.selected = True
         self.ruler_toggle.update()
         await self._set_ruler(i, 0)
+
+    async def ruler_on_at(self, page: int, y: Optional[float] = None) -> None:
+        """Switch the ruler on (if it is off) at the line of page ``page`` nearest to height ``y`` (the start of the
+        page when not given): used when "Ruler follows" is switched on, or reading starts with it on."""
+        if not self.active or not self.words or not (0 <= page < len(self.sizes)):
+            return
+        line = self._line_at(page, y) if y is not None else (0 if self._lines_of(page) else None)
+        if line is None:
+            return
+        self.ruler_toggle.selected = True
+        self.ruler_toggle.update()
+        await self._set_ruler(page, line)
 
     async def _set_ruler(self, page: int, line: int) -> None:
         """Put the ruler on a line and redraw the page(s) involved."""
@@ -1809,7 +1934,7 @@ class FocusMode:
         app.refresh_ai_log()
 
     async def _copy_text(self, text: str) -> None:
-        """Copy some text (the summary) to the clipboard."""
+        """Copy some text (a summary, a reference) to the clipboard."""
         await self.app.clipboard.set(text)
         self._toast(self.app.t("Copied."))
 
@@ -2193,7 +2318,8 @@ class FocusMode:
 
     # ------------------------------------------------------------------ fold-out panels
     def on_read_panel(self, e) -> None:
-        """The read-aloud button: fold the read-aloud controls out (closing any other panel) or away."""
+        """The read-aloud button: fold the read-aloud controls out (closing any other panel) and start reading (from
+        the ruler's line when the ruler is on), or fold them away."""
         opening = not self._is_open(self.read_panel)
         if opening:
             self._close_panels(keep="read")
@@ -2202,6 +2328,9 @@ class FocusMode:
         self.app.ui["read_panel_open"] = opening
         self.app.store.save_ui(self.app.ui)
         self.app.page.update()
+        if opening and e is not None and not self.app._reading and self.app._speech_allowed() \
+                and self.app.speaker.voices():
+            self.app.page.run_task(self.app.start_reading)  # pressing Read aloud starts reading
 
     def _close_panels(self, keep: Optional[str] = None) -> None:
         """One panel at a time: fold away the read-aloud and settings panels and the side panel (notes, original,
