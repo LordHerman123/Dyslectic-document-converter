@@ -16,7 +16,8 @@ def _speech_report() -> str:
     """Whether reading aloud works in this build: a missing module is a packaging error; a computer
     without voices is not."""
     try:
-        import pyttsx3  # noqa: F401
+        if sys.platform != "darwin":  # a Mac speaks with its own say program, not pyttsx3
+            import pyttsx3  # noqa: F401
         from .speech import Speaker
     except ImportError as e:
         return f"Speech: MISSING MODULE {e.name}"
@@ -30,9 +31,24 @@ def _speech_report() -> str:
     report = f"Speech: {'available' if n else 'no voices on this computer'} ({n} voices)"
     if n and sys.platform == "win32":
         report += "\n" + _speak_test()
+    elif n and sys.platform == "darwin":
+        report += "\n" + _mac_speak_test()
     elif sp.last_error:
         report += f" - {sp.last_error}"
     return report
+
+
+def _mac_speak_test() -> str:
+    """Speak one sentence into WAV with the Mac's own voice, as the app does for reading aloud and MP3."""
+    from .speech import MacSayEngine
+
+    try:
+        size = len(MacSayEngine().to_wav("The converted text is read aloud."))
+    except Exception as e:  # noqa: BLE001
+        return f"Speech test FAILED: {type(e).__name__}: {e}"
+    if size < 2000:
+        return f"Speech test FAILED: WAV {size} bytes"
+    return f"Speech test: OK, WAV {size} bytes (the Mac's own voice)"
 
 
 def _speak_test() -> str:

@@ -28,4 +28,5 @@ cat selftest/ready.txt; echo
 grep -q "^error" selftest/ready.txt && fail "the app stopped with an error"
 grep -q "selftest exit 0" selftest/ready.txt || fail "the self-test failed"
 grep -qi "tesseract" selftest/report.txt || fail "Tesseract was not used"
+grep -Eq "MISSING|FAILED" selftest/report.txt && fail "part of the app is missing or does not work (see above)"
 echo "Self-test passed"

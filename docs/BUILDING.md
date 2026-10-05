@@ -47,11 +47,14 @@ build: `flet build windows --product "Dyslexia Converter" --project DyslexiaConv
 ### macOS
 
 ```bash
-xcode-select --install          # once; flet build also needs Xcode itself (App Store) and CocoaPods:
+xcode-select --install          # once; flet build also needs Xcode 26 or later (App Store) and CocoaPods:
 brew install cocoapods tesseract tesseract-lang
 flet build macos --arch arm64 --product "Dyslexia Converter" --project DyslexiaConverter
-# -> build/macos/Dyslexia Converter.app
+# -> build/macos/DyslexiaConverter.app
 ```
+
+Xcode 26 is needed to *build* (Flutter's plugins use the newest macOS APIs); the app it makes still runs on
+macOS 11 and later.
 
 ### Linux (Ubuntu / Debian)
 
@@ -74,7 +77,7 @@ and writes what it found:
 ```bash
 DYSLEXIA_CONVERTER_READY_FILE=$PWD/ready.txt \
 DYSLEXIA_CONVERTER_SELFTEST="$PWD/scan.pdf;$PWD/out.pdf;$PWD/report.txt" \
-  "build/linux/DyslexiaConverter"        # macOS: "build/macos/Dyslexia Converter.app/Contents/MacOS/…"
+  "build/linux/DyslexiaConverter"        # macOS: build/macos/DyslexiaConverter.app/Contents/MacOS/DyslexiaConverter
 cat ready.txt report.txt                 # "selftest exit 0" when everything works
 ```
 

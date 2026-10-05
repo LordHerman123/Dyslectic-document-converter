@@ -1,4 +1,5 @@
 """Reading aloud: sentences with their place on the page, word tracking, stopping, and choosing a voice."""
+import os
 import threading
 import time
 
@@ -447,3 +448,15 @@ def test_mac_voices_through_say(tmp_path):
     wavs = list(sp.render_many(["Hello there.", "Goodbye."], voice="Samantha"))
     assert len(wavs) == 2 and all(w[:4] == b"RIFF" for w in wavs)
     assert "--data-format=LEI16@22050" in (tmp_path / "say.log").read_text()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="a script stands in for the say program")
+def test_mac_selftest_speaks_with_the_macs_own_voice(tmp_path, monkeypatch):
+    from dyslexia_converter import selftest
+
+    _fake_say(tmp_path)
+    monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ['PATH']}")
+    monkeypatch.setattr(sys, "platform", "darwin")
+    report = selftest._speech_report()
+    assert report.startswith("Speech: available (4 voices)") and "Speech test: OK" in report, report
+    assert "MISSING" not in report  # pyttsx3 is not needed on a Mac
