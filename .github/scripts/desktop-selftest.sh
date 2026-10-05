@@ -19,10 +19,11 @@ while ! reported && [ $waited -lt 240 ]; do
   fi
   sleep 5; waited=$((waited + 5))
 done
-kill $pid 2>/dev/null; pkill -f "$exe" 2>/dev/null || true
+# end the app (and, on Linux, the virtual screen started for it): the process and its children only
+pkill -P $pid 2>/dev/null; kill $pid 2>/dev/null || true
 fail() { echo "SELF-TEST FAILED: $1"; echo "--- app output"; tail -50 selftest/app.log; exit 1; }
 [ -f selftest/ready.txt ] || fail "the app did not report that it started (Python did not run?)"
-cat selftest/ready.txt
+cat selftest/ready.txt; echo
 [ -f selftest/report.txt ] && cat selftest/report.txt
 grep -q "^error" selftest/ready.txt && fail "the app stopped with an error"
 grep -q "selftest exit 0" selftest/ready.txt || fail "the self-test failed"
