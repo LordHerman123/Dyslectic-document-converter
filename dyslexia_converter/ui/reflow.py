@@ -157,7 +157,10 @@ class ReflowMode:
                                                      on_change=self._options_changed)
         self.options_menu.visible = app._speech_allowed()
         bar = ft.Row([
-            ft.IconButton(ft.Icons.CLOSE, tooltip=t("Leave read along"), on_click=self.on_close),
+            # leaving, clearly labelled, where the close button used to be
+            ft.FilledTonalButton(t("Exit read along"), icon=ft.Icons.LOGOUT, on_click=self.on_close,
+                                 tooltip=t("Back to where you came from")),
+            ft.Container(width=6),
             ft.IconButton(ft.Icons.TEXT_DECREASE, tooltip=t("Smaller text"), on_click=lambda e: self._size_by(-2)),
             ft.IconButton(ft.Icons.TEXT_INCREASE, tooltip=t("Larger text"), on_click=lambda e: self._size_by(2)),
             ft.IconButton(ft.Icons.FORMAT_LINE_SPACING, tooltip=t("More space between lines"),
@@ -178,11 +181,6 @@ class ReflowMode:
             ft.Container(expand=True),
             self.progress,
         ], spacing=2, scroll=ft.ScrollMode.AUTO, vertical_alignment=ft.CrossAxisAlignment.CENTER)
-        # leaving is always on the right, outside the part of the bar that scrolls on a narrow window
-        exit_btn = ft.FilledTonalButton(t("Exit read along"), icon=ft.Icons.LOGOUT, on_click=self.on_close,
-                                        tooltip=t("Back to where you came from"))
-        bar = ft.Row([ft.Container(bar, expand=True), exit_btn], spacing=8,
-                     vertical_alignment=ft.CrossAxisAlignment.CENTER)
         self.top = ft.Container(bar, padding=ft.Padding.symmetric(horizontal=6, vertical=2),
                                 bgcolor=ft.Colors.SURFACE_CONTAINER_LOW,
                                 border=ft.Border.only(bottom=ft.BorderSide(1, ft.Colors.OUTLINE_VARIANT)))

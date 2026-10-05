@@ -1950,6 +1950,32 @@ T: dict[str, dict[str, str]] = {
               "a las páginas)",
         "it": "Pagina continua: il testo come un'unica lunga pagina, da qui (Esci dalla lettura guidata torna alle "
               "pagine)"},
+    "Follow pages": {"nl": "Pagina's volgen", "fr": "Suivre les pages", "de": "Seiten folgen", "es": "Seguir páginas",
+                     "it": "Segui le pagine"},
+    "Turn pages along: the pages follow the voice": {
+        "nl": "Pagina's mee omslaan: de pagina's volgen de stem", "fr": "Tourner les pages : les pages suivent la voix",
+        "de": "Seiten mitblättern: die Seiten folgen der Stimme", "es": "Pasar las páginas: las páginas siguen la voz",
+        "it": "Girare le pagine: le pagine seguono la voce"},
+    "Skip references": {"nl": "Literatuur overslaan", "fr": "Ignorer les références", "de": "Literatur überspringen",
+                        "es": "Omitir referencias", "it": "Salta i riferimenti"},
+    "Skip the reference list and notes: stop before them at the end": {
+        "nl": "De literatuurlijst en noten overslaan: stoppen voor ze aan het eind beginnen",
+        "fr": "Ignorer la bibliographie et les notes : s'arrêter avant elles à la fin",
+        "de": "Literaturverzeichnis und Anmerkungen überspringen: am Ende davor aufhören",
+        "es": "Omitir la lista de referencias y las notas: parar antes de ellas al final",
+        "it": "Salta la bibliografia e le note: fermarsi prima di esse alla fine"},
+    "Mark reading": {"nl": "Lezen markeren", "fr": "Marquer la lecture", "de": "Lesen markieren", "es": "Marcar lectura",
+                     "it": "Evidenzia lettura"},
+    "Ruler follows": {"nl": "Lineaal volgt", "fr": "Règle suit", "de": "Lineal folgt", "es": "Regla sigue",
+                      "it": "Righello segue"},
+    "Ruler follows the voice: in focus mode, the reading ruler moves along with it": {
+        "nl": "Lineaal volgt de stem: in de focusmodus beweegt de leeslineaal mee",
+        "fr": "La règle suit la voix : en mode concentration, la règle de lecture avance avec elle",
+        "de": "Lineal folgt der Stimme: im Fokusmodus bewegt sich das Leselineal mit",
+        "es": "La regla sigue la voz: en el modo concentración, la regla de lectura avanza con ella",
+        "it": "Il righello segue la voce: in modalità concentrazione il righello di lettura si muove con essa"},
+    "Python: {path}": {"nl": "Python: {path}", "fr": "Python : {path}", "de": "Python: {path}", "es": "Python: {path}",
+                       "it": "Python: {path}"},
 }
 
 # messages from the processing core, matched in i18n.MESSAGE_PATTERNS; {0}, {1}... are the parts found

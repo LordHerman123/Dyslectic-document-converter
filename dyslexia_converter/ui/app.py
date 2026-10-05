@@ -1995,7 +1995,18 @@ class ConverterApp:
             self.audio_btn,
         ], wrap=True, spacing=6, vertical_alignment=ft.CrossAxisAlignment.CENTER)
         # the reading options as on/off chips under the controls (also in focus mode, which shows this panel)
-        controls = ft.Column([main, self.reading_option_chips()], spacing=4, expand=True, tight=True)
+        # no voices: say so in the panel itself (with the reason), not only in the play button's tooltip
+        import sys as _sys
+
+        self.no_voice_note = ft.Container(ft.Row([
+            ft.Icon(ft.Icons.VOLUME_OFF, color=ft.Colors.ERROR, size=18),
+            ft.Text(t("No speech voices were found on this device.") + (
+                f" ({self.speaker.last_error})" if self.speaker.last_error else "") + "  " + t("Python: {path}",
+                                                                                              path=_sys.executable),
+                size=self.fs(12), selectable=True, expand=True)], spacing=8),
+            visible=self._speech_allowed() and not voices, padding=ft.Padding.symmetric(vertical=2))
+        controls = ft.Column([main, self.no_voice_note, self.reading_option_chips()], spacing=4, expand=True,
+                             tight=True)
         # Read along on the right of the first line (the controls wrap under themselves, not under it)
         self.read_row = ft.Row([controls, ft.Container(self.read_along_btn, padding=ft.Padding.only(top=8))],
                                spacing=8, vertical_alignment=ft.CrossAxisAlignment.START)
@@ -2370,15 +2381,15 @@ class ConverterApp:
 
     # what reading aloud leaves out and shows (shared by reading aloud, focus mode, the reading view and MP3)
     # (key, chip label, explanation, default)
-    READING_CHIPS = [("read_follow", "Turn pages along", "The pages follow the voice", True),
+    READING_CHIPS = [("read_follow", "Follow pages", "Turn pages along: the pages follow the voice", True),
                      ("skip_citations", "Skip citations",
                       "Leave out citations in the text, like (Smith, 2019) and [3]. Most are found, but some "
                       "unusual ones may still be read.", False),
-                     ("skip_end", "Skip references and notes",
-                      "Stop before the reference list and the notes at the end", False),
-                     ("reading_highlight", "Mark what is read", "Mark the sentence and word being read", True),
-                     ("ruler_follows", "Ruler follows the voice",
-                      "In focus mode, the reading ruler moves along with the voice", True)]
+                     ("skip_end", "Skip references",
+                      "Skip the reference list and notes: stop before them at the end", False),
+                     ("reading_highlight", "Mark reading", "Mark the sentence and word being read", True),
+                     ("ruler_follows", "Ruler follows",
+                      "Ruler follows the voice: in focus mode, the reading ruler moves along with it", True)]
 
     def reading_option_chips(self) -> ft.Row:
         """The reading options as chips to switch on and off (a tick when on), one row that wraps."""
@@ -2396,10 +2407,14 @@ class ConverterApp:
                 await self._restart_reading()  # applies at once to what is being read
 
         for key, label, tip, _ in self.READING_CHIPS:
-            self._option_chips.append(ft.Chip(label=ft.Text(t(label), size=self.fs(13)), data=key,
+            # compact, so all five fit on one line at the normal text size (the tooltip says more)
+            self._option_chips.append(ft.Chip(label=ft.Text(t(label), size=self.fs(12)), data=key,
                                               selected=self.reading_option(key), tooltip=t(tip),
-                                              show_checkmark=True, on_select=toggle))
-        return ft.Row(self._option_chips, spacing=6, wrap=True, run_spacing=4)
+                                              show_checkmark=True, on_select=toggle,
+                                              visual_density=ft.VisualDensity.COMPACT,
+                                              padding=ft.Padding.symmetric(horizontal=2, vertical=0),
+                                              label_padding=ft.Padding.only(left=2, right=6)))
+        return ft.Row(self._option_chips, spacing=4, wrap=True, run_spacing=4)
 
     READING_OPTIONS = [("skip_citations", "Skip citations in the text, like (Smith, 2019) and [3]", False),
                        ("skip_end", "Skip the reference list and notes at the end", False),
