@@ -733,6 +733,7 @@ class Speaker:
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
         self._engine = None
+        self._run = None  # the identity of the run that may report to the app
         self._available: Optional[bool] = None
         self._voices: Optional[list[tuple[str, str, str]]] = None
         self.last_error = ""  # why speaking failed, for the user
@@ -908,20 +909,51 @@ class Speaker:
         start of each sentence and ``on_done(finished)`` at the end (False when stopped or failed;
         ``last_error`` says why).
         """
+        previous = self._thread
         self.stop()
         self._stop = threading.Event()
         stop = self._stop
         self.last_error = ""
+        # this run's identity: once reading is stopped or started again, an older run reports nothing more
+        # (its words, sentences or end would otherwise arrive after the new run started and confuse the app)
+        run_id = object()
+        self._run = run_id
+
+        def is_current() -> bool:
+            return self._run is run_id and not stop.is_set()
+
+        report_word, report_sentence, report_done = on_word, on_sentence, on_done
+
+        def on_word(s: int, w: int) -> None:
+            if is_current():
+                report_word(s, w)
+
+        def on_sentence(s: int) -> None:
+            if is_current():
+                report_sentence(s)
+
+        def on_done(finished: bool) -> None:
+            if self._run is run_id:
+                self._run = None
+                report_done(finished)
 
         def run():
             """The speech thread: speak sentence by sentence, reporting words (paced by an estimate when the
             engine reports none).
             """
             finished = False
+            eng = None
+            # the previous run first finishes stopping (on Windows its clean-up stops the one shared sound
+            # channel, which would cut off this run's sound); waited for here, not in the window
+            if previous is not None and previous is not threading.current_thread() and previous.is_alive():
+                previous.join(timeout=5.0)
+            if stop.is_set():
+                return
             com = _com_init()
             try:
                 eng = self._make(voice)
-                self._engine = eng
+                if is_current():
+                    self._engine = eng
                 eng.setProperty("rate", int(self.BASE_RATE * max(0.4, min(2.5, speed))))
                 if voice:
                     try:
@@ -984,11 +1016,11 @@ class Speaker:
                 self.last_error = f"{type(e).__name__}: {e}"
                 finished = False
             finally:
-                eng_done = self._engine
-                self._engine = None
-                if eng_done is not None and hasattr(eng_done, "close"):
+                if self._engine is eng:  # never the engine of a newer run
+                    self._engine = None
+                if eng is not None and hasattr(eng, "close"):
                     try:
-                        eng_done.close()
+                        eng.close()
                     except Exception:
                         pass
                 if com is not None:
@@ -998,8 +1030,10 @@ class Speaker:
         self._thread = threading.Thread(target=run, name="read-aloud", daemon=True)
         self._thread.start()
 
-    def stop(self) -> None:
-        """Stop reading and wait (briefly) for the speech thread to end."""
+    def stop(self, wait: float = 0.0) -> None:
+        """Stop reading at once. The speech thread ends by itself (the window never waits for it; a new start
+        waits for it on its own thread); ``wait`` seconds may be given to wait for it here (tests, closing)."""
+        self._run = None  # the stopped run reports nothing more
         self._stop.set()
         eng = self._engine
         if eng is not None:
@@ -1008,6 +1042,5 @@ class Speaker:
             except Exception:
                 pass
         t = self._thread
-        if t is not None and t is not threading.current_thread():
-            t.join(timeout=2.0)
-        self._thread = None
+        if wait and t is not None and t is not threading.current_thread():
+            t.join(timeout=wait)

@@ -173,6 +173,7 @@ class FocusMode:
             app.notify(t("Open a PDF first."), error=True)
             return
         self.active = True
+        self.app._update_read_buttons()
         self.current = app.conv_page
         self.highlights = app.doc_highlights()
         self.ruler, self.card_word, self._reading, self.bars_hidden = None, None, None, False
@@ -314,6 +315,7 @@ class FocusMode:
         if not self.active:
             return
         self.active = False
+        app._update_read_buttons()  # the ruler option is greyed out outside focus mode
         if self._render_task:
             self._render_task.cancel()
         if self.bars_hidden:

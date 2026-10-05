@@ -115,6 +115,7 @@ class ConverterApp:
         self.checker = CheckPanel(self)  # the whole-document AI check
         self._read_units: Optional[list] = None  # sentences of the converted PDF, made when reading starts
         self._read_maps: list = []  # per sentence read: the numbers of its words that are said
+        self._read_gen = 0  # the turn of reading: reports from an earlier turn are ignored
         self._popups = None  # what citations and note markers point to (focus mode shows it when tapped)
         self._read_pos: Optional[int] = None  # sentence being read (kept when paused)
         self._reading = False
@@ -299,6 +300,7 @@ class ConverterApp:
         body = ft.Column([header, ft.Container(ft.Column([self.status, self.progress, self.notices], spacing=4),
                                                padding=ft.Padding.symmetric(horizontal=16)),
                           self.tabs], expand=True, spacing=4)
+        self._update_read_buttons()  # greyed out until a document is open
         p.add(self._with_file_drop(body))
 
     # ---------------------------------------------------------------- dropping a file on the window
@@ -1938,6 +1940,7 @@ class ConverterApp:
         self.busy(True, self.status.value)
         try:
             self.converted_pdf = await self.in_thread(self.session.export, "pdf", self.settings)
+            self._update_read_buttons()
             self.conv_count = preview.page_count(self.converted_pdf)
             self.conv_page = min(self.conv_page, self.conv_count - 1)
         except Exception as ex:
@@ -1957,7 +1960,11 @@ class ConverterApp:
         t = self.t
         self.read_btn = ft.IconButton(ft.Icons.PLAY_ARROW_ROUNDED, icon_size=28, on_click=self.on_read,
                                       tooltip=t("Read aloud"),
-                                      style=ft.ButtonStyle(bgcolor=ft.Colors.PRIMARY, color=ft.Colors.ON_PRIMARY))
+                                      style=ft.ButtonStyle(  # greyed out when it cannot be used
+                                          bgcolor={ft.ControlState.DISABLED: ft.Colors.SURFACE_CONTAINER_HIGHEST,
+                                                   ft.ControlState.DEFAULT: ft.Colors.PRIMARY},
+                                          color={ft.ControlState.DISABLED: ft.Colors.OUTLINE,
+                                                 ft.ControlState.DEFAULT: ft.Colors.ON_PRIMARY}))
         self.stop_btn = ft.IconButton(ft.Icons.STOP_ROUNDED, tooltip=t("Stop"), on_click=self.on_read_stop,
                                       disabled=True)
         self.tap_btn = ft.IconButton(ft.Icons.TOUCH_APP_OUTLINED, selected_icon=ft.Icons.TOUCH_APP,
@@ -1973,10 +1980,7 @@ class ConverterApp:
                                     options=self._voice_options() if voices else
                                     [ft.DropdownOption(key="auto", text=t("Automatic"))],
                                     value=self.ui.get("read_voice", "auto"), on_select=self.on_read_voice)
-        self.natural_btn = ft.IconButton(ft.Icons.RECORD_VOICE_OVER_OUTLINED, on_click=self.on_natural_voices,
-                                         visible=natural_voices.supported(),
-                                         tooltip=t("Natural voices") + ": "
-                                         + t("Download natural-sounding voices that work offline"))
+        self.natural_btn = ft.IconButton(ft.Icons.RECORD_VOICE_OVER_OUTLINED, on_click=self.on_natural_voices)
         if not voices:
             self.read_btn.disabled = True
             self.read_btn.tooltip = t("No speech voices were found on this device.") + (
@@ -1985,10 +1989,7 @@ class ConverterApp:
             t("Read along"), icon=ft.Icons.CHROME_READER_MODE_OUTLINED, on_click=self.on_reflow,
             tooltip=t("Read the text itself, flowing to fit the window, with the sentence and word being read "
                       "marked; size, spacing and colours change at once"))
-        self.audio_btn = ft.OutlinedButton(t("MP3"), icon=ft.Icons.AUDIO_FILE_OUTLINED, on_click=self.on_audio_export,
-                                           visible=bool(voices),
-                                           tooltip=t("Save as audio (MP3): the whole document, some pages or your "
-                                                     "selection"))
+        self.audio_btn = ft.OutlinedButton(t("MP3"), icon=ft.Icons.AUDIO_FILE_OUTLINED, on_click=self.on_audio_export)
         main = ft.Row([
             self.read_btn, self.stop_btn, self.tap_btn, ft.Container(width=6),
             self.text(t("Speed"), 13), self.speed_slider, self.speed_label, self.voice_dd, self.natural_btn,
@@ -2143,16 +2144,36 @@ class ConverterApp:
         return not self.page.web
 
     def _update_read_buttons(self) -> None:
-        """Play (triangle) when stopped or paused, pause (bars) while reading."""
+        """Play (triangle) when stopped or paused, pause (bars) while reading; every control that cannot be used
+        now is greyed out, with a tooltip that says why."""
         t = self.t
+        voices = bool(self.speaker.voices())
+        doc = bool(self.converted_pdf)
+        why = None if voices and doc else (t("No speech voices were found on this device.") if not voices
+                                          else t("Open a PDF first."))
         if self._reading:
             self.read_btn.icon, self.read_btn.tooltip = ft.Icons.PAUSE_ROUNDED, t("Pause")
         elif self._read_pos is not None:
             self.read_btn.icon, self.read_btn.tooltip = ft.Icons.PLAY_ARROW_ROUNDED, t("Continue")
         else:
             self.read_btn.icon, self.read_btn.tooltip = ft.Icons.PLAY_ARROW_ROUNDED, t("Read aloud")
-        self.read_btn.disabled = not self.speaker.voices()
+        self.read_btn.disabled = why is not None
+        if why:
+            self.read_btn.tooltip = why
         self.stop_btn.disabled = not self._reading and self._read_pos is None
+        self.tap_btn.disabled = why is not None
+        for c in (self.speed_slider, self.voice_dd):
+            c.disabled = not voices
+        self.audio_btn.disabled = why is not None
+        self.audio_btn.tooltip = why or t("Save as audio (MP3): the whole document, some pages or your selection")
+        natural = natural_voices.supported()
+        self.natural_btn.disabled = not natural
+        self.natural_btn.tooltip = t("Natural voices") + ": " + (
+            t("Download natural-sounding voices that work offline") if natural
+            else t("not available in this copy of the app"))
+        self.read_along_btn.disabled = not doc
+        for chip in getattr(self, "_option_chips", []):  # the ruler only exists in focus mode
+            chip.disabled = chip.data == "ruler_follows" and not self.focus.active
         self.read_toggle.icon = ft.Icons.GRAPHIC_EQ if self._reading else ft.Icons.VOLUME_UP
 
     def _check_voice_language(self) -> None:
@@ -2233,12 +2254,35 @@ class ConverterApp:
         self._conv_box = (e.width, e.height)
 
     async def start_reading(self, start: Optional[int] = None) -> None:
-        """Read from sentence ``start``, or from where reading was paused / the page being looked at."""
-        if not self.converted_pdf or self._reading:
+        """Read from sentence ``start``, or from where reading was paused / the ruler / the page being looked at.
+
+        The play button shows pause at once (a second press while the text is being prepared pauses, it never
+        starts reading twice). Each start is a new turn: whatever an earlier turn still reports is ignored."""
+        if not self.converted_pdf or self._reading or not self._speech_allowed() or not self.speaker.voices():
             return
-        units = await self._units()
+        self._reading = True
+        self._read_gen += 1
+        gen = self._read_gen
+        self._update_read_buttons()
+        self.page.update()
+
+        def cancelled() -> bool:
+            """Paused, stopped or started again while this start was being prepared."""
+            return gen != self._read_gen or not self._reading
+
+        try:
+            units = await self._units()
+        except Exception as ex:
+            log.exception("preparing the text to read failed")
+            units = []
+            self.notify(self.t("Reading aloud stopped because of an error:") + " " + redact(str(ex)), error=True)
+        if cancelled():
+            return
         if not units:
+            self._reading = False
+            self._update_read_buttons()
             self.notify(self.t("There is no text to read on these pages."))
+            self.page.update()
             return
         ruler = self.focus.ruler_sentence(units) if self.focus.active else None
         if start is None and ruler is not None:
@@ -2253,7 +2297,17 @@ class ConverterApp:
             viewed = self.focus.current if self.focus.active else self.conv_page
             if start is None or start >= len(units) or units[start].page != viewed:
                 start = speech.first_sentence_on(units, viewed)  # read from the page being looked at
+        start = max(0, min(start, len(units) - 1))
         self._check_voice_language()
+        skip_cites = self.reading_option("skip_citations")
+        end = await self.in_thread(self._end_unit, units) if self.reading_option("skip_end") else None
+        spoken, maps = await self.in_thread(speech.prepare_reading, units, skip_cites,
+                                            end if end is not None and start < end else None)
+        if cancelled():
+            return
+        self._read_maps = maps
+        self._read_pos = start
+        self._hl_next = None
         loop = asyncio.get_running_loop()
 
         def post(coro):
@@ -2261,19 +2315,14 @@ class ConverterApp:
             try:
                 asyncio.run_coroutine_threadsafe(coro, loop)
             except RuntimeError:
-                pass  # the app is closing
+                coro.close()  # the app is closing
 
-        self._reading = True
-        self._read_pos = start
-        self._update_read_buttons()
-        self.page.update()
-        end = self._end_unit(units) if self.reading_option("skip_end") else None
-        spoken, self._read_maps = speech.prepare_reading(
-            units, self.reading_option("skip_citations"), end if end is not None and start < end else None)
+        # the ruler and the marks go to the first sentence at once, before the voice is heard
+        await self._show_word(start, 0, gen)
         self.speaker.start(spoken, start, float(self.ui.get("read_speed", 1.0)), self._voice(),
-                           on_word=lambda si, wi: post(self._show_word(si, wi)),
-                           on_sentence=lambda si: post(self._show_word(si, 0)),
-                           on_done=lambda finished: post(self._read_done(finished)))
+                           on_word=lambda si, wi: post(self._show_word(si, wi, gen)),
+                           on_sentence=lambda si: post(self._show_word(si, 0, gen)),
+                           on_done=lambda finished: post(self._read_done(finished, gen)))
 
     def say_word(self, text: str) -> None:
         """Say one word (from the word card in focus mode); stops reading aloud first."""
@@ -2282,11 +2331,15 @@ class ConverterApp:
         if self._reading:
             self._reading = False
             self._update_read_buttons()
+        self._read_gen += 1  # reading aloud stopped for this word
         self.speaker.start([speech.Sentence([speech.Word(text, 0, [])])], 0,
                            float(self.ui.get("read_speed", 1.0)), self._voice())
 
-    async def _show_word(self, si: int, wi: int) -> None:
-        """Highlight the sentence and word being read; turn the page when the reading moves on."""
+    async def _show_word(self, si: int, wi: int, gen: Optional[int] = None) -> None:
+        """Highlight the sentence and word being read; turn the page when the reading moves on (only for the
+        current turn of reading: an earlier one may still have reports on their way)."""
+        if gen is not None and gen != self._read_gen:
+            return
         if not self._reading or self._read_units is None or si >= len(self._read_units):
             return
         self._hl_next = (si, wi)
@@ -2331,8 +2384,11 @@ class ConverterApp:
         finally:
             self._hl_busy = False
 
-    async def _read_done(self, finished: bool) -> None:
-        """Reading aloud ended (finished, paused, or stopped by an error, which is reported)."""
+    async def _read_done(self, finished: bool, gen: Optional[int] = None) -> None:
+        """Reading aloud ended by itself (finished, or stopped by an error, which is reported). An earlier turn
+        that ends after a new one started changes nothing."""
+        if gen is not None and gen != self._read_gen:
+            return
         was_reading = self._reading
         self._reading = False
         if finished:
@@ -2353,6 +2409,7 @@ class ConverterApp:
     def stop_reading(self) -> None:
         """Stop and forget the position (the document or its layout changed)."""
         self._reading = False
+        self._read_gen = getattr(self, "_read_gen", 0) + 1
         self.speaker.stop()
         self._read_pos = None
         self._read_units = None
@@ -2363,6 +2420,7 @@ class ConverterApp:
     async def on_read_pause(self, e):
         """Pause reading aloud (the play button continues from here)."""
         self._reading = False
+        self._read_gen += 1  # what this turn still reports is ignored
         self.speaker.stop()
         self._update_read_buttons()
         self.page.update()
@@ -2370,6 +2428,7 @@ class ConverterApp:
     async def on_read_stop(self, e):
         """Stop reading aloud and forget the position."""
         self._reading = False
+        self._read_gen += 1
         self.speaker.stop()
         self._read_pos = None
         self._update_read_buttons()
