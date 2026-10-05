@@ -218,8 +218,8 @@ def test_windows_voice_through_the_speaker_and_stopping(tmp_path):
     sp.start(units_of(" ".join(["reading"] * 3000)), 0, on_done=lambda finished: (result.update(finished=finished),
                                                                                done.set()))
     time.sleep(0.5)
-    sp.stop()
-    assert done.wait(5) and result["finished"] is False and not sp.speaking
+    sp.stop(wait=5)
+    assert not sp.speaking and not done.wait(0.3)  # stopped at once; a stopped run reports nothing more
 
 
 
@@ -364,3 +364,28 @@ def test_play_twice_in_a_row_reads_once():
         time.sleep(0.02)
     time.sleep(0.2)
     assert done == [True]
+
+
+def test_a_run_replaced_while_its_voice_is_made_says_nothing():
+    # making a voice can take a while (loading a natural voice, a slow computer); a run replaced meanwhile must not
+    # speak its sentence over the new run's voice
+    made = []
+
+    def slow_factory():
+        eng = FakeEngine(delay=0.02)
+        made.append(eng)
+        if len(made) == 2:  # the first run's own voice (the first one made only lists the voices)
+            time.sleep(0.4)
+        return eng
+
+    sp = speech.Speaker(engine_factory=slow_factory)
+    sp.available()
+    units = units_of("One two three.", "Four five six.")
+    sp.start(units, 0)
+    time.sleep(0.1)  # the first run is still making its voice
+    done = threading.Event()
+    sp.start(units, 1, on_done=lambda finished: done.set())
+    assert done.wait(5)
+    first, second = made[1], made[-1]
+    assert first is not second and not first.said and first.stopped  # the replaced run said nothing
+    assert second.said

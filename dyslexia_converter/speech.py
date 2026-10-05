@@ -734,6 +734,7 @@ class Speaker:
         self._stop = threading.Event()
         self._engine = None
         self._run = None  # the identity of the run that may report to the app
+        self._engine_lock = threading.Lock()
         self._available: Optional[bool] = None
         self._voices: Optional[list[tuple[str, str, str]]] = None
         self.last_error = ""  # why speaking failed, for the user
@@ -906,8 +907,8 @@ class Speaker:
 
         ``speed`` is relative to normal (1.0); ``voice`` is a voice id. The callbacks are called from the
         speech thread: ``on_word(sentence, word)`` as each word is said, ``on_sentence(sentence)`` at the
-        start of each sentence and ``on_done(finished)`` at the end (False when stopped or failed;
-        ``last_error`` says why).
+        start of each sentence and ``on_done(finished)`` at the end (False when it failed; ``last_error``
+        says why). A run that is stopped or replaced by a new start reports nothing more.
         """
         previous = self._thread
         self.stop()
@@ -952,7 +953,13 @@ class Speaker:
             com = _com_init()
             try:
                 eng = self._make(voice)
-                if is_current():
+                with self._engine_lock:  # stop() sees this engine, or this run sees that it was stopped
+                    if not is_current():
+                        try:
+                            eng.stop()
+                        except Exception:
+                            pass
+                        return  # stopped or replaced while the voice was being made: say nothing
                     self._engine = eng
                 eng.setProperty("rate", int(self.BASE_RATE * max(0.4, min(2.5, speed))))
                 if voice:
@@ -1033,9 +1040,10 @@ class Speaker:
     def stop(self, wait: float = 0.0) -> None:
         """Stop reading at once. The speech thread ends by itself (the window never waits for it; a new start
         waits for it on its own thread); ``wait`` seconds may be given to wait for it here (tests, closing)."""
-        self._run = None  # the stopped run reports nothing more
-        self._stop.set()
-        eng = self._engine
+        with self._engine_lock:
+            self._run = None  # the stopped run reports nothing more
+            self._stop.set()
+            eng = self._engine
         if eng is not None:
             try:
                 eng.stop()
