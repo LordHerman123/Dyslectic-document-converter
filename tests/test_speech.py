@@ -389,3 +389,61 @@ def test_a_run_replaced_while_its_voice_is_made_says_nothing():
     first, second = made[1], made[-1]
     assert first is not second and not first.said and first.stopped  # the replaced run said nothing
     assert second.said
+
+
+FAKE_SAY = r'''#!/usr/bin/env python3
+"""A stand-in for macOS's say: lists voices, 'speaks' slowly, or writes a WAV file."""
+import sys, time, wave
+args = sys.argv[1:]
+if args[:2] == ["-v", "?"]:
+    print("Bad News            en_US    # The light you see at the end of the tunnel is the headlamp of a train.")
+    print("Eddy (English (UK)) en_GB    # Hello! My name is Eddy.")
+    print("Samantha            en_US    # Hello! My name is Samantha.")
+    print("Xander              nl_NL    # Hallo! Mijn naam is Xander.")
+    sys.exit(0)
+text = sys.stdin.read()
+open(sys.argv[0] + ".log", "a").write(" ".join(args) + " | " + text + "\n")
+if "-o" in args:
+    with wave.open(args[args.index("-o") + 1], "wb") as w:
+        w.setnchannels(1), w.setsampwidth(2), w.setframerate(22050), w.writeframes(b"\0\0" * 22050)
+else:
+    time.sleep(0.05 * len(text.split()))
+'''
+
+
+def _fake_say(tmp_path):
+    say = tmp_path / "say"
+    say.write_text(FAKE_SAY)
+    say.chmod(0o755)
+    return say
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="a script stands in for the say program")
+def test_mac_voices_through_say(tmp_path):
+    say = _fake_say(tmp_path)
+    eng = speech.MacSayEngine(str(say))
+    voices = eng.getProperty("voices")
+    assert [(v.id, v.languages) for v in voices] == [("Bad News", ["en_US"]), ("Eddy (English (UK))", ["en_GB"]),
+                                                    ("Samantha", ["en_US"]), ("Xander", ["nl_NL"])]
+    sp = speech.Speaker(engine_factory=lambda: speech.MacSayEngine(str(say)))
+    assert sp.voice_for("en") in ("Eddy (English (UK))", "Samantha")  # never the joke voice
+    assert sp.voice_for("nl") == "Xander"
+    # reading: the text goes in on standard input, with the speed and the voice
+    done = threading.Event()
+    said = []
+    sp.start(units_of("-r is not an option here.", "Second sentence."), 0, speed=1.0, voice="Samantha",
+             on_sentence=said.append, on_done=lambda finished: done.set())
+    assert done.wait(10)
+    log = (tmp_path / "say.log").read_text().splitlines()
+    assert log[0].endswith("-v Samantha | -r is not an option here.") and "-r 165" in log[0]
+    assert said == [0, 1] and len(log) == 2  # sentence by sentence
+    # stopping in the middle of a long sentence ends the say program at once
+    sp.start(units_of(" ".join(["word"] * 400)), 0, voice="Samantha")
+    time.sleep(0.4)
+    t0 = time.monotonic()
+    sp.stop(wait=5)
+    assert time.monotonic() - t0 < 2 and not sp.speaking
+    # saving as sound (MP3 export)
+    wavs = list(sp.render_many(["Hello there.", "Goodbye."], voice="Samantha"))
+    assert len(wavs) == 2 and all(w[:4] == b"RIFF" for w in wavs)
+    assert "--data-format=LEI16@22050" in (tmp_path / "say.log").read_text()

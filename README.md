@@ -13,11 +13,20 @@ At start a short notice says what to expect: the converter changes how a documen
 Everything works **locally and without AI**. AI is an optional extra that you turn on with your own
 API key. When it's on, it only sees small snippets that the local rules couldn't decide.
 
-## Download for Windows (version 1.14)
+## Download for Windows (version 1.16)
 
 Get `DyslexiaConverter-1.16.0-setup.exe` (installer) or `DyslexiaConverter-1.16.0-windows.zip` (unzip and
 double-click `DyslexiaConverter.exe`) from the repository's **Releases** page. Text recognition (Tesseract)
 is included; nothing else needs to be installed. How the Windows build is made: [windows/README.md](windows/README.md).
+
+## macOS and Linux
+
+The same app is built for **macOS** (Apple Silicon MacBooks and iMacs) and **Linux** (64-bit, GTK desktops such as
+Ubuntu): `DyslexiaConverter-…-macos-arm64.zip` (the `.app`) and `DyslexiaConverter-…-linux-x86_64.tar.gz`. For
+scanned PDFs install Tesseract (`brew install tesseract tesseract-lang` / `sudo apt install tesseract-ocr`); on
+Linux also `sudo apt install espeak-ng` for the computer's voices. The Mac app is not signed: open it the first
+time with right-click → Open. Requirements, limitations and how to build it yourself:
+[docs/BUILDING.md](docs/BUILDING.md).
 
 ## Quick start (from source)
 
