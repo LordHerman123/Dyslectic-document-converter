@@ -68,10 +68,15 @@ jobs:
 
   macos:
     # Apple Silicon (M1 and later); see docs/BUILDING.md for Intel Macs
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+
+      # Flutter's plugins use the newest macOS APIs, so the newest Xcode is needed to build (not to run the app)
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
 
       - uses: actions/setup-python@v5
         with:
@@ -98,6 +103,7 @@ jobs:
         run: |
           ls -la build/macos
           app=$(find build/macos -maxdepth 1 -name "*.app" | head -n 1)
+          echo "Oldest macOS it runs on: $(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$app/Contents/Info.plist")"
           exe=$(find "$app/Contents/MacOS" -maxdepth 1 -type f -perm -u+x | head -n 1)
           echo "Starting $exe"
           bash .github/scripts/desktop-selftest.sh "$exe"
