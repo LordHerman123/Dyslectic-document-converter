@@ -1930,6 +1930,29 @@ def _caption_tables(page: pymupdf.Page, lines: list[RawLine], existing: list[Raw
 
 # --------------------------------------------------------------------------- OCR pages
 
+LEADER_STRIPS = int(__import__("os").environ.get("DC_LEADER_STRIPS", "1") or 1)  # experiment switch
+OCR_GAP_MIN_WORDS = int(__import__("os").environ.get("DC_OCR_GAP_MIN", "1") or 1)  # experiment switch
+OCR_COLUMN_GAP = float(__import__("os").environ.get("DC_OCR_GAP", "0") or 0)  # experiment switch
+
+
+def _split_wide_gaps(groups: dict) -> dict:
+    """Lines as OCR found them, split where two words are much further apart than words in a line are (two
+    columns read side by side as one line, as Tesseract sometimes does with a narrow column next to a wide one).
+    Each part becomes a block of its own, so the columns are read one after the other."""
+    out: dict = {}
+    for (bn, par, ln), words in groups.items():
+        words = sorted(words, key=lambda w: w.bbox[0])
+        heights = sorted(w.bbox[3] - w.bbox[1] for w in words)
+        h = heights[len(heights) // 2]
+        part, start = 0, 0
+        for i in range(1, len(words) + 1):
+            if i == len(words) or (OCR_COLUMN_GAP and words[i].bbox[0] - words[i - 1].bbox[2] > OCR_COLUMN_GAP * h
+                                   and i - start >= OCR_GAP_MIN_WORDS and len(words) - i >= OCR_GAP_MIN_WORDS):
+                out[(bn + 500 * part, par, ln)] = words[start:i]
+                part, start = part + 1, i
+    return out
+
+
 def _ocr_image(png: bytes, dpi: int, width_pt: float, height_pt: float, pno: int, engine: OcrEngine,
                languages: list[str], crop: Callable[[Rect], ImageData]) -> tuple[list[RawLine], list[RawFigure]]:
     """OCR one image and return lines/figures in points relative to that image."""
@@ -1939,8 +1962,7 @@ def _ocr_image(png: bytes, dpi: int, width_pt: float, height_pt: float, pno: int
     for w in res.words:
         groups.setdefault((w.block, w.paragraph, w.line), []).append(w)
     lines: list[RawLine] = []
-    for (bn, par, _ln), words in groups.items():
-        words.sort(key=lambda w: w.bbox[0])
+    for (bn, par, _ln), words in _split_wide_gaps(groups).items():
         text = ""
         conf: list[OcrWordConfidence] = []
         for w in words:
@@ -2032,7 +2054,18 @@ def _without_leaders(png: bytes) -> bytes:
 
     im = Image.open(io.BytesIO(png)).convert("L")
     gray = np.asarray(im)
-    spans = _leader_spans(gray < 150)
+    ink = gray < 150
+    strips = LEADER_STRIPS
+    if strips > 1:
+        # looked for in vertical strips: a slightly tilted scan or a page in columns makes lines run into each
+        # other across the whole width, but not within a narrow strip
+        spans = []
+        w = ink.shape[1]
+        for k in range(strips):
+            x0, x1 = k * w // strips, (k + 1) * w // strips
+            spans += [(a, b, c + x0, d + x0) for a, b, c, d in _leader_spans(ink[:, x0:x1])]
+    else:
+        spans = _leader_spans(ink)
     if not spans:
         return png
     clean = gray.copy()
