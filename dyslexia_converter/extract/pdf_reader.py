@@ -1930,9 +1930,8 @@ def _caption_tables(page: pymupdf.Page, lines: list[RawLine], existing: list[Raw
 
 # --------------------------------------------------------------------------- OCR pages
 
-LEADER_STRIPS = int(__import__("os").environ.get("DC_LEADER_STRIPS", "1") or 1)  # experiment switch
-OCR_GAP_MIN_WORDS = int(__import__("os").environ.get("DC_OCR_GAP_MIN", "1") or 1)  # experiment switch
-OCR_COLUMN_GAP = float(__import__("os").environ.get("DC_OCR_GAP", "0") or 0)  # experiment switch
+OCR_GAP_MIN_WORDS = 2  # words needed on each side of a gutter
+OCR_COLUMN_GAP = 6.0  # a gutter is wider than this many times the text height
 
 
 def _split_wide_gaps(groups: dict) -> dict:
@@ -1942,8 +1941,6 @@ def _split_wide_gaps(groups: dict) -> dict:
     that a line just above or below also has at the same place. Each side becomes a block of its own, so the
     columns are read one after the other. A single wide gap (a label beside a figure, a page number after a
     title) is left alone."""
-    if not OCR_COLUMN_GAP:
-        return groups
     info = []  # (key, words, line height, wide gaps)
     for key, words in groups.items():
         words = sorted(words, key=lambda w: w.bbox[0])
@@ -1972,12 +1969,14 @@ def _split_wide_gaps(groups: dict) -> dict:
                     break
             if cut is not None:
                 break
-        if cut is None:
+        left = [w for w in words if w.bbox[2] <= cut] if cut is not None else words
+        right = [w for w in words if w.bbox[2] > cut] if cut is not None else []
+        if cut is None or max(len(left), len(right)) < 5:  # table rows (short cells) keep their order
             out[key] = words
             continue
         bn, par, ln = key
-        out[key] = [w for w in words if w.bbox[2] <= cut]
-        out[(bn + 500, par, ln)] = [w for w in words if w.bbox[2] > cut]
+        out[key] = left
+        out[(bn + 500, par, ln)] = right
     return out
 
 
@@ -2082,18 +2081,7 @@ def _without_leaders(png: bytes) -> bytes:
 
     im = Image.open(io.BytesIO(png)).convert("L")
     gray = np.asarray(im)
-    ink = gray < 150
-    strips = LEADER_STRIPS
-    if strips > 1:
-        # looked for in vertical strips: a slightly tilted scan or a page in columns makes lines run into each
-        # other across the whole width, but not within a narrow strip
-        spans = _leader_spans(ink)
-        w = ink.shape[1]
-        for k in range(strips):
-            x0, x1 = k * w // strips, (k + 1) * w // strips
-            spans += [(a, b, c + x0, d + x0) for a, b, c, d in _leader_spans(ink[:, x0:x1])]
-    else:
-        spans = _leader_spans(ink)
+    spans = _leader_spans(gray < 150)
     if not spans:
         return png
     clean = gray.copy()
