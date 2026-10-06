@@ -1936,20 +1936,48 @@ OCR_COLUMN_GAP = float(__import__("os").environ.get("DC_OCR_GAP", "0") or 0)  # 
 
 
 def _split_wide_gaps(groups: dict) -> dict:
-    """Lines as OCR found them, split where two words are much further apart than words in a line are (two
-    columns read side by side as one line, as Tesseract sometimes does with a narrow column next to a wide one).
-    Each part becomes a block of its own, so the columns are read one after the other."""
-    out: dict = {}
-    for (bn, par, ln), words in groups.items():
+    """Lines as OCR found them, split at a column gutter that OCR read across: two columns side by side read as
+    one line each (as Tesseract sometimes does with a narrow column, such as an article's "article info" box,
+    next to a wide one). A gutter is a gap much wider than the space between words, with words on both sides,
+    that a line just above or below also has at the same place. Each side becomes a block of its own, so the
+    columns are read one after the other. A single wide gap (a label beside a figure, a page number after a
+    title) is left alone."""
+    if not OCR_COLUMN_GAP:
+        return groups
+    info = []  # (key, words, line height, wide gaps)
+    for key, words in groups.items():
         words = sorted(words, key=lambda w: w.bbox[0])
         heights = sorted(w.bbox[3] - w.bbox[1] for w in words)
         h = heights[len(heights) // 2]
-        part, start = 0, 0
-        for i in range(1, len(words) + 1):
-            if i == len(words) or (OCR_COLUMN_GAP and words[i].bbox[0] - words[i - 1].bbox[2] > OCR_COLUMN_GAP * h
-                                   and i - start >= OCR_GAP_MIN_WORDS and len(words) - i >= OCR_GAP_MIN_WORDS):
-                out[(bn + 500 * part, par, ln)] = words[start:i]
-                part, start = part + 1, i
+        n = OCR_GAP_MIN_WORDS
+        gaps = [(words[i - 1].bbox[2], words[i].bbox[0]) for i in range(n, len(words) - n + 1)
+                if words[i].bbox[0] - words[i - 1].bbox[2] > OCR_COLUMN_GAP * h]
+        info.append((key, words, h, gaps))
+    out: dict = {}
+    for key, words, h, gaps in info:
+        y0, y1 = min(w.bbox[1] for w in words), max(w.bbox[3] for w in words)
+        cut = None
+        for a0, a1 in gaps:
+            for key2, words2, h2, gaps2 in info:
+                if key2 == key or not gaps2:
+                    continue
+                b_y0, b_y1 = min(w.bbox[1] for w in words2), max(w.bbox[3] for w in words2)
+                if b_y0 > y1 + 2 * h or b_y1 < y0 - 2 * h:  # not a neighbouring line
+                    continue
+                for b0, b1 in gaps2:
+                    if min(a1, b1) - max(a0, b0) > 0:
+                        cut = (max(a0, b0) + min(a1, b1)) / 2
+                        break
+                if cut is not None:
+                    break
+            if cut is not None:
+                break
+        if cut is None:
+            out[key] = words
+            continue
+        bn, par, ln = key
+        out[key] = [w for w in words if w.bbox[2] <= cut]
+        out[(bn + 500, par, ln)] = [w for w in words if w.bbox[2] > cut]
     return out
 
 
@@ -2059,7 +2087,7 @@ def _without_leaders(png: bytes) -> bytes:
     if strips > 1:
         # looked for in vertical strips: a slightly tilted scan or a page in columns makes lines run into each
         # other across the whole width, but not within a narrow strip
-        spans = []
+        spans = _leader_spans(ink)
         w = ink.shape[1]
         for k in range(strips):
             x0, x1 = k * w // strips, (k + 1) * w // strips
