@@ -707,6 +707,112 @@ def _wav_seconds(data: bytes) -> float:
         return 0.0
 
 
+class MacSayEngine:
+    """The voices built into macOS, through its ``say`` command.
+
+    Used on a Mac instead of pyttsx3, whose macOS driver needs the main thread's event loop (the app reads
+    aloud on a background thread, where it hangs or stays silent). ``say`` lists every installed voice with its
+    language, speaks at a given number of words per minute, stops at once when ended, and saves WAV files for
+    MP3 export. It does not say which word it is on: the Speaker paces the highlight itself. Offers the small
+    part of the pyttsx3 engine interface the Speaker uses.
+    """
+    # "Eddy (English (UK))  en_GB    # Hello! My name is Eddy." -> name, language
+    NOVELTY = {"Albert", "Bad News", "Bahh", "Bells", "Boing", "Bubbles", "Cellos", "Good News", "Jester", "Organ",
+               "Superstar", "Trinoids", "Whisper", "Wobble", "Zarvox", "Deranged", "Hysterical", "Pipe Organ"}
+    VOICE_LINE = re.compile(r"^(.+?)\s+([a-z]{2,3}[_-][A-Za-z0-9]+)\s+#")
+
+    def __init__(self, command: str = "say"):
+        """``command``: the say program (tests pass a stand-in)."""
+        import shutil
+
+        self._cmd = shutil.which(command) or command
+        self._rate = Speaker.BASE_RATE
+        self._voice: Optional[str] = None
+        self._text = ""
+        self._proc = None
+        self._stopped = False
+
+    def getProperty(self, key):  # noqa: N802 (the pyttsx3 interface)
+        """``voices``: the installed voices (id = name, with their language)."""
+        if key == "voices":
+            import subprocess
+
+            out = subprocess.run([self._cmd, "-v", "?"], capture_output=True, text=True, timeout=20).stdout
+            found = []
+            for line in out.splitlines():
+                m = self.VOICE_LINE.match(line)
+                if m:
+                    found.append(_VoiceInfo(m.group(1).strip(), m.group(1).strip(), [m.group(2)]))
+            return found
+        if key == "rate":
+            return self._rate
+        return None
+
+    def setProperty(self, key, value):  # noqa: N802
+        """``rate`` (words per minute) or ``voice`` (a voice name)."""
+        if key == "rate":
+            self._rate = int(value)
+        elif key == "voice":
+            self._voice = value or None
+
+    def connect(self, name, cb):
+        """Word events are not available from ``say`` (the Speaker paces the highlight)."""
+
+    def _args(self) -> list[str]:
+        args = [self._cmd, "-r", str(max(60, self._rate))]
+        if self._voice:
+            args += ["-v", self._voice]
+        return args
+
+    def say(self, text: str) -> None:
+        """What the next :meth:`runAndWait` says."""
+        self._text = text
+
+    def runAndWait(self) -> None:  # noqa: N802
+        """Speak the text through the speakers; returns when it was said or :meth:`stop` was called."""
+        import subprocess
+
+        if self._stopped or not self._text.strip():
+            return
+        # the text goes in on standard input: never read as options, whatever it starts with
+        self._proc = subprocess.Popen(self._args(), stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                      stderr=subprocess.DEVNULL)
+        try:
+            self._proc.communicate(self._text.encode("utf-8"))
+        finally:
+            self._proc = None
+
+    def stop(self) -> None:
+        """Stop speaking at once (from any thread)."""
+        self._stopped = True
+        proc = self._proc
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.terminate()
+            except OSError:
+                pass
+
+    def to_wav(self, text: str) -> bytes:
+        """``text`` spoken into WAV bytes (16-bit mono, 22050 Hz) instead of the speakers."""
+        import os
+        import subprocess
+        import tempfile
+
+        fd, path = tempfile.mkstemp(suffix=".wav", prefix="dc-say-")
+        os.close(fd)
+        try:
+            subprocess.run(self._args() + ["--file-format=WAVE", "--data-format=LEI16@22050", "-o", path],
+                           input=text.encode("utf-8"), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                           check=True, timeout=600)
+            with open(path, "rb") as f:
+                return f.read()
+        finally:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+
 @dataclass
 class _VoiceInfo:
     """A voice as pyttsx3 describes it: id, name and languages."""
@@ -741,7 +847,7 @@ class Speaker:
 
     def _make(self, voice: Optional[str] = None):
         """A speech engine: a natural voice when ``voice`` is one, else on Windows the modern voices (exact word
-        timings), else SAPI, else pyttsx3."""
+        timings), else SAPI; on a Mac its built-in voices; else pyttsx3 (eSpeak on Linux)."""
         from . import voices as natural
 
         if self._factory is not None:
@@ -760,6 +866,8 @@ class Speaker:
                 return SapiEngine()
             except Exception:
                 log.warning("Windows speech (SAPI) unavailable, trying pyttsx3", exc_info=True)
+        if sys.platform == "darwin":
+            return MacSayEngine()  # the Mac's own voices (pyttsx3 cannot speak there off the main thread)
         from pyttsx3.engine import Engine
 
         # a new engine every time: pyttsx3.init() would hand back one made on another thread, and the
@@ -837,6 +945,8 @@ class Speaker:
                 score = 1
             if score and (vid.lower().endswith("/" + language) or vid.lower() == language):
                 score += 0.5  # the language's main voice, not a regional variant
+            if score and name in MacSayEngine.NOVELTY:
+                score -= 1.5  # a Mac's joke voices ("Bad News", "Bells") only when nothing else speaks it
             if score and vid.startswith("piper:"):
                 score += 5  # a natural voice for the language sounds best
             if score > best_score:

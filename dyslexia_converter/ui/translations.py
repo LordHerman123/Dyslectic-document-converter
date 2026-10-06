@@ -1976,6 +1976,18 @@ T: dict[str, dict[str, str]] = {
         "it": "Il righello segue la voce: in modalità concentrazione il righello di lettura si muove con essa"},
     "Python: {path}": {"nl": "Python: {path}", "fr": "Python : {path}", "de": "Python: {path}", "es": "Python: {path}",
                        "it": "Python: {path}"},
+    "No {language} voice is installed on this Mac, so another voice reads the text. You can add one in System Settings > Accessibility > Spoken Content > System voice > Manage Voices, then restart the app.": {
+        "nl": "Er is geen stem voor het {language} geïnstalleerd op deze Mac, dus een andere stem leest de tekst. Je kunt er een toevoegen via Systeeminstellingen > Toegankelijkheid > Gesproken materiaal > Systeemstem > Beheer stemmen, en daarna de app opnieuw starten.",
+        "fr": "Aucune voix en {language} n'est installée sur ce Mac ; une autre voix lit donc le texte. Vous pouvez en ajouter une dans Réglages Système > Accessibilité > Contenu énoncé > Voix du système > Gérer les voix, puis redémarrer l'appli.",
+        "de": "Auf diesem Mac ist keine Stimme für {language} installiert, daher liest eine andere Stimme den Text. Sie können eine hinzufügen unter Systemeinstellungen > Bedienungshilfen > Gesprochene Inhalte > Systemstimme > Stimmen verwalten und danach die App neu starten.",
+        "es": "No hay ninguna voz en {language} instalada en este Mac, así que otra voz lee el texto. Puedes añadir una en Ajustes del Sistema > Accesibilidad > Contenido leído > Voz del sistema > Gestionar voces y luego reiniciar la app.",
+        "it": "Su questo Mac non è installata una voce in {language}, quindi il testo viene letto da un'altra voce. Puoi aggiungerne una in Impostazioni di Sistema > Accessibilità > Contenuto letto > Voce di sistema > Gestisci voci e poi riavviare l'app."},
+    "No {language} voice is installed on this computer, so another voice reads the text. Installing eSpeak NG (for example: sudo apt install espeak-ng) adds voices for many languages; then restart the app.": {
+        "nl": "Er is geen stem voor het {language} geïnstalleerd op deze computer, dus een andere stem leest de tekst. eSpeak NG installeren (bijvoorbeeld: sudo apt install espeak-ng) voegt stemmen voor veel talen toe; start daarna de app opnieuw.",
+        "fr": "Aucune voix en {language} n'est installée sur cet ordinateur ; une autre voix lit donc le texte. Installer eSpeak NG (par exemple : sudo apt install espeak-ng) ajoute des voix pour de nombreuses langues ; redémarrez ensuite l'appli.",
+        "de": "Auf diesem Computer ist keine Stimme für {language} installiert, daher liest eine andere Stimme den Text. eSpeak NG zu installieren (zum Beispiel: sudo apt install espeak-ng) fügt Stimmen für viele Sprachen hinzu; starten Sie danach die App neu.",
+        "es": "No hay ninguna voz en {language} instalada en este ordenador, así que otra voz lee el texto. Instalar eSpeak NG (por ejemplo: sudo apt install espeak-ng) añade voces para muchos idiomas; luego reinicia la app.",
+        "it": "Su questo computer non è installata una voce in {language}, quindi il testo viene letto da un'altra voce. Installare eSpeak NG (ad esempio: sudo apt install espeak-ng) aggiunge voci per molte lingue; poi riavvia l'app."},
 }
 
 # messages from the processing core, matched in i18n.MESSAGE_PATTERNS; {0}, {1}... are the parts found

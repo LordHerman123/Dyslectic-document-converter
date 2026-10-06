@@ -1,0 +1,121 @@
+name: Linux and macOS builds
+
+# Builds the app for Linux and for macOS (Apple Silicon) with `flet build`, the same way the Windows drag-and-drop
+# build is made (see windows-flet-build.yml), then starts the packaged app and lets it convert a scanned PDF from
+# inside (its self-test: Python, the conversion, OCR, MP3 export and the natural voices must all work).
+# The results are a .tar.gz (Linux) and a .zip with the .app (macOS) under the workflow run's artifacts.
+# See docs/BUILDING.md for what each platform needs.
+on:
+  push:
+    branches: [software-builds]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    # the oldest supported Ubuntu: a build made on an older system also runs on newer ones
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the build tools, Tesseract and eSpeak NG
+        run: |
+          sudo apt-get update
+          # the runner's preinstalled libunwind-14-dev (from LLVM) blocks GStreamer's development package
+          sudo apt-get remove -y libunwind-14-dev || true
+          sudo apt-get install -y libunwind-dev
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libsecret-1-dev \
+            tesseract-ocr tesseract-ocr-nld tesseract-ocr-deu tesseract-ocr-fra tesseract-ocr-spa \
+            tesseract-ocr-ita tesseract-ocr-por espeak-ng xvfb pulseaudio-utils zenity
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest "flet-cli==1.0.1" "flet==1.0.1" "flet-dropzone==0.4.0"
+
+      - name: Run tests
+        run: python -m pytest -q
+
+      - name: Switch dropping files on the window on
+        run: touch dyslexia_converter/assets/dropzone.enabled
+
+      - name: flet build linux
+        env:
+          PYTHONUTF8: "1"
+        run: flet build linux --yes --verbose --product "Dyslexia Converter" --project DyslexiaConverter
+
+      - name: Start the app and let it convert a scanned PDF from inside
+        run: |
+          ls -la build/linux
+          exe=$(find build/linux -maxdepth 1 -type f -perm -u+x | head -n 1)
+          echo "Starting $exe"
+          bash .github/scripts/desktop-selftest.sh "$exe" xvfb-run -a
+
+      - name: Pack
+        run: |
+          version=$(python -c "import dyslexia_converter as d; print(d.__version__)")
+          tar -czf "DyslexiaConverter-$version-linux-x86_64.tar.gz" -C build linux --transform "s,^linux,DyslexiaConverter,"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DyslexiaConverter-linux
+          path: DyslexiaConverter-*-linux-x86_64.tar.gz
+
+  macos:
+    # Apple Silicon (M1 and later); see docs/BUILDING.md for Intel Macs
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      # Flutter's plugins use the newest macOS APIs, so the newest Xcode is needed to build (not to run the app)
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Flet's build tools and Tesseract
+        run: |
+          brew install tesseract tesseract-lang
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest "flet-cli==1.0.1" "flet==1.0.1" "flet-dropzone==0.4.0"
+
+      - name: Run tests
+        run: python -m pytest -q
+
+      - name: Switch dropping files on the window on
+        run: touch dyslexia_converter/assets/dropzone.enabled
+
+      - name: flet build macos
+        env:
+          PYTHONUTF8: "1"
+        run: flet build macos --yes --verbose --arch arm64 --product "Dyslexia Converter" --project DyslexiaConverter
+
+      - name: Start the app and let it convert a scanned PDF from inside
+        run: |
+          ls -la build/macos
+          app=$(find build/macos -maxdepth 1 -name "*.app" | head -n 1)
+          echo "Oldest macOS it runs on: $(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$app/Contents/Info.plist")"
+          exe=$(find "$app/Contents/MacOS" -maxdepth 1 -type f -perm -u+x | head -n 1)
+          echo "Starting $exe"
+          bash .github/scripts/desktop-selftest.sh "$exe"
+
+      - name: Pack
+        run: |
+          version=$(python -c "import dyslexia_converter as d; print(d.__version__)")
+          app=$(find build/macos -maxdepth 1 -name "*.app" | head -n 1)
+          # ditto keeps the .app's links and permissions (a plain zip breaks the app)
+          ditto -c -k --keepParent "$app" "DyslexiaConverter-$version-macos-arm64.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DyslexiaConverter-macos
+          path: DyslexiaConverter-*-macos-arm64.zip

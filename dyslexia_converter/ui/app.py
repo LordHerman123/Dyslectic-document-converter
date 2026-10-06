@@ -2195,9 +2195,18 @@ class ConverterApp:
                                "natural {language} voice with Natural voices in the read-aloud panel.",
                                language=self.lang_name(lang)), error=True)
             return
-        self.notify(self.t("No {language} voice is installed on this computer, so another voice reads the text. "
-                           "You can add one in Windows Settings > Time & language > Speech > Add voices, then "
-                           "restart the app.", language=self.lang_name(lang)), error=True)
+        if sys.platform == "darwin":
+            how = ("No {language} voice is installed on this Mac, so another voice reads the text. You can add one "
+                   "in System Settings > Accessibility > Spoken Content > System voice > Manage Voices, then "
+                   "restart the app.")
+        elif sys.platform == "win32":
+            how = ("No {language} voice is installed on this computer, so another voice reads the text. You can add "
+                   "one in Windows Settings > Time & language > Speech > Add voices, then restart the app.")
+        else:
+            how = ("No {language} voice is installed on this computer, so another voice reads the text. Installing "
+                   "eSpeak NG (for example: sudo apt install espeak-ng) adds voices for many languages; then restart "
+                   "the app.")
+        self.notify(self.t(how, language=self.lang_name(lang)), error=True)
 
     def _voice(self) -> Optional[str]:
         """The voice to read with: the one chosen, or the best one for the document's language."""

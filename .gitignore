@@ -10,3 +10,6 @@ tests/fixtures/
 *_printable.pdf
 selftest/
 *.spec
+
+# switched on by the build workflows (flet build with flet-dropzone); never committed
+dyslexia_converter/assets/dropzone.enabled
