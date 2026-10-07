@@ -1988,6 +1988,31 @@ T: dict[str, dict[str, str]] = {
         "de": "Auf diesem Computer ist keine Stimme für {language} installiert, daher liest eine andere Stimme den Text. eSpeak NG zu installieren (zum Beispiel: sudo apt install espeak-ng) fügt Stimmen für viele Sprachen hinzu; starten Sie danach die App neu.",
         "es": "No hay ninguna voz en {language} instalada en este ordenador, así que otra voz lee el texto. Instalar eSpeak NG (por ejemplo: sudo apt install espeak-ng) añade voces para muchos idiomas; luego reinicia la app.",
         "it": "Su questo computer non è installata una voce in {language}, quindi il testo viene letto da un'altra voce. Installare eSpeak NG (ad esempio: sudo apt install espeak-ng) aggiunge voci per molte lingue; poi riavvia l'app."},
+    "Sources at the end": {"nl": "Bronnen aan het eind", "fr": "Sources à la fin", "de": "Quellen am Ende",
+                           "es": "Fuentes al final", "it": "Fonti alla fine"},
+    "Same size as the text": {"nl": "Even groot als de tekst", "fr": "Même taille que le texte",
+                              "de": "So groß wie der Text", "es": "Del mismo tamaño que el texto",
+                              "it": "Della stessa dimensione del testo"},
+    "Small (saves pages)": {"nl": "Klein (scheelt pagina's)", "fr": "Petit (économise des pages)",
+                            "de": "Klein (spart Seiten)", "es": "Pequeño (ahorra páginas)",
+                            "it": "Piccolo (fa risparmiare pagine)"},
+    "Small, two columns (saves most)": {"nl": "Klein, twee kolommen (scheelt het meest)",
+                                        "fr": "Petit, deux colonnes (économise le plus)",
+                                        "de": "Klein, zwei Spalten (spart am meisten)",
+                                        "es": "Pequeño, dos columnas (ahorra más)",
+                                        "it": "Piccolo, due colonne (risparmia di più)"},
+    "The file window could not be opened ({error}). You can drop a file on this window instead; on Linux, installing zenity or a desktop portal also helps.": {
+        "nl": "Het bestandsvenster kon niet worden geopend ({error}). Je kunt een bestand ook op dit venster slepen; op Linux helpt ook het installeren van zenity of een desktopportaal.",
+        "fr": "La fenêtre de fichiers n'a pas pu s'ouvrir ({error}). Vous pouvez aussi déposer un fichier sur cette fenêtre ; sous Linux, installer zenity ou un portail de bureau aide aussi.",
+        "de": "Das Dateifenster konnte nicht geöffnet werden ({error}). Sie können eine Datei stattdessen auf dieses Fenster ziehen; unter Linux hilft auch die Installation von zenity oder eines Desktop-Portals.",
+        "es": "No se pudo abrir la ventana de archivos ({error}). También puedes soltar un archivo en esta ventana; en Linux, instalar zenity o un portal de escritorio también ayuda.",
+        "it": "Non è stato possibile aprire la finestra dei file ({error}). Puoi anche trascinare un file su questa finestra; su Linux aiuta anche installare zenity o un portale del desktop."},
+    "The reference list and notes at the end are always kept, with their numbers; this only changes how much paper they take.": {
+        "nl": "De literatuurlijst en de noten aan het eind blijven altijd staan, met hun nummers; dit verandert alleen hoeveel papier ze innemen.",
+        "fr": "La liste des références et les notes à la fin sont toujours conservées, avec leurs numéros ; seule la place qu'elles prennent sur le papier change.",
+        "de": "Das Literaturverzeichnis und die Anmerkungen am Ende bleiben immer erhalten, mit ihren Nummern; nur der Platz auf dem Papier ändert sich.",
+        "es": "La lista de referencias y las notas del final se conservan siempre, con sus números; solo cambia cuánto papel ocupan.",
+        "it": "La bibliografia e le note alla fine restano sempre, con i loro numeri; cambia solo quanta carta occupano."},
 }
 
 # messages from the processing core, matched in i18n.MESSAGE_PATTERNS; {0}, {1}... are the parts found
