@@ -540,7 +540,7 @@ class ConverterApp:
                 ft.Row([self.dropdown("sources_layout", t("Sources at the end"),
                                       [("normal", t("Same size as the text")),
                                        ("small", t("Small (saves pages)")),
-                                       ("columns", t("Small, in two columns (saves the most)"))])]),
+                                       ("columns", t("Small, two columns (saves most)"))])]),
                 self.text(t("The reference list and notes at the end are always kept, with their numbers; this "
                             "only changes how much paper they take."), 12, italic=True),
                 self.switch("remove_headers_footers", t("Hide running headers, footers and page numbers")),
@@ -948,9 +948,9 @@ class ConverterApp:
         if not data:
             self.notify(t("Nothing has been sent to an AI provider yet."))
             return
-        path = await self.file_picker.save_file(dialog_title=t("Save privacy log"), file_name="ai_privacy_log.txt",
-                                                allowed_extensions=["txt"], file_type=ft.FilePickerFileType.CUSTOM,
-                                                src_bytes=data)
+        path = await self._file_dialog("save_file", dialog_title=t("Save privacy log"), file_name="ai_privacy_log.txt",
+                                       allowed_extensions=["txt"], file_type=ft.FilePickerFileType.CUSTOM,
+                                       src_bytes=data)
         if path and not self.page.web and not self.page.platform.is_mobile():
             if not Path(path).exists() or Path(path).stat().st_size != len(data):
                 Path(path).write_bytes(data)
@@ -1723,13 +1723,25 @@ class ConverterApp:
             self.status.value = message
         self.page.update()
 
+    async def _file_dialog(self, method: str, **kw):
+        """The system's open or save window (``method``: pick_files / save_file); None when it cannot be shown
+        (on Linux the window comes from the desktop through D-Bus, which a bare session may not have): the user
+        is told how to go on instead of the app stopping."""
+        try:
+            return await getattr(self.file_picker, method)(**kw)
+        except Exception as ex:  # noqa: BLE001
+            log.warning("file dialog failed", exc_info=True)
+            self.notify(self.t("The file window could not be opened ({error}). You can drop a file on this window "
+                               "instead; on Linux, installing zenity or a desktop portal also helps.",
+                               error=f"{type(ex).__name__}"), error=True)
+            return None
+
     # ================================================================ events
     async def on_open(self, e):
         """Open PDF: choose a file (in the web version it is uploaded to a private working copy) and load it."""
-        files = await self.file_picker.pick_files(dialog_title=self.t("Choose a PDF, Word or EPUB file"),
-                                                  allowed_extensions=[x.lstrip(".") for x in OPENABLE],
-                                                  file_type=ft.FilePickerFileType.CUSTOM,
-                                                  with_data=self.page.web)
+        files = await self._file_dialog("pick_files", dialog_title=self.t("Choose a PDF, Word or EPUB file"),
+                                        allowed_extensions=[x.lstrip(".") for x in OPENABLE],
+                                        file_type=ft.FilePickerFileType.CUSTOM, with_data=self.page.web)
         if not files:
             return
         f = files[0]
@@ -2932,9 +2944,9 @@ class ConverterApp:
     async def save_bytes(self, data: bytes, file_name: str, ext: str) -> None:
         """Let the user choose where to save a file (never over the original PDF) and save it there."""
         t = self.t
-        path = await self.file_picker.save_file(dialog_title=t("Save converted file"), file_name=file_name,
-                                                allowed_extensions=[ext], file_type=ft.FilePickerFileType.CUSTOM,
-                                                src_bytes=data)
+        path = await self._file_dialog("save_file", dialog_title=t("Save converted file"), file_name=file_name,
+                                       allowed_extensions=[ext], file_type=ft.FilePickerFileType.CUSTOM,
+                                       src_bytes=data)
         if path and not self.page.web and not self.page.platform.is_mobile():
             if self.source_path and Path(path).resolve() == Path(self.source_path).resolve():
                 self.notify(t("That is the original PDF - choose a different name so it is not overwritten."),
