@@ -537,6 +537,12 @@ class ConverterApp:
                             t("Automated citation detection can make mistakes. Original citation text is kept.")),
                 self.text(t("Automated citation detection can make mistakes; the original citation text is "
                             "always kept in the list."), 12, italic=True),
+                ft.Row([self.dropdown("sources_layout", t("Sources at the end"),
+                                      [("normal", t("Same size as the text")),
+                                       ("small", t("Small (saves pages)")),
+                                       ("columns", t("Small, in two columns (saves the most)"))])]),
+                self.text(t("The reference list and notes at the end are always kept, with their numbers; this "
+                            "only changes how much paper they take."), 12, italic=True),
                 self.switch("remove_headers_footers", t("Hide running headers, footers and page numbers")),
                 self.switch("show_decorative_images", t("Show logos and decorative images")),
                 ft.Row([self.dropdown("table_mode", t("Tables"),

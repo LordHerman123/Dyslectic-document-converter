@@ -48,6 +48,7 @@ class FormatSettings:
     remove_headers_footers: bool = True
     move_citations: bool = False
     move_footnotes: bool = True
+    sources_layout: str = "normal"  # reference list and notes at the end: normal / small / columns (small, 2 columns)
     include_contents: bool = True
     table_mode: str = "auto"  # auto / image
     show_decorative_images: bool = False  # logos, badges, ornaments

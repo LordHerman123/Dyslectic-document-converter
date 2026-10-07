@@ -516,6 +516,79 @@ class _SourceMark(Flowable):
         pass
 
 
+class _TwoColumns(Flowable):
+    """Entries (the reference list, notes) in two columns: the left column is filled first, then the right; on
+    the last page the two are made about equally long. Splits over pages like a paragraph does."""
+
+    def __init__(self, items: list[Flowable], gap: float, cols: Optional[list] = None):
+        super().__init__()
+        self.items = items
+        self.gap = gap
+        self._cols = cols  # a page already laid out: [[(flowable, height), ...], [...]]
+        self._rest: list[Flowable] = []
+
+    def _fill(self, w: float, h: float) -> tuple[list, list]:
+        """Place the entries in two columns ``h`` high: the columns, and the entries that did not fit."""
+        cols: list[list] = [[], []]
+        queue = list(self.items)
+        for col in cols:
+            y = 0.0
+            while queue:
+                f = queue[0]
+                fh = f.wrap(w, h - y)[1]
+                if y + fh <= h + 0.01:
+                    col.append((f, fh))
+                    y += fh
+                    queue.pop(0)
+                    continue
+                parts = f.split(w, h - y) if h - y > 1 else []
+                if len(parts) >= 2:
+                    ph = parts[0].wrap(w, h - y)[1]
+                    col.append((parts[0], ph))
+                    queue[0:1] = parts[1:]
+                break
+        return cols, queue
+
+    def wrap(self, availWidth, availHeight):
+        self._w = (availWidth - self.gap) / 2
+        if self._cols is not None:
+            return availWidth, max(sum(fh for _, fh in c) for c in self._cols)
+        total = sum(f.wrap(self._w, 1e6)[1] for f in self.items)
+        cols, rest = self._fill(self._w, availHeight)
+        if not rest and total > 0:
+            # everything fits on this page: the shortest height that still holds it all, so the columns end level
+            lo, hi = total / 2, availHeight
+            for _ in range(12):
+                mid = (lo + hi) / 2
+                c, r = self._fill(self._w, mid)
+                if r:
+                    lo = mid
+                else:
+                    hi, cols = mid, c
+        self._cols_try, self._rest = cols, rest
+        if rest:  # more than fits on this page: say so, so the page is split here (nothing may be left out)
+            return availWidth, availHeight + 1
+        return availWidth, max([sum(fh for _, fh in c) for c in cols] + [0.0])
+
+    def split(self, availWidth, availHeight):
+        self.wrap(availWidth, availHeight)
+        if not self._rest:
+            return [self]
+        if not any(self._cols_try):
+            return []  # nothing fits on this page: start on the next one
+        return [_TwoColumns([], self.gap, self._cols_try), _TwoColumns(self._rest, self.gap)]
+
+    def draw(self):
+        cols = self._cols if self._cols is not None else self._cols_try
+        top = max([sum(fh for _, fh in c) for c in cols] + [0.0])
+        for n, col in enumerate(cols):
+            x = n * (self._w + self.gap)
+            y = top
+            for f, fh in col:
+                y -= fh
+                f.drawOn(self.canv, x, y)
+
+
 class _Doc(BaseDocTemplate):
     """The document template: keeps track of which original pages each converted page shows, collects headings for
     the contents page, and tags the content for screen readers.
@@ -543,6 +616,9 @@ class _Doc(BaseDocTemplate):
             if level <= 2:
                 key = f"h{id(flowable)}"
                 self.notify("TOCEntry", (level, title, self.page, key))
+
+
+SOURCE_KINDS = ("reference", "endnote")  # the lists at the end that "Sources at the end" sets small or in columns
 
 
 def _styles(s: FormatSettings, printable: bool) -> dict[str, PStyle]:
@@ -584,6 +660,15 @@ def _styles(s: FormatSettings, printable: bool) -> dict[str, PStyle]:
                          color=color if ink else MUTED, space_before=s.paragraph_spacing * 2, align="left",
                          border=RULE if not ink else colors.grey, padding=s.font_size * 0.7),
     }
+    if s.sources_layout in ("small", "columns"):
+        # the reference list and notes at the end set small and tight, to save pages when printing
+        # two columns: narrow lines read well a little smaller and tighter still
+        size = max(7.5, s.font_size * (0.66 if s.sources_layout == "columns" else 0.72))
+        lead = size * min(s.line_spacing, 1.22 if s.sources_layout == "columns" else 1.3)
+        gap = min(s.paragraph_spacing * 0.3, size * 0.5)
+        styles["reference"] = replace(styles["reference"], size=size, leading=lead, space_after=gap)
+        styles["endnote"] = replace(styles["endnote"], size=size, leading=lead, space_after=gap,
+                                    marker_width=size * 4.4)
     for level in range(1, 7):
         factor = {1: 1.15, 2: 1.05, 3: 1.0}.get(level, 1.0) * hs
         size = s.font_size * factor
@@ -739,7 +824,7 @@ def build_pdf(result: ComposeResult, s: FormatSettings, title: str = "", author:
     doc = _Doc(buf, pagesize=A4, leftMargin=ml, rightMargin=mr, topMargin=mt, bottomMargin=mb,
                title=title or "Converted document", author=author,
                subject="Reformatted for easier reading", creator="Dyslexia Converter")
-    frame = Frame(frame_x, mb, col_w, frame_h, leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0)
+    frame = Frame(frame_x, mb, col_w, frame_h, leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0, id="text")
     doc.addPageTemplates([PageTemplate("main", [frame], onPage=on_page)])
     tagger = doc.tagger = Tagger()
 
@@ -849,6 +934,18 @@ def build_pdf(result: ComposeResult, s: FormatSettings, title: str = "", author:
             st = replace(st, pad_top=None if first else s.font_size * 0.2,
                          pad_bottom=None if last else s.font_size * 0.2, extend_bg_below=not last,
                          space_after=s.paragraph_spacing * (1.2 if last else 0.4))
+        if kind in SOURCE_KINDS and s.sources_layout == "columns":
+            # the whole run of references (or notes) in two columns, balanced so the last page is not half empty
+            group = []
+            # the gap between entries as padding: space after a paragraph is not counted when columns are measured,
+            # so the columns would run past the bottom of the page
+            col_st = replace(st, space_after=0, pad_bottom=st.space_after)
+            while i < len(items) and items[i].kind == kind:
+                g = items[i]
+                group.append(tag(RichParagraph(g.runs, col_st, marker=g.marker), tagger, STRUCT_KINDS.get(kind, "P")))
+                i += 1
+            story += [_TwoColumns(group, 0.7 * cm), Spacer(1, s.paragraph_spacing)]
+            continue
         marker = it.marker
         story.append(tag(RichParagraph(it.runs, st, marker=marker, keep_with_next=it.keep_with_next), tagger,
                          STRUCT_KINDS.get(kind, "P")))

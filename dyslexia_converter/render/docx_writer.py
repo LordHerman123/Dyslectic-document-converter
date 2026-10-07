@@ -79,6 +79,19 @@ def _add_runs(p, item: RItem, s: FormatSettings, size: float, bold_all: bool = F
             _set_char_spacing(run, s.letter_spacing)
 
 
+def _columns_section(d, n: int) -> None:
+    """Continue on the same page in a new section with ``n`` text columns (the reference list in two)."""
+    from docx.enum.section import WD_SECTION
+
+    sec = d.add_section(WD_SECTION.CONTINUOUS)
+    cols = sec._sectPr.find(qn("w:cols"))
+    if cols is None:
+        cols = OxmlElement("w:cols")
+        sec._sectPr.append(cols)
+    cols.set(qn("w:num"), str(n))
+    cols.set(qn("w:space"), str(int(0.7 / 2.54 * 1440)))  # 0.7 cm between the columns, in twentieths of a point
+
+
 def build_docx(result: ComposeResult, s: FormatSettings, title: str = "", author: str = "") -> bytes:
     """The composed document as a Word file (bytes): A4 page, the reading column as margins, the user's font and
     spacing, headings as Word headings.
@@ -120,9 +133,13 @@ def build_docx(result: ComposeResult, s: FormatSettings, title: str = "", author
 
     items = result.items
     i = 0
+    in_columns = False
     while i < len(items):
         it = items[i]
         k = it.kind
+        if s.sources_layout == "columns" and (k in ("reference", "endnote")) != in_columns:
+            in_columns = not in_columns
+            _columns_section(d, 2 if in_columns else 1)
         if k == "title":
             p = d.add_paragraph(style="Title")
             _add_runs(p, it, s, s.font_size * 1.45 * s.heading_scale, bold_all=True)
@@ -171,6 +188,10 @@ def build_docx(result: ComposeResult, s: FormatSettings, title: str = "", author
                 size = max(8.5, s.font_size * 0.82)
             elif k in ("reference", "endnote"):
                 size = s.font_size * 0.93
+                if s.sources_layout in ("small", "columns"):  # set small and tight to save pages
+                    size = max(7.5, s.font_size * (0.66 if s.sources_layout == "columns" else 0.72))
+                    p.paragraph_format.space_after = Pt(min(s.paragraph_spacing * 0.3, size * 0.5))
+                    p.paragraph_format.line_spacing = min(s.line_spacing, 1.2)
             if it.marker:
                 p.paragraph_format.left_indent = Cm(1.0)
                 p.paragraph_format.first_line_indent = Cm(-1.0)
