@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write  # to attach the files to the release (tags only)
 
 jobs:
   linux:
@@ -66,6 +66,13 @@ jobs:
           name: DyslexiaConverter-linux
           path: DyslexiaConverter-*-linux-x86_64.tar.gz
 
+      - name: Attach to GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Dyslexia Converter ${{ github.ref_name }}
+          files: DyslexiaConverter-*-linux-x86_64.tar.gz
+
   macos:
     # Apple Silicon (M1 and later); see docs/BUILDING.md for Intel Macs
     runs-on: macos-15
@@ -119,3 +126,10 @@ jobs:
         with:
           name: DyslexiaConverter-macos
           path: DyslexiaConverter-*-macos-arm64.zip
+
+      - name: Attach to GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Dyslexia Converter ${{ github.ref_name }}
+          files: DyslexiaConverter-*-macos-arm64.zip
