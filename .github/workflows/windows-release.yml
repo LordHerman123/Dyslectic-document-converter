@@ -90,10 +90,16 @@ jobs:
           files: |
             dist/*.zip
             dist/*-setup.exe
+          # the Linux and macOS builds attach their files to this same release (desktop-builds.yml)
           body: |
-            **Download:** `DyslexiaConverter-…-setup.exe` (installer, no administrator rights needed)
-            or `DyslexiaConverter-…-windows.zip` (unzip and double-click `DyslexiaConverter.exe`).
-            Text recognition (Tesseract) is included; nothing else needs to be installed.
+            ## Download
 
-            Windows may show "Windows protected your PC" the first time (the program is not code-signed):
-            click **More info → Run anyway**.
+            | Computer | File | How |
+            |---|---|---|
+            | **Windows 10/11** | `DyslexiaConverter-…-setup.exe` | Run it (no administrator rights needed). Or `…-windows.zip`: unzip and double-click `DyslexiaConverter.exe`. Text recognition for scans is included. |
+            | **Mac** (M1 or newer, macOS 11+) | `DyslexiaConverter-…-macos-arm64.zip` | Unzip, then **right-click the app → Open** the first time. For scanned PDFs: `brew install tesseract tesseract-lang`. |
+            | **Linux** (64-bit) | `DyslexiaConverter-…-linux-x86_64.tar.gz` | Unpack and run `DyslexiaConverter`. For scans: `sudo apt install tesseract-ocr`; for the computer's voices: `sudo apt install espeak-ng`. |
+
+            The apps are not code-signed: Windows may show "Windows protected your PC" the first time (click
+            **More info → Run anyway**), and a Mac asks to confirm opening it once (right-click → Open).
+            The Mac and Linux files appear a few minutes after the Windows ones.

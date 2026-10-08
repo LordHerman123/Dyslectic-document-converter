@@ -22,7 +22,7 @@ the same on all three.
 
 ## Getting the builds without setting anything up
 
-Publishing a release (a tag such as `v1.17.0`) builds all three: *Windows release* and *Linux and macOS builds*. Both
+Publishing a release (a tag such as `v1.17.0`) builds all three (*Windows release* and *Linux and macOS builds*) and attaches them to that release, so one page has the Windows, Mac and Linux downloads. Both
 can also be started by hand from the *Actions* tab (*Run workflow*, choose the branch). Each runs the tests, then **starts the packaged app** and lets it convert a scanned PDF from inside it
 (the same self-test as the Windows build: Python, the conversion, OCR with Tesseract, MP3 export and the natural
 voices must all work). The files are under the workflow run's *Artifacts*.
