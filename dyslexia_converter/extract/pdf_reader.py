@@ -1930,6 +1930,56 @@ def _caption_tables(page: pymupdf.Page, lines: list[RawLine], existing: list[Raw
 
 # --------------------------------------------------------------------------- OCR pages
 
+OCR_GAP_MIN_WORDS = 2  # words needed on each side of a gutter
+OCR_COLUMN_GAP = 6.0  # a gutter is wider than this many times the text height
+
+
+def _split_wide_gaps(groups: dict) -> dict:
+    """Lines as OCR found them, split at a column gutter that OCR read across: two columns side by side read as
+    one line each (as Tesseract sometimes does with a narrow column, such as an article's "article info" box,
+    next to a wide one). A gutter is a gap much wider than the space between words, with words on both sides,
+    that a line just above or below also has at the same place. Each side becomes a block of its own, so the
+    columns are read one after the other. A single wide gap (a label beside a figure, a page number after a
+    title) is left alone."""
+    info = []  # (key, words, line height, wide gaps)
+    for key, words in groups.items():
+        words = sorted(words, key=lambda w: w.bbox[0])
+        heights = sorted(w.bbox[3] - w.bbox[1] for w in words)
+        h = heights[len(heights) // 2]
+        n = OCR_GAP_MIN_WORDS
+        gaps = [(words[i - 1].bbox[2], words[i].bbox[0]) for i in range(n, len(words) - n + 1)
+                if words[i].bbox[0] - words[i - 1].bbox[2] > OCR_COLUMN_GAP * h]
+        info.append((key, words, h, gaps))
+    out: dict = {}
+    for key, words, h, gaps in info:
+        y0, y1 = min(w.bbox[1] for w in words), max(w.bbox[3] for w in words)
+        cut = None
+        for a0, a1 in gaps:
+            for key2, words2, h2, gaps2 in info:
+                if key2 == key or not gaps2:
+                    continue
+                b_y0, b_y1 = min(w.bbox[1] for w in words2), max(w.bbox[3] for w in words2)
+                if b_y0 > y1 + 2 * h or b_y1 < y0 - 2 * h:  # not a neighbouring line
+                    continue
+                for b0, b1 in gaps2:
+                    if min(a1, b1) - max(a0, b0) > 0:
+                        cut = (max(a0, b0) + min(a1, b1)) / 2
+                        break
+                if cut is not None:
+                    break
+            if cut is not None:
+                break
+        left = [w for w in words if w.bbox[2] <= cut] if cut is not None else words
+        right = [w for w in words if w.bbox[2] > cut] if cut is not None else []
+        if cut is None or max(len(left), len(right)) < 5:  # table rows (short cells) keep their order
+            out[key] = words
+            continue
+        bn, par, ln = key
+        out[key] = left
+        out[(bn + 500, par, ln)] = right
+    return out
+
+
 def _ocr_image(png: bytes, dpi: int, width_pt: float, height_pt: float, pno: int, engine: OcrEngine,
                languages: list[str], crop: Callable[[Rect], ImageData]) -> tuple[list[RawLine], list[RawFigure]]:
     """OCR one image and return lines/figures in points relative to that image."""
@@ -1939,8 +1989,7 @@ def _ocr_image(png: bytes, dpi: int, width_pt: float, height_pt: float, pno: int
     for w in res.words:
         groups.setdefault((w.block, w.paragraph, w.line), []).append(w)
     lines: list[RawLine] = []
-    for (bn, par, _ln), words in groups.items():
-        words.sort(key=lambda w: w.bbox[0])
+    for (bn, par, _ln), words in _split_wide_gaps(groups).items():
         text = ""
         conf: list[OcrWordConfidence] = []
         for w in words:
