@@ -7,14 +7,14 @@ The build settings for each system are in `pyproject.toml` under `[tool.flet.win
 
 | | Windows | macOS | Linux |
 |---|---|---|---|
-| Built by | `windows-release.yml` (installer + zip, on a release tag), `windows-flet-build.yml` (drag and drop test build) | `desktop-builds.yml` | `desktop-builds.yml` |
+| Built by | `windows-release.yml` (installer + zip, on a release tag) | `desktop-builds.yml` | `desktop-builds.yml` |
 | Download | `…-setup.exe` / `…-windows.zip` | `…-macos-arm64.zip` (the `.app`) | `…-linux-x86_64.tar.gz` |
 | Runs on | Windows 10 and 11 (64-bit) | macOS 11 or later on Apple Silicon (M1 and later) | 64-bit Linux with GTK 3 (Ubuntu 22.04 or later, Debian 12, Fedora 38, …) |
 | Tesseract (OCR for scans) | included | install it: `brew install tesseract tesseract-lang` | install it: `sudo apt install tesseract-ocr` (+ `tesseract-ocr-nld` etc. for other languages) |
 | Computer voices | Windows voices (all installed in Settings > Time & language > Speech) | the Mac's own voices (System Settings > Accessibility > Spoken Content) | eSpeak NG: `sudo apt install espeak-ng` |
 | Natural voices (Piper) | yes | yes | yes |
 | MP3 export | yes | yes | yes |
-| Drop files on the window | yes | yes | yes |
+| Drop files on the window | — (use Open file, or drop on the app icon) | yes | yes |
 | Voice typing for notes | microphone button (Windows voice typing) | macOS Dictation in the note (press Fn twice) | — |
 
 Everything the app does with documents (conversion, focus mode, highlights and notes, exports, reading aloud) is
@@ -22,8 +22,8 @@ the same on all three.
 
 ## Getting the builds without setting anything up
 
-Every push to the `software-builds` branch (or a manual run from the *Actions* tab → *Linux and macOS builds*)
-builds both, runs the tests, then **starts the packaged app** and lets it convert a scanned PDF from inside it
+Publishing a release (a tag such as `v1.17.0`) builds all three: *Windows release* and *Linux and macOS builds*. Both
+can also be started by hand from the *Actions* tab (*Run workflow*, choose the branch). Each runs the tests, then **starts the packaged app** and lets it convert a scanned PDF from inside it
 (the same self-test as the Windows build: Python, the conversion, OCR with Tesseract, MP3 export and the natural
 voices must all work). The files are under the workflow run's *Artifacts*.
 
@@ -40,9 +40,7 @@ The first `flet build` downloads Flutter (about 1 GB) by itself.
 
 ### Windows
 
-See [windows/README.md](../windows/README.md) (installer and zip with Tesseract included). For the drag-and-drop
-build: `flet build windows --product "Dyslexia Converter" --project DyslexiaConverter` (Visual Studio 2022 with
-"Desktop development with C++" is needed).
+See [windows/README.md](../windows/README.md) (installer and zip with Tesseract included).
 
 ### macOS
 

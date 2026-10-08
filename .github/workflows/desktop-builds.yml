@@ -1,13 +1,13 @@
 name: Linux and macOS builds
 
-# Builds the app for Linux and for macOS (Apple Silicon) with `flet build`, the same way the Windows drag-and-drop
-# build is made (see windows-flet-build.yml), then starts the packaged app and lets it convert a scanned PDF from
+# Builds the app for Linux and for macOS (Apple Silicon) with `flet build`, then starts the packaged app and lets it convert a scanned PDF from
 # inside (its self-test: Python, the conversion, OCR, MP3 export and the natural voices must all work).
 # The results are a .tar.gz (Linux) and a .zip with the .app (macOS) under the workflow run's artifacts.
 # See docs/BUILDING.md for what each platform needs.
+# Runs for a release (a tag such as v1.17.0, like the Windows release) and can be started by hand from the Actions tab.
 on:
   push:
-    branches: [software-builds]
+    tags: ["v*", "Version-*"]
   workflow_dispatch:
 
 permissions:
