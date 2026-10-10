@@ -21,6 +21,7 @@ import numpy as np
 import pymupdf
 
 from ..model import ImageData, OcrWordConfidence, PageInfo, Rect, StyleRange, TableData
+from . import mathtree
 from .mathtext import TEX_TEXT_FONT_RE, base_font, is_math_font, is_math_italic, math_text
 from .ocr import OcrEngine
 
@@ -1336,6 +1337,8 @@ def _equations(page: pymupdf.Page, lines: list[RawLine]) -> tuple[list[RawFigure
     for l in lines:
         if CAPTION_RE.match(l.text) or (l.bold and l.size > body * 1.05) or l.text[:1] in "•◦▪●‣":
             continue  # captions, headings and bullet points are text
+        if l.text.lstrip().startswith("//"):
+            continue  # a comment in pseudo-code ("// mini-batch mean") is text
         if l.size < body * 0.88:
             continue  # small print (footnotes, notes) keeps its formulas inline
         left, right = column(l)
@@ -1428,6 +1431,38 @@ def _equations(page: pymupdf.Page, lines: list[RawLine]) -> tuple[list[RawFigure
     if not marked:
         return [], lines
 
+    # column gutters of the page: x positions that almost no line of prose crosses, with prose on both sides
+    # (found from the lines themselves, so that lines running over the gutter do not hide it)
+    prose_lines = [l for l in lines if _math_profile(l)[3] >= 3]
+    gutters: list[float] = []
+    if len(prose_lines) >= 10:
+        n = len(prose_lines)
+        x0s = np.array([l.x0 for l in prose_lines])[:, None]
+        x1s = np.array([l.x1 for l in prose_lines])[:, None]
+        gx = np.arange(int(x0s.min()) + 20, int(x1s.max()) - 20, 2.0)[None, :]
+        crossing = ((x0s < gx) & (gx < x1s)).sum(axis=0)
+        left_of, right_of = (x1s <= gx).sum(axis=0), (x0s >= gx).sum(axis=0)
+        ok = (crossing <= 0.25 * n) & (left_of >= 0.25 * n) & (right_of >= 0.25 * n)
+        gutters = [float(g) for g in gx[0][ok]]
+
+    def apart(ax0: float, ax1: float, bx0: float, bx1: float, y0: float, y1: float) -> bool:
+        """Two pieces side by side with an empty vertical channel between them (no text line crosses it over their
+        height) that is wide (3 em) or holds a column gutter: separate columns or boxes, not one formula."""
+        lo, hi = (ax1, bx0) if ax1 <= bx0 else (bx1, ax0)
+        if hi - lo < 0.5 * body:
+            return False
+        spans = sorted((max(lo, l.x0), min(hi, l.x1)) for l in lines
+                       if l.y1 > y0 and l.y0 < y1 and l.x1 > lo and l.x0 < hi)
+        edge, channels = lo, []
+        for a, b in spans:
+            if a > edge:
+                channels.append((edge, a))
+            edge = max(edge, b)
+        if hi > edge:
+            channels.append((edge, hi))
+        return any(b - a >= 3 * body or (b - a >= 0.5 * body and any(a <= g <= b for g in gutters))
+                   for a, b in channels)
+
     # join neighbouring formula lines (fractions, sum limits, multi-line equations) into regions
     marked.sort(key=lambda l: (l.y0, l.x0))
     regions: list[list[RawLine]] = []
@@ -1436,12 +1471,34 @@ def _equations(page: pymupdf.Page, lines: list[RawLine]) -> tuple[list[RawFigure
             y0, y1 = min(m.y0 for m in reg), max(m.y1 for m in reg)
             x1 = max(m.x1 for m in reg)
             same_col = column(reg[0]) == column(l)
+            # never across an empty channel: two columns can be taken for one when lines run over the gutter
+            rx0 = min(m.x0 for m in reg)
             if same_col and l.y0 - y1 < 1.1 * max(l.size, body) and l.y1 > y0 - 1.1 * body \
-                    and not (l.x0 > x1 + 3 * body and l.y0 > y1):
+                    and not (l.x0 > x1 + 3 * body and l.y0 > y1) \
+                    and not apart(rx0, x1, l.x0, l.x1, min(y0, l.y0), max(y1, l.y1)):
                 reg.append(l)
                 break
         else:
             regions.append([l])
+    merged = True
+    while merged:  # pieces of one wide formula (numerators, limits) that started regions of their own
+        merged = False
+        for a in regions:
+            for b in regions:
+                if a is b or column(a[0]) != column(b[0]):
+                    continue
+                ax0, ax1 = min(l.x0 for l in a), max(l.x1 for l in a)
+                bx0, bx1 = min(l.x0 for l in b), max(l.x1 for l in b)
+                ay0, ay1 = min(l.y0 for l in a), max(l.y1 for l in a)
+                by0, by1 = min(l.y0 for l in b), max(l.y1 for l in b)
+                if min(ay1, by1) - max(ay0, by0) > -0.6 * body and \
+                        not apart(ax0, ax1, bx0, bx1, min(ay0, by0), max(ay1, by1)):
+                    a.extend(b)
+                    regions.remove(b)
+                    merged = True
+                    break
+            if merged:
+                break
     used = {id(l) for reg in regions for l in reg}
     # equation numbers on the same height, and short pieces sitting inside a region
     # and the rest of a cases block: conditions in words beside it, rows below it that stay indented
@@ -1473,15 +1530,40 @@ def _equations(page: pymupdf.Page, lines: list[RawLine]) -> tuple[list[RawFigure
                 prof = _math_profile(l)
                 cells = touching and rx0 - 1 <= l.x0 and l.x1 <= rx1 + 1 and prof[3] == 0 and prof[2] > 0 \
                     and prof[1] / prof[2] >= 0.8 and len(l.text) <= 40 and not inline(l)
+                numbered = any(l is n for n in numbers)
+                if not numbered and (l.text.lstrip().startswith("//")
+                                     or apart(rx0, rx1, l.x0, l.x1, min(y0, l.y0), max(y1, l.y1))):
+                    continue  # pseudo-code comments, and text across a wide gap, are not part of the formula
                 if beside or row or cells:
                     reg.append(l)
                     used.add(id(l))
                     grown = True
 
+    # regions that grew over each other are one formula (otherwise a piece would be shown twice)
+    merged = True
+    while merged:
+        merged = False
+        for a in regions:
+            for b in regions:
+                if a is not b and min(max(l.x1 for l in a), max(l.x1 for l in b)) > max(min(l.x0 for l in a), min(
+                        l.x0 for l in b)) and min(max(l.y1 for l in a), max(l.y1 for l in b)) > max(
+                        min(l.y0 for l in a), min(l.y0 for l in b)):
+                    a.extend(l for l in b if all(l is not m for m in a))
+                    regions.remove(b)
+                    merged = True
+                    break
+            if merged:
+                break
+
     try:
         drawings = [tuple(d["rect"]) for d in page.get_drawings()]
     except Exception:
         drawings = []
+    try:  # some PDF makers (Ghostscript) draw fraction bars as hairline images
+        bars = [tuple(i["bbox"]) for i in page.get_image_info()
+                if i["bbox"][3] - i["bbox"][1] < 1.6 and i["bbox"][2] - i["bbox"][0] > 1.5]
+    except Exception:
+        bars = []
     figures: list[RawFigure] = []
     for reg in regions:
         math_chars = sum(_math_profile(l)[0] for l in reg)
@@ -1515,6 +1597,9 @@ def _equations(page: pymupdf.Page, lines: list[RawLine]) -> tuple[list[RawFigure
         # a long equation broken over lines (multline) spans the whole column: its lines go one below the
         # other as separate pictures, so that each keeps a readable size
         bands = _ink_bands(pix, body) if rect[2] - rect[0] > 0.7 * (right - left) else []
+        numbered_rows = _numbered_rows(pix, reg, numbers, clip[1], body)
+        if len(numbered_rows) > 1:
+            bands = numbered_rows
         if len(bands) < 2:
             bands = [(0, pix.height)]
         scale = 72.0 / EQUATION_DPI
@@ -1524,10 +1609,50 @@ def _equations(page: pymupdf.Page, lines: list[RawLine]) -> tuple[list[RawFigure
             members = [l for l in reg if y0 - 1 <= (l.y0 + l.y1) / 2 <= y1 + 1] if len(bands) > 1 else reg
             png, width, height = _close_number_gap(part, body)
             box = (clip[0], y0, clip[0] + width * scale, y1)
-            img = ImageData(png, "png", width, height, kind="equation", alt=alt_of(members), text_size=float(body))
+            alt = alt_of(members)
+            formula = mathtree.linear(page, (clip[0], y0, clip[2], y1), drawings + bars, float(body),
+                                      [(l.x0, l.y0, l.x1, l.y1) for l in members])
+            img = ImageData(png, "png", width, height, kind="equation", alt=formula.labelled() if formula else alt,
+                            text_size=float(body))
+            img.glyph_text = formula.glyphs if formula else alt  # the printed symbols it was built from
+            img.eq_number = formula.number if formula else ""
             figures.append(RawFigure(box, img))
     rest = [l for l in lines if id(l) not in used]
     return figures, rest
+
+
+def _numbered_rows(pix: pymupdf.Pixmap, reg: list[RawLine], numbers: list[RawLine], top: float,
+                   body: float) -> list[tuple[int, int]]:
+    """A region holding several equation numbers (an aligned derivation numbered per row) is cut into one picture
+    per numbered row, at clear pixel rows between the numbers. No cut is made where no clear row exists."""
+    nums = sorted((l for l in reg if any(l is n for n in numbers)), key=lambda l: l.y0)
+    if len(nums) < 2:
+        return []
+    try:
+        alpha = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, -1]
+    except Exception:
+        return []
+    blank = alpha.max(axis=1) <= 20
+    scale = EQUATION_DPI / 72.0
+    cuts = []
+    for a, b in zip(nums, nums[1:]):
+        mid = int((((a.y0 + a.y1) / 2 + (b.y0 + b.y1) / 2) / 2 - top) * scale)
+        reach = int(0.6 * body * scale)
+        free = [y for y in range(max(0, mid - reach), min(pix.height, mid + reach)) if blank[y]]
+        if not free:
+            return []
+        runs, cur = [], [free[0]]
+        for y in free[1:]:
+            if y == cur[-1] + 1:
+                cur.append(y)
+            else:
+                runs.append(cur)
+                cur = [y]
+        runs.append(cur)
+        widest = max(runs, key=len)  # the gap between the rows, not the one between a sum and its limit
+        cuts.append(widest[len(widest) // 2])
+    edges = [0] + cuts + [pix.height]
+    return [(y0, y1) for y0, y1 in zip(edges, edges[1:]) if y1 - y0 > 2]
 
 
 def _ink_bands(pix: pymupdf.Pixmap, body: float) -> list[tuple[int, int]]:
