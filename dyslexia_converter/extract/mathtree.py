@@ -26,7 +26,8 @@ from typing import Optional
 
 import pymupdf
 
-from .mathtext import base_font, is_math_font, is_math_italic, math_char
+from . import mathabx
+from .mathtext import EXT_FONT_RE, base_font, is_math_font, is_math_italic, math_char
 
 # each part of the structure analysis can be switched off, to measure what it contributes (all on in normal use)
 ENABLED = {"fractions": True, "radicals": True, "limits": True, "scripts": True, "matrices": True,
@@ -40,10 +41,12 @@ FUNCTION_WORDS = {"lim", "log", "ln", "exp", "sin", "cos", "tan", "tanh", "max",
 NEGATED = {"=": "≠", "∈": "∉", "<": "≮", ">": "≯", "≤": "≰", "≥": "≱", "≡": "≢", "∼": "≁", "≈": "≉", "⊂": "⊄",
            "⊆": "⊈", "∃": "∄"}
 ACCENTS = {"ˆ": "hat", "^": "hat", "˜": "tilde", "~": "tilde", "¯": "bar", "ˉ": "bar", "˙": "dot", "¨": "ddot"}
+ACCENTED = ("hat(", "tilde(", "bar(", "dot(", "ddot(")
+PRIMES = "′″‴"
 OPEN, CLOSE = "([{⟨⌊⌈|‖", ")]}⟩⌋⌉|‖"
 PAIRS = {"(": ")", "[": "]", "{": "}", "|": "|", "‖": "‖", "⟨": "⟩"}
-EXT_FONT = re.compile(r"^(CMEX|TXEX|PXEX|NTXEX|EUEX|MTEX|RMTEX)", re.I)
 NUMBER = re.compile(r"^\((\d{1,3}[a-z]?)\)$")
+ROW_NUMBER = "\x00{}\x00"  # a row's equation number inside the text, until it is written out
 
 
 class Unsure(Exception):
@@ -112,36 +115,57 @@ def _glyphs(page: pymupdf.Page, rect: pymupdf.Rect, areas: Optional[list] = None
                 raise Unsure("rotated text")
             for span in line["spans"]:
                 font = span["font"]
-                ext = bool(EXT_FONT.match(base_font(font)))
+                ext = bool(EXT_FONT_RE.match(base_font(font)))
+                abx = mathabx.FONT_RE.match(base_font(font))
+                hang = ext or bool(abx and abx.group(2).upper() == "X")  # extension fonts (CMEX, mathabx's mathx)
                 for c in span["chars"]:
                     ox, oy = c["origin"]
                     if not (rect.x0 - 1 <= ox <= rect.x1 + 1 and rect.y0 - 2 <= oy <= rect.y1 + 2):
                         continue
                     cx = (c["bbox"][0] + c["bbox"][2]) / 2
-                    ch, tall = c["c"], ext or c["c"] == "√" or c["c"] == "∫"  # tall glyphs hang from their origin
+                    ch = c["c"]
+                    t = math_char(font, ch) if is_math_font(font) or ext else ch
+                    tall = hang or t == "√" or t == "∫"  # tall glyphs hang from their origin
                     mid = oy - 0.3 * span["size"]
                     if areas and not tall and not any(a[0] - 1 <= cx <= a[2] + 1 and a[1] - 1 <= mid <= a[3] + 1
                                                       for a in areas):
                         continue  # a neighbouring line of text, not part of this formula
-                    t = math_char(font, ch) if is_math_font(font) or ext else ch
                     code = ord(ch) if len(ch) == 1 else 0
                     accent = ""
                     if ext and 0x62 <= code <= 0x67:
                         accent = "hat" if code <= 0x64 else "tilde"  # wide accents
                     if not t.strip() and not accent:
-                        if ext and ch.strip():
-                            raise Unsure("piece of a built-up symbol")
+                        if hang and ch.strip():  # a piece of a tall bracket: joined with the others below
+                            size = span["size"]
+                            out.append(Atom("", c["bbox"][0], oy, c["bbox"][2], oy + 0.5 * size, oy, size,
+                                            kind="piece"))
                         continue
                     if t in ACCENTS and not accent:
                         accent = ACCENTS[t]
+                        if hang:
+                            t = ""  # a wide accent of the extension font, as CMEX's are read
                     size = span["size"]
                     x0, _y0, x1, _y1 = c["bbox"]
                     if any(o.text == t and abs(o.x0 - x0) < 0.5 and abs(o.base - oy) < 0.5 for o in out):
                         continue  # the same glyph drawn twice (fake bold, stacked text layers)
-                    big = ext or t == "√"
+                    big = hang or t == "√"
                     out.append(Atom(t, x0, oy - 0.70 * size, x1, oy + 0.20 * size, oy, size,
                                     kind="big" if big else "sym",
                                     upright=not is_math_italic(font) and not is_math_font(font), accent=accent))
+    return _join_pieces(out)
+
+
+def _join_pieces(atoms: list[Atom]) -> list[Atom]:
+    """A tall bar (|...|, ‖...‖) set from several stacked pieces of the extension font is one symbol."""
+    out: list[Atom] = []
+    for a in sorted(atoms, key=lambda a: (a.x0, a.base)):
+        p = out[-1] if out else None
+        if p is not None and a.kind == "big" and p.kind == "big" and a.text == p.text and a.text in "|‖" \
+                and abs(a.x0 - p.x0) < 0.5 and 0 < a.base - getattr(p, "last", p.base) < 1.3 * a.size:
+            p.y1, p.glyphs = max(p.y1, a.y1), p.glyphs + 1
+            p.last = a.base
+            continue
+        out.append(a)
     return out
 
 
@@ -159,7 +183,7 @@ def _rules(drawings: list, rect: pymupdf.Rect) -> list[Atom]:
 def _ink_extents(page: pymupdf.Page, rect: pymupdf.Rect, atoms: list[Atom], rules: list[Atom]) -> None:
     """Big symbols (TeX extension font, radicals) report the height of an ordinary letter; measure their real
     height from the rendered ink in their own column (rules blanked out), starting at the glyph's origin."""
-    big = [a for a in atoms if a.kind == "big"]
+    big = [a for a in atoms if a.kind in ("big", "piece")]
     if not big:
         return
     zoom = 4.0
@@ -199,6 +223,34 @@ def _ink_extents(page: pymupdf.Page, rect: pymupdf.Rect, atoms: list[Atom], rule
         a.y0, a.y1 = clip.y0 + run[0] / zoom, clip.y0 + (run[-1] + 1) / zoom
 
 
+def _join_stacks(atoms: list[Atom]) -> list[Atom]:
+    """A tall bracket that TeX builds from pieces (top, extension, middle, bottom) is one symbol: pieces set at the
+    same place whose ink touches, that all draw the same bracket. A piece left over is a structure not read."""
+    out: list[Atom] = []
+    tall = sorted((a for a in atoms if a.kind in ("big", "piece")), key=lambda a: (round(a.x0), a.y0))
+    used: set[int] = set()
+    for a in tall:
+        if id(a) in used:
+            continue
+        stack = [a]
+        for b in tall:
+            if id(b) not in used and b is not a and abs(b.x0 - a.x0) < 0.6 and b.y0 >= stack[-1].y0 \
+                    and b.y0 <= stack[-1].y1 + 0.15 * a.size and all(b is not c for c in stack):
+                stack.append(b)
+        texts = {c.text for c in stack if c.text}
+        if len(texts) > 1:
+            texts.discard("|")  # the extension of a parenthesis reads as a bar
+        if len(stack) > 1 and len(texts) == 1 and (any(c.kind == "piece" for c in stack) or texts <= set("({[⌈⌊)}]⌉⌋√")):
+            used.update(id(c) for c in stack)
+            first = stack[0]
+            out.append(Atom(texts.pop(), min(c.x0 for c in stack), min(c.y0 for c in stack), max(c.x1 for c in stack),
+                            max(c.y1 for c in stack), first.base, first.size, kind="big", glyphs=len(stack)))
+    rest = [a for a in atoms if id(a) not in used]
+    if any(a.kind == "piece" for a in rest):
+        raise Unsure("piece of a built-up symbol")
+    return rest + out
+
+
 def _axis_bases(atoms: list[Atom], body: float) -> None:
     """Big symbols are centred on the maths axis, a quarter em above the baseline."""
     for a in atoms:
@@ -219,9 +271,13 @@ class _Builder:
         def letter(a: Atom) -> bool:
             return a.kind == "sym" and a.upright and a.text.isalpha() and not a.accent
 
+        marks = [a for a in self.atoms if a.accent]
+        # a letter with an accent of its own (d w̄) stays apart: the accent belongs to it alone
+        accented = {id(a) for a in self.atoms if letter(a) and any(a.x0 <= m.cx <= a.x1 and m.cy < a.cy for m in marks)}
+
         def follows(p: Atom, a: Atom) -> bool:
             return abs(a.base - p.base) < 0.1 * a.size and abs(a.size - p.size) < 0.3 \
-                and -0.5 < a.x0 - p.x1 < 0.12 * a.size
+                and -0.5 < a.x0 - p.x1 < 0.12 * a.size and id(a) not in accented and id(p) not in accented
 
         out = [a for a in self.atoms if not letter(a)]
         pending = sorted([a for a in self.atoms if letter(a)], key=lambda a: a.x0)
@@ -294,6 +350,9 @@ class _Builder:
                      and b.base >= acc.base - 0.15 * b.size and b.y0 < acc.base + 0.3 * b.size]
             if not under:
                 raise Unsure("accent without a symbol")
+            # the accent is on the symbol, not on its script (f̃_i): the script is attached afterwards
+            big = max(b.size for b in under)
+            under = [b for b in under if b.size >= 0.8 * big]
             under.sort(key=lambda b: b.x0)
             inner = self.row(under) if len(under) > 1 else under[0].text
             self.take(under + [acc])
@@ -326,7 +385,8 @@ class _Builder:
             first = [a for a in chosen if gap(a) < gap(chosen[0]) + 0.35 * a.size]
             near = max(first, key=lambda a: a.size)
             chosen = [a for a in chosen if a.kind in ("node", "op") or abs(a.base - near.base) < 0.5 * near.size
-                      or a.size < 0.9 * near.size]
+                      or (a.size < 0.9 * near.size and abs(a.base - near.base) < 0.8 * near.size)]
+            # (a smaller symbol is that row's script only when it is near it: not a script of the next row)
         return chosen
 
     def radicals(self) -> None:
@@ -349,8 +409,10 @@ class _Builder:
             text = "√" + (f"[{self.row(index)}]" if index else "") + _group(body, single)
             members = inside + index + [root]
             self.take(members)
-            self.atoms.append(_node(text, members, max(a.base for a in inside if a.kind != "rule"),
-                                    max(a.size for a in inside), single=False))
+            size = max(a.size for a in inside)
+            # the radicand's own line (its scripts sit lower or higher)
+            line = [a for a in inside if a.kind != "rule" and a.size >= 0.8 * size]
+            self.atoms.append(_node(text, members, max(a.base for a in line), size, single=False))
 
     def fractions(self) -> None:
         for rule in sorted(list(self.rules), key=lambda r: r.x1 - r.x0):
@@ -377,7 +439,8 @@ class _Builder:
 
     def limits(self) -> None:
         ops = [a for a in self.atoms if (a.text in BIG_OPS and a.kind == "big") or
-               (a.kind == "word" and a.text.lower() in LIMIT_WORDS)]
+               (a.kind == "word" and a.text.lower() in LIMIT_WORDS and a.size >= 0.85 * self.body)]
+        # (a small 'max' is itself a script, as in D^max_TV: what is under it is not its limit)
         for op in ops:
             if op not in self.atoms:
                 continue
@@ -474,6 +537,16 @@ class _Builder:
             self.take(members)
             self.atoms.append(_node(text, members, left.cy + 0.25 * self.body, self.body, single=True))
 
+    def _numbered(self, row: list[Atom]) -> str:
+        """One row of a derivation, with its own equation number "(n)" (set well apart at the right) kept apart."""
+        atoms = sorted(row, key=lambda a: a.x0)
+        for k in range(len(atoms) - 1, max(0, len(atoms) - 6), -1):
+            tail = atoms[k:]
+            m = NUMBER.match("".join(a.text for a in tail))
+            if m and tail[0].x0 - max(a.x1 for a in atoms[:k]) > 1.5 * self.body:
+                return self.row(atoms[:k]) + ROW_NUMBER.format(m.group(1))
+        return self.row(row)
+
     def _rows(self, atoms: list[Atom]) -> list[list[Atom]]:
         """Atoms in rows by their (full-size) baselines; smaller atoms join the nearest row."""
         big = [a for a in atoms if a.size >= 0.85 * max(x.size for x in atoms)]
@@ -518,12 +591,21 @@ class _Builder:
         for a in full:
             key = next((k for k in widths if abs(k - a.base) < 0.25 * top), a.base)
             widths[key] = widths.get(key, 0) + (a.x1 - a.x0)
-        if ENABLED["rows"] and len(widths) > 1:
-            keys = sorted(widths)
-            if all(b - a > 1.1 * top for a, b in zip(keys, keys[1:])):
+        # rows are told apart by ordinary symbols (built pieces only estimate their baseline)
+        row_widths: dict[float, float] = {}
+        for a in full:
+            if a.kind in ("big", "op", "node"):
+                continue
+            key = next((k for k in row_widths if abs(k - a.base) < 0.25 * top), a.base)
+            row_widths[key] = row_widths.get(key, 0) + (a.x1 - a.x0)
+        if ENABLED["rows"] and len(row_widths) > 1:
+            keys = sorted(row_widths)
+            # rows of a derivation are a line apart; stacked rows under a symbol (a subscript in two lines) closer
+            apart = (0.85 if top < 0.75 * self.body else 1.1) * top
+            if all(b - a > apart for a, b in zip(keys, keys[1:])):
                 rows = self._rows(atoms)
                 if len(rows) > 1:
-                    return sep.join(self.row(r) for r in rows)
+                    return sep.join(self._numbered(r) if sep == " ; " else self.row(r) for r in rows)
         main = max(widths, key=widths.get)
         # the exact baseline comes from ordinary symbols; built pieces and big glyphs only estimate theirs
         exact = [a for a in full if abs(a.base - main) < 0.25 * top and a.kind not in ("big", "op", "node")] \
@@ -533,41 +615,65 @@ class _Builder:
         def on_main(a: Atom) -> bool:
             if a.kind == "big" or (a.kind == "op" and a.text[:1] in BIG_OPS):
                 return a.y0 - 1 <= main <= a.y1 + 1  # a tall symbol: it spans the baseline
-            if a.kind in built:
-                return abs(a.base - main) < 0.25 * top
+            if a.kind in built and (a.size >= 0.8 * top or not a.text.startswith(ACCENTED)):
+                return abs(a.base - main) < 0.25 * top  # (a small accented letter is placed like a letter)
             return abs(a.base - main) < 0.1 * top and a.size >= 0.8 * top
         on_line = [a for a in atoms if on_main(a)]
         scripts = [a for a in atoms if a not in on_line]
         if scripts and not ENABLED["scripts"]:
             on_line, scripts = sorted(atoms, key=lambda a: a.x0), []
+        deep = top < 0.65 * self.body  # inside a script: TeX stops shrinking at the smallest size
+        if deep:  # a script of a script can be as large as its symbol: the leftmost symbol is the base and a
+            # clear baseline shift tells its scripts apart
+            first = min((a for a in full if a.kind not in ("big", "op", "node")), key=lambda a: a.x0, default=None)
+            if first is not None:
+                main = first.base
+            on_line = [a for a in atoms if on_main(a) or (a.kind not in built and abs(a.base - main) <= 0.12 * top)]
+            scripts = [a for a in atoms if a not in on_line]
         for a in scripts:
-            if a.size >= 0.8 * top and a.kind not in built:
+            if a.size >= 0.8 * top and a.kind not in built and not deep:
                 raise Unsure(f"full-size symbol off the baseline: {a.text!r} {a.kind} base {a.base:.1f} "
                              f"main {main:.1f} size {a.size:.1f}/{top:.1f}")
+        level: list[Atom] = []
         on_line.sort(key=lambda a: a.x0)
         attach: dict[int, tuple[list[Atom], list[Atom]]] = {id(b): ([], []) for b in on_line}
-        for s in scripts:
+        for s in sorted(scripts, key=lambda a: a.x0):
             before = [b for b in on_line if b.x0 < s.x0 - 0.1]
             if not before:
                 raise Unsure("script before any symbol")
             owner = before[-1]
             raised = s.base < main - 0.08 * top
             lowered = s.base > main + 0.04 * top
+            if not raised and not lowered and s.kind not in built:
+                # a prime (or a script of a script, θ^∗ under s) is drawn high in its own box, so its baseline
+                # says little: it marks the symbol just before it, and goes into a subscript it follows
+                left = max((a for a in atoms if a is not s and a.x0 < s.x0 and a.x1 <= s.x0 + 0.3 * top),
+                           key=lambda a: a.x1, default=None)
+                in_sub = left is not None and any(left is a for a in scripts) and left.base > main + 0.04 * top
+                if s.text in PRIMES or (in_sub and s.size < 0.9 * left.size and s.base < left.base - 0.15 * left.size):
+                    lowered, raised = in_sub, not in_sub
             if not raised and not lowered:
+                if abs(s.base - main) <= 0.03 * top and s.kind not in built:
+                    level.append(s)  # small type on the baseline itself (small capitals, KL): part of the line
+                    continue
                 raise Unsure("small symbol on the baseline")
             if s.kind in built and s.size >= 0.88 * top:
                 raise Unsure("built piece off the baseline")
             attach[id(owner)][0 if lowered else 1].append(s)
+        if level:  # small type on the line: place it with the line and attach the scripts again
+            return self.row([a for a in atoms if a not in level] + [
+                Atom(a.text, a.x0, a.y0, a.x1, a.y1, main, top, kind="word" if len(a.text) > 1 else "sym",
+                     upright=a.upright, glyphs=a.glyphs, single=a.single) for a in level], sep)
         parts, prev = [], None
         for b in on_line:
             subs, sups = attach[id(b)]
             text = b.text
             right = b.x1
             if subs:
-                text += "_" + _group(self.row(subs), len(subs) == 1 and subs[0].single)
+                text += "_" + _group(self.row(subs, sep=" "), len(subs) == 1 and subs[0].single)
                 right = max(right, max(a.x1 for a in subs))
             if sups:
-                text += "^" + _group(self.row(sups), len(sups) == 1 and sups[0].single)
+                text += "^" + _group(self.row(sups, sep=" "), len(sups) == 1 and sups[0].single)
                 right = max(right, max(a.x1 for a in sups))
             if prev is not None:
                 gap = b.x0 - prev
@@ -599,7 +705,7 @@ class Formula:
 
 def _symbols(text: str) -> dict:
     """The printed symbols of a text, counted (structure marks and words this module adds left out)."""
-    t = unicodedata.normalize("NFD", re.sub(r"\b(matrix|cases|hat|bar|tilde|dot|ddot)\(", "(", text))
+    t = unicodedata.normalize("NFD", re.sub(r"(?<![A-Za-z])(matrix|cases|hat|bar|tilde|dot|ddot)\(", "(", text))
     for k, v in NEGATED.items():
         t = t.replace(unicodedata.normalize("NFD", v), k + "\u0338")
     return Counter(c for c in t if not c.isspace() and c not in "()^_/;,[]{}" and c not in ACCENTS)
@@ -621,6 +727,7 @@ def linear(page: pymupdf.Page, rect, drawings: list, body: float, areas: Optiona
             top_, bottom = min(a[1] for a in areas), max(a[3] for a in areas)
             rules = [r for r in rules if top_ - 1.5 <= r.base <= bottom + 1.5]
         _ink_extents(page, rect, atoms, rules)
+        atoms = _join_stacks(atoms)
         if areas:  # a tall symbol belongs to the formula when its ink lies in the formula's lines
             y0, y1 = min(a[1] for a in areas), max(a[3] for a in areas)
             atoms = [a for a in atoms if a.kind != "big" or y0 - 2 <= a.cy <= y1 + 2]
@@ -645,12 +752,15 @@ def linear(page: pymupdf.Page, rect, drawings: list, body: float, areas: Optiona
         if b.rules and ENABLED["fractions"] and ENABLED["radicals"]:
             raise Unsure("a line that is not part of the formula's structure")
         text = b.row(b.atoms)
+        printed_text = re.sub("\x00([^\x00]*)\x00", r" (\1)", text)
+        text = re.sub("\x00([^\x00]*)\x00", r", equation (\1)", text)
         text = re.sub(r"\s+", " ", text).strip()
         text = re.sub(r"\(\s+", "(", re.sub(r"\s+\)", ")", text))
         if not text:
             return None
-        if _symbols(text + number) != _symbols(printed):
-            raise Unsure("symbols changed")  # guard: every printed symbol exactly once, nothing added
+        if _symbols(printed_text + number) != _symbols(printed):
+            a_, b_ = _symbols(printed_text + number), _symbols(printed)
+            raise Unsure(f"symbols changed: +{dict(a_ - b_)} -{dict(b_ - a_)}")  # guard: every printed symbol exactly once, nothing added
         return Formula(text, number, printed)
     except Unsure as e:
         LOG.append(str(e))

@@ -21,7 +21,7 @@ import numpy as np
 import pymupdf
 
 from ..model import ImageData, OcrWordConfidence, PageInfo, Rect, StyleRange, TableData
-from . import mathtree
+from . import mathabx, mathtree
 from .mathtext import TEX_TEXT_FONT_RE, base_font, is_math_font, is_math_italic, math_text
 from .ocr import OcrEngine
 
@@ -306,9 +306,14 @@ ACCENTS = {"˜": "\u0303", "~": "\u0303", "ˆ": "\u0302", "^": "\u0302", "¯": "
            "\u0304": "\u0304", "\u0307": "\u0307", "\u0308": "\u0308"}
 
 
+def _shown(sp: "_Span") -> str:
+    """A span's text, with the symbols of a font that only has placeholder letters (mathabx) put in."""
+    return math_text(sp.font, sp.text) if mathabx.FONT_RE.match(base_font(sp.font)) else sp.text
+
+
 def _is_accent(sp: "_Span") -> bool:
     """Whether a span is only a loose accent mark (placed over a letter by position in some PDFs)."""
-    t = sp.text.strip()
+    t = _shown(sp).strip()
     return bool(t) and len(t) <= 3 and all(c in ACCENTS or c.isspace() for c in t) and not t.startswith("→")
 
 
@@ -551,6 +556,11 @@ def _page_spans(page: pymupdf.Page, known_word: Optional[Callable[[str], bool]] 
                     ink = [c["bbox"] for c in chars if not c["c"].isspace()]
                     bbox = (min(b[0] for b in ink), min(b[1] for b in ink), max(b[2] for b in ink),
                             max(b[3] for b in ink))
+                abx = mathabx.FONT_RE.match(base_font(span["font"]))
+                if abx and abx.group(2).upper() == "X":
+                    # mathabx's extension font reports its glyphs above their origin; like CMEX's they hang
+                    # down from it (a radical, a big bracket, a sum sign)
+                    bbox = (bbox[0], oy, bbox[2], oy + span["size"])
                 spans.append(_Span(t.replace("\u00a0", " "), to_page(bbox), baseline, span["size"],
                                    span["font"], span["flags"], bno))
     return spans
@@ -562,10 +572,12 @@ def _attach_small(sp: _Span, rows: list[dict], rules: Optional[list[Rect]], math
     # maths indices and limits can sit a little apart from their line; small print in the text font (a
     # footnote marker, 'th') follows its word directly, and a smaller line beyond a column gutter is not part
     # of it at all
-    math = is_math_font(sp.font) or bool(re.match(r"^(CMEX|MTEX|TXEX|PXEX|RMTEX)", base_font(sp.font), re.I)) \
+    math = is_math_font(sp.font) or bool(re.match(r"^(CMEX|MTEX|TXEX|PXEX|RMTEX|TEX-MATHX)", base_font(sp.font), re.I)) \
         or id(sp) in math_like
     if not math and len(sp.text.strip()) > 12:
         return False
+    # a wide sum sign in front of a formula is measured from its right edge, where the formula goes on
+    lead = sp.x1 if math_text(sp.font, sp.text).strip() in BIG_OPERATORS else sp.x0
 
     def nearest(expand: float, key) -> Optional[dict]:
         """The row a small span most likely belongs to (within ``expand`` extra font sizes), ranked by ``key``."""
@@ -574,7 +586,7 @@ def _attach_small(sp: _Span, rows: list[dict], rules: Optional[list[Rect]], math
             lo = row["baseline"] - (1.05 + expand) * row["size"]
             hi = row["baseline"] + (0.5 + expand) * row["size"]
             reach = (1.5 if math else 0.6) * row["size"]
-            if lo <= sp.mid_y <= hi and row["x0"] - reach <= sp.x0 <= row["x1"] + reach:
+            if lo <= sp.mid_y <= hi and row["x0"] - reach <= lead and sp.x0 <= row["x1"] + reach:
                 d = key(row)
                 if best is None or d < best_d:
                     best, best_d = row, d
@@ -623,7 +635,7 @@ def _rows(spans: list[_Span], rules: Optional[list[Rect]] = None) -> list[list[_
         """
         if _is_accent(sp):
             return True  # an accent over a letter belongs to that letter's line
-        if re.match(r"^(CMEX|MTEX|TXEX|PXEX|RMTEX)", base_font(sp.font), re.I):
+        if re.match(r"^(CMEX|MTEX|TXEX|PXEX|RMTEX|TEX-MATHX)", base_font(sp.font), re.I):
             return True  # big brackets and operators hang from the top: place them by position
         return sp.size < main[sp.block_no] * 0.85 or (
             sp.size < page_main * 0.8 and len(sp.text.strip()) <= 12)
@@ -720,12 +732,25 @@ def _rows(spans: list[_Span], rules: Optional[list[Rect]] = None) -> list[list[_
     for row in rows:
         row["x0"] = min(o.x0 for o in row["spans"])
         row["x1"] = max(o.x1 for o in row["spans"])
-    orphans: list[_Span] = list(small)
     # an index set in the text font right against a maths index ("=1" after the "k" of k=1 under a sum) is part
     # of the formula: it is placed like maths
     math_like = frozenset(id(sp) for sp in small if not is_math_font(sp.font) and any(
         is_math_font(o.font) and abs(o.baseline - sp.baseline) < 0.3 * sp.size and
         (abs(o.x1 - sp.x0) < 1.0 or abs(sp.x1 - o.x0) < 1.0) for o in small))
+    # the limits set right under or over a big sum sign go with the sign, even where a line of text above or
+    # below is nearer to them than the sign's own baseline
+    signs = [o for o in spans if (o.text.strip() in BIG_OPERATORS or math_text(o.font, o.text).strip() in BIG_OPERATORS)
+             and o.bbox[3] - o.bbox[1] > 0.8 * o.size]
+    limits: dict[int, _Span] = {}
+    for sp in small:
+        if any(sp is o for o in signs) or not (is_math_font(sp.font) or id(sp) in math_like):
+            continue
+        for o in signs:
+            if sp.size < 0.85 * o.size and o.x0 <= (sp.x0 + sp.x1) / 2 <= o.x1 and sp.x1 - sp.x0 < 3 * (o.x1 - o.x0) \
+                    and (0 <= o.bbox[1] - sp.bbox[3] < 0.5 * o.size or 0 <= sp.bbox[1] - o.bbox[3] < 0.8 * o.size):
+                limits[id(sp)] = o
+                break
+    orphans: list[_Span] = [sp for sp in small if id(sp) not in limits]
     # repeated, so that a chain of pieces (a sum sign, its index, then the text) grows its line leftwards
     progress = True
     while progress and orphans:
@@ -736,6 +761,14 @@ def _rows(spans: list[_Span], rules: Optional[list[Rect]] = None) -> list[list[_
                 progress = True
             else:
                 orphans.append(sp)
+    for sp in small:
+        sign = limits.get(id(sp))
+        home = next((row for row in rows if any(o is sign for o in row["spans"])), None) if sign else None
+        if home is not None:
+            home["spans"].append(sp)
+            home["x0"], home["x1"] = min(home["x0"], sp.x0), max(home["x1"], sp.x1)
+        elif sign is not None:
+            orphans.append(sp)
     # second chance for the limits of a sum or the parts of a small fraction in running text, which sit
     # further above or below the line: join the nearest line if it is clearly the closest one
     still: list[_Span] = []
@@ -1016,7 +1049,7 @@ def _text_lines(page: pymupdf.Page, pno: int, known_word: Optional[Callable[[str
             idx, x = min(positions, key=lambda p: abs(p[1] - cx))
             if abs(x - cx) > max(4.0, acc.size * 0.6):
                 continue
-            mark = ACCENTS.get(acc.text.strip()[0], "")
+            mark = ACCENTS.get(_shown(acc).strip()[0], "")
             if not mark:
                 continue
             k = idx + 1
@@ -1517,7 +1550,7 @@ def _equations(page: pymupdf.Page, lines: list[RawLine]) -> tuple[list[RawFigure
                 math, _f, _t, words = _math_profile(l)
                 rx1 = max(m.x1 for m in reg)
                 # a lone denominator or limit hanging just below or above (partly outside the region)
-                piece = bool(re.fullmatch(r"[\w′'∗*+−-]{1,3}|[⎧⎨⎩⎪⎛⎜⎝⎞⎟⎠⎡⎢⎣⎤⎥⎦\s]{1,6}", l.text.strip())) and overlap > -0.2 * body and rx0 - 1 <= l.x0 and l.x1 <= rx1 + 1
+                piece = bool(re.fullmatch(r"[\w′'∗*+−-]{1,3}|[\w′'∗*+−-]{1,3}[=:,][\w′'∗*+−-]{1,3}|[⎧⎨⎩⎪⎛⎜⎝⎞⎟⎠⎡⎢⎣⎤⎥⎦\s]{1,6}", l.text.strip())) and overlap > -0.2 * body and rx0 - 1 <= l.x0 and l.x1 <= rx1 + 1
                 beside = piece or overlap > 0.4 * l.height and (len(l.text) <= 25 or (
                     len(l.text) <= 70 and words <= 4 and l.x0 >= rx0 - body))
                 # rows of a cases block above or below, indented from the region's left edge
@@ -1597,6 +1630,7 @@ def _equations(page: pymupdf.Page, lines: list[RawLine]) -> tuple[list[RawFigure
         # a long equation broken over lines (multline) spans the whole column: its lines go one below the
         # other as separate pictures, so that each keeps a readable size
         bands = _ink_bands(pix, body) if rect[2] - rect[0] > 0.7 * (right - left) else []
+        bands = _keep_scripts_with_row(bands, reg, clip[1], body)
         numbered_rows = _numbered_rows(pix, reg, numbers, clip[1], body)
         if len(numbered_rows) > 1:
             bands = numbered_rows
@@ -1619,6 +1653,36 @@ def _equations(page: pymupdf.Page, lines: list[RawLine]) -> tuple[list[RawFigure
             figures.append(RawFigure(box, img))
     rest = [l for l in lines if id(l) not in used]
     return figures, rest
+
+
+def _keep_scripts_with_row(bands: list[tuple[int, int]], reg: list[RawLine], top: float,
+                           body: float) -> list[tuple[int, int]]:
+    """A band holding only small type (the limits over or under a sum, a subscript row), or no line of its own (the
+    limits belong to a line of the formula), is part of the neighbouring row: joined to the band below it when it is
+    the first band, else to the band above, instead of becoming a picture of its own."""
+    if len(bands) < 2:
+        return bands
+    scale = 72.0 / EQUATION_DPI
+
+    def minor(b0: int, b1: int) -> bool:
+        y0, y1 = top + b0 * scale, top + b1 * scale
+        inside = [l for l in reg if y0 - 1 <= (l.y0 + l.y1) / 2 <= y1 + 1]
+        return not inside or all(l.size < 0.85 * body for l in inside)
+
+    out: list[tuple[int, int]] = []
+    carry = None  # the start of small bands waiting for the row below them
+    for b0, b1 in bands:
+        if minor(b0, b1):
+            if out:
+                out[-1] = (out[-1][0], b1)
+            else:
+                carry = b0 if carry is None else carry
+            continue
+        out.append((carry if carry is not None else b0, b1))
+        carry = None
+    if carry is not None:  # nothing but small bands: keep it whole
+        out = [(bands[0][0], bands[-1][1])] if not out else out
+    return out
 
 
 def _numbered_rows(pix: pymupdf.Pixmap, reg: list[RawLine], numbers: list[RawLine], top: float,

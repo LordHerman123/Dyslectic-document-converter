@@ -14,6 +14,8 @@ from dyslexia_converter.extract import mathtree
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURE = ROOT / "tests" / "stress" / "s5_formulas.pdf"
 STRESS = ROOT / "tests" / "stress" / "s1_math.pdf"
+ABX = ROOT / "tests" / "stress" / "s6_mathabx.pdf"
+ROUND2 = ROOT / "tests" / "stress" / "s7_round2.pdf"
 
 
 def equations(path):
@@ -61,7 +63,7 @@ def _printed(text: str) -> Counter:
     return mathtree._symbols(re.sub(r",? equation \(\d+[a-z]?\)$", "", text))
 
 
-@pytest.mark.parametrize("path", [FIXTURE, STRESS])
+@pytest.mark.parametrize("path", [FIXTURE, STRESS, ABX, ROUND2])
 def test_no_symbol_is_added_or_lost(path):
     for im in equations(path):
         if im.alt != im.glyph_text:  # structured: every printed symbol exactly once
@@ -120,3 +122,31 @@ def test_formulas_side_by_side_stay_one_picture():
     """Two formulas set apart by a wide space on one line are not torn apart (their limits stay with them)."""
     alts = [im.alt for im in equations(STRESS)]
     assert any("∑_(n=1)^∞" in a and "∏_(p prime)" in a for a in alts)
+
+
+@pytest.mark.parametrize("expected", [
+    "x_i = √(1 − β_i) x_(i−1) + √(β_i) z_(i−1), equation (1)",
+    "x_i = x_(i−1) + √(σ_i^2 − σ_(i−1)^2) z_(i−1)",
+    "a ≤ b < c, S = ∑_(i=1)^N λ_i × µ_i",
+    "f(x)∝ exp(−x^2) ± 1",
+])
+def test_mathabx_fonts(expected):
+    """mathabx's symbols come out of the PDF as placeholder letters ("ă" for <); their codes give the symbols."""
+    assert expected.replace(" ", "") in [im.alt.replace(" ", "") for im in equations(ABX)]
+
+
+@pytest.mark.parametrize("expected", [
+    "∑_(l=0)^∞ γ^l tilde(r)_t = ∑_(l=0)^∞ γ^l r_(t+l), equation (1)",  # limits next to lines of text
+    "W (ℙ_θ, ℙ_(θ^′)) ≤ ∥g_θ(z) − g_(θ^′)(z)∥",  # a prime inside a subscript
+    "x_i^m = x_i^(m−1) + ϵ_i s_(θ^∗)(x_i^(m−1))",  # a script of a subscript
+    "tilde(f)_i(x) = d bar(w) + √(σ_i^2 − σ_(i−1)^2)",  # accents on the symbol only; radical over scripts
+])
+def test_harder_structures(expected):
+    assert expected.replace(" ", "") in [im.alt.replace(" ", "") for im in equations(ROUND2)]
+
+
+def test_limits_stay_out_of_the_text_around():
+    doc = pipeline.load(str(ROUND2)).document
+    text = " ".join(b.text for b in doc.blocks if b.image is None and b.text)
+    assert "lines of text around it:" in text and "Letting the transformed values" in text
+    assert "∞" not in text and "l=0" not in text
