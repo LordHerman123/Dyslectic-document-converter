@@ -2172,7 +2172,10 @@ def _split_wide_gaps(groups: dict) -> dict:
 def _ocr_image(png: bytes, dpi: int, width_pt: float, height_pt: float, pno: int, engine: OcrEngine,
                languages: list[str], crop: Callable[[Rect], ImageData]) -> tuple[list[RawLine], list[RawFigure]]:
     """OCR one image and return lines/figures in points relative to that image."""
-    res = engine.recognize(_without_leaders(png), languages)
+    from PIL import Image
+
+    gray = np.asarray(Image.open(io.BytesIO(png)).convert("L"))  # decoded once for all the steps below
+    res = engine.recognize(_without_leaders(png, gray), languages)
     scale = 72.0 / dpi
     groups: dict[tuple[int, int, int], list] = {}
     for w in res.words:
@@ -2199,10 +2202,7 @@ def _ocr_image(png: bytes, dpi: int, width_pt: float, height_pt: float, pno: int
                              source="ocr", block_no=bn * 1000 + par, conf=conf))
     lines = [l for l in lines if not _is_ocr_noise(l)]
     regions = [tuple(v * scale for v in r.bbox) for r in res.regions]
-    regions += _scan_graphic_regions(png, lines, width_pt, height_pt)
-    from PIL import Image
-
-    gray = np.asarray(Image.open(io.BytesIO(png)).convert("L"))
+    regions += _scan_graphic_regions(png, lines, width_pt, height_pt, gray)
     regions = [r for r in regions if _plausible_scan_figure(r, lines, width_pt, height_pt, gray, dpi)]
     figures = _figures_from_regions(regions, lines, width_pt * height_pt, crop)
     fig_rects = [f.bbox for f in figures]
@@ -2263,13 +2263,13 @@ def _leader_spans(ink: np.ndarray) -> list[tuple[int, int, int, int]]:
     return spans
 
 
-def _without_leaders(png: bytes) -> bytes:
+def _without_leaders(png: bytes, gray: Optional[np.ndarray] = None) -> bytes:
     """The page image with the rows of dots of a table of contents taken out: OCR reads them as made-up words,
-    and they make it misread the titles next to them."""
+    and they make it misread the titles next to them. ``gray``: the image already decoded, if it is."""
     from PIL import Image
 
-    im = Image.open(io.BytesIO(png)).convert("L")
-    gray = np.asarray(im)
+    if gray is None:
+        gray = np.asarray(Image.open(io.BytesIO(png)).convert("L"))
     spans = _leader_spans(gray < 150)
     if not spans:
         return png
@@ -2277,7 +2277,7 @@ def _without_leaders(png: bytes) -> bytes:
     for y0, y1, x0, x1 in spans:
         clean[y0:y1, x0:x1] = 255
     buf = io.BytesIO()
-    Image.fromarray(clean).save(buf, format="PNG")
+    Image.fromarray(clean).save(buf, format="PNG", compress_level=1)
     return buf.getvalue()
 
 
@@ -2487,13 +2487,15 @@ def _ocr_page(page: pymupdf.Page, pno: int, engine: OcrEngine, languages: list[s
 
 
 def _photo_crop(photo, dpi: int) -> Callable[[Rect], ImageData]:
-    """A function that cuts a region (points) out of a scanned page's photo as a PNG at up to 200 dpi."""
+    """A function that cuts a region (points) out of a scanned page's photo as a PNG at up to 200 dpi.
+    ``photo``: the picture, or a function that makes it (only called when a region is cut)."""
     def crop(r: Rect) -> ImageData:
         """The region ``r`` (points) of the photo as a PNG."""
+        img = photo() if callable(photo) else photo
         k = dpi / 72.0
-        box = (max(0, int(r[0] * k)), max(0, int(r[1] * k)), min(photo.width, int(r[2] * k)),
-               min(photo.height, int(r[3] * k)))
-        part = photo.crop(box)
+        box = (max(0, int(r[0] * k)), max(0, int(r[1] * k)), min(img.width, int(r[2] * k)),
+               min(img.height, int(r[3] * k)))
+        part = img.crop(box)
         # figures are stored at up to 200 dpi, like figures from text PDFs
         f = min(1.0, FIGURE_DPI / dpi)
         if f < 1:
@@ -2535,7 +2537,7 @@ def _scan_image_pages(rendered, source_page: int, engine: OcrEngine, languages: 
         info = PageInfo(-1, sp.width_pt, sp.height_pt, "scanned", ocr_used=True, source_page=source_page,
                         side=sp.side, skew=sp.skew)
         lines, figures = _ocr_image(sp.png(), SCAN_DPI, sp.width_pt, sp.height_pt, -1, engine, languages,
-                                    _photo_crop(sp.photo, SCAN_DPI))
+                                    _photo_crop(lambda page=sp: page.photo, SCAN_DPI))
         out.append(RawPage(info, lines, figures))
     return out
 
@@ -2636,15 +2638,20 @@ def _estimate_font_size(text: str, height: float) -> float:
     return round(height / em * 2) / 2
 
 
-def _scan_graphic_regions(png: bytes, lines: list[RawLine], width: float, height: float) -> list[Rect]:
-    """Find pictures/diagrams/ruled tables on a scanned page.
+def _scan_graphic_regions(png: bytes, lines: list[RawLine], width: float, height: float,
+                          gray: Optional[np.ndarray] = None) -> list[Rect]:
+    """Find pictures/diagrams/ruled tables on a scanned page (``gray``: the page already decoded, if it is).
 
     Text-line areas are blanked, the remaining ink is gridded into cells and
     connected cells form candidate graphic regions.
     """
-    from PIL import Image, ImageDraw, ImageFilter
+    from PIL import Image, ImageDraw
 
-    img = Image.open(io.BytesIO(png)).convert("L").filter(ImageFilter.MinFilter(5))  # keep thin rules
+    from .scan import min_filter
+
+    if gray is None:
+        gray = np.asarray(Image.open(io.BytesIO(png)).convert("L"))
+    img = Image.fromarray(min_filter(gray, 5))  # keep thin rules
     dpi = 60
     small = img.resize((max(1, int(width * dpi / 72)), max(1, int(height * dpi / 72))), Image.BOX)
     k = dpi / 72

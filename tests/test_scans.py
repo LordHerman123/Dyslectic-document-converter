@@ -175,6 +175,28 @@ def test_straight_empty_and_odd_pages_are_left_alone():
         assert page.image.size == page.photo.size
 
 
+def test_fast_clean_up_steps_give_the_same_result_as_before():
+    """The background of a scan is estimated with a maximum filter, and the ink threshold from a count of grey
+    levels, and pictures on the page are found after a minimum filter; the faster versions give exactly what
+    PIL's MaxFilter and MinFilter and NumPy's histogram gave, edges included."""
+    from PIL import ImageFilter
+
+    from dyslexia_converter.extract.scan import _histogram, max_filter, min_filter
+
+    rng = np.random.default_rng(7)
+    for h, w, size in ((1, 1, 3), (5, 40, 7), (37, 3, 9), (64, 48, 13), (30, 30, 25), (50, 70, 5)):
+        a = rng.integers(0, 256, (h, w), dtype=np.uint8)
+        a[rng.random((h, w)) > 0.5] = 0  # dark ink and light paper, as on a page
+        im = Image.fromarray(a)
+        assert np.array_equal(max_filter(a, size), np.asarray(im.filter(ImageFilter.MaxFilter(size))))
+        assert np.array_equal(min_filter(a, size), np.asarray(im.filter(ImageFilter.MinFilter(size))))
+    gray = (rng.random((60, 50)) * 255).astype(np.float32)
+    gray[0, :6] = [0.0, 1.0, 254.99, 255.0, 0.5, 128.0]  # the edges of the grey levels
+    assert np.array_equal(_histogram(gray), np.histogram(gray, bins=256, range=(0, 256))[0])
+    gray[1, 0] = -3.0  # not a picture: still counted as before
+    assert np.array_equal(_histogram(gray), np.histogram(gray, bins=256, range=(0, 256))[0])
+
+
 def test_border_line_does_not_erase_letters_in_the_same_column():
     """A photocopied box edge near the page edge used to wipe that whole column, cutting the first
     letter off every line below it."""

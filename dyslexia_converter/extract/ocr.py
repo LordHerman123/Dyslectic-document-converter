@@ -6,10 +6,12 @@ implementing :class:`OcrEngine` and passing it to the pipeline.
 """
 from __future__ import annotations
 
+import contextlib
 import io
 import os
 import shutil
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Protocol
@@ -163,12 +165,19 @@ class TesseractEngine:
     def recognize(self, png: bytes, languages: list[str]) -> OcrResult:
         """Read a page picture with Tesseract; returns the words with boxes and confidences."""
         import pytesseract
-        from PIL import Image
 
-        img = Image.open(io.BytesIO(png))
         codes = "+".join(LANG_CODES.get(l, l) for l in languages) or "eng"
-        data = pytesseract.image_to_data(img, lang=codes, config="--psm 3",
-                                          output_type=pytesseract.Output.DICT)
+        # Tesseract reads the picture from a file: give it the PNG as it is (given a picture, pytesseract
+        # would decode it and write it again as a slowly compressed PNG, for every page)
+        fd, path = tempfile.mkstemp(prefix="dc_ocr_", suffix=".png")
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(png)
+            data = pytesseract.image_to_data(path, lang=codes, config="--psm 3",
+                                              output_type=pytesseract.Output.DICT)
+        finally:
+            with contextlib.suppress(OSError):
+                os.remove(path)
         words: list[OcrWord] = []
         blocks: dict[int, list] = {}
         for i in range(len(data["text"])):
