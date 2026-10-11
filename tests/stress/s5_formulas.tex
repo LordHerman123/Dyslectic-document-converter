@@ -1,0 +1,142 @@
+\documentclass[11pt]{article}
+\usepackage[a4paper,margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb}
+\pagestyle{plain}
+\begin{document}
+\section*{Mathematics test document}
+This document is generated for testing how formulas are converted. Each formula below is surrounded by ordinary
+sentences, as in a real paper, so that the prose can be checked as well.
+\section{Display formulas}
+
+Here is formula d01, of the kind fraction, in its own paragraph.
+
+\[ y = \frac{a + b}{c - d} \]
+
+Here is formula d02, of the kind fraction nested, in its own paragraph.
+
+\[ z = \frac{1}{1 + \frac{1}{x}} \]
+
+Here is formula d03, of the kind root, in its own paragraph.
+
+\[ r = \sqrt{x^{2} + y^{2}} \]
+
+Here is formula d04, of the kind root nth, in its own paragraph.
+
+\[ s = \sqrt[3]{a b} \]
+
+The text continues after these formulas with a normal sentence of prose.
+
+
+Here is formula d05, of the kind scripts, in its own paragraph.
+
+\[ E = m c^{2} \]
+
+Here is formula d06, of the kind scripts scoped, in its own paragraph.
+
+\[ P = 10000^{2 i / d} \]
+
+Here is formula d07, of the kind scripts both, in its own paragraph.
+
+\[ W_{i}^{Q} = X_{i} A \]
+
+Here is formula d08, of the kind greek, in its own paragraph.
+
+\[ \alpha + \beta = \gamma \delta \]
+
+The text continues after these formulas with a normal sentence of prose.
+
+
+Here is formula d09, of the kind sum limits, in its own paragraph.
+
+\[ S = \sum_{i = 1}^{n} x_{i} \]
+
+Here is formula d10, of the kind integral, in its own paragraph.
+
+\[ F = \int_{0}^{1} f ( x ) d x \]
+
+Here is formula d11, of the kind limit, in its own paragraph.
+
+\[ L = \lim_{n \to \infty} a_{n} \]
+
+Here is formula d12, of the kind fraction root, in its own paragraph.
+
+\[ A = \mathrm{softmax} ( \frac{Q K^{T}}{\sqrt{d}} ) V \]
+
+The text continues after these formulas with a normal sentence of prose.
+
+
+Here is formula d13, of the kind product, in its own paragraph.
+
+\[ p = \prod_{k = 1}^{m} q_{k} \]
+
+Here is formula d14, of the kind matrix, in its own paragraph.
+
+\[ M = \begin{pmatrix} a & b \\ c & d \end{pmatrix} \]
+
+Here is formula d15, of the kind piecewise, in its own paragraph.
+
+\[ f ( x ) = \begin{cases} 1 & x > 0 \\ 0 & x \le 0 \end{cases} \]
+
+Here is formula d16, of the kind sum fraction, in its own paragraph.
+
+\[ \hat{R} = \frac{1}{N} \sum_{j = 1}^{N} \ell ( y_{j} ) \]
+
+The text continues after these formulas with a normal sentence of prose.
+
+
+Here is formula d17, of the kind relations, in its own paragraph.
+
+\[ a \le b \ne c \approx d \]
+
+Here is formula d18, of the kind sets, in its own paragraph.
+
+\[ x \in \mathbb{R}^{n} \]
+
+Here is formula d19, of the kind derivative, in its own paragraph.
+
+\[ \frac{\partial L}{\partial w} = - \frac{y}{a} \]
+
+Here is formula d20, of the kind expectation, in its own paragraph.
+
+\[ \mu = \mathbb{E} [ X ] = \int x p ( x ) d x \]
+
+The text continues after these formulas with a normal sentence of prose.
+
+
+\section{Numbered formulas}
+
+The next formula, n01, carries an equation number.
+
+\begin{equation} \sigma ( z ) = \frac{1}{1 + e^{- z}} \end{equation}
+
+The next formula, n02, carries an equation number.
+
+\begin{equation} h_{t} = \tanh ( W h_{t - 1} + b ) \end{equation}
+
+\section{A derivation}
+
+The following two lines are one aligned derivation.
+
+\begin{align*} ( a + b )^{2} &= a^{2} + 2 a b + b^{2} \\ &= b^{2} + 2 a b + a^{2} \end{align*}
+
+\section{Formulas inside sentences}
+
+Each term $x_{i}^{2}$ is added to the total.
+
+The scores are scaled by $\frac{1}{\sqrt{d}}$ before the softmax.
+
+We use a weight decay of $\lambda = 0.5$ in all runs.
+
+The weights satisfy $\sum_{i} w_{i} = 1$ so they form a distribution.
+
+This holds whenever $n \ge 3$ and fails otherwise.
+
+There are $2^{n - 1}$ such subsets.
+
+\section{A table}
+
+\begin{tabular}{ll} Quantity & Formula \\ \hline first & $x^{2}$ \\ second & $\sqrt{y}$ \\ third & $\frac{a}{b}$ \end{tabular}
+
+
+This is the end of the test document.
+\end{document}

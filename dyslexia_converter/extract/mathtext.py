@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import re
 
+from . import mathabx
+
 # fonts that only ever hold mathematics
 MATH_FONT_RE = re.compile(
     r"^(CMMI|CMMIB|CMSY|CMBSY|CMEX|MSAM|MSBM|EUFM|EUFB|EURM|EUSM|EUSB|EUEX|RSFS|STMARY|WASY|LASY|"
@@ -17,8 +19,16 @@ MATH_FONT_RE = re.compile(
     r"MTMI|MTMIB|MTMIS|MTSY|MTSYN|MTSYB|MTEX|MTEXB|MTMS|MTGU|MT2\w+|RMTMI|RMTSY|RMTEX|"
     r"STIXMATH|STIXTWOMATH|XITSMATH|LATINMODERNMATH|TEXGYRE\w*MATH|ASANAMATH|LIBERTINUSMATH|"
     r"CAMBRIAMATH|CAMBRIA-MATH|SYMBOL|STANDARDSYM|ZPTMCM|ZPZCM|RTXMI|RTXSY|MT-?EXTRA|EUCLID|MATHEMATICAL|"
-    r"MATHPI|UNIVERSALMATH)",
+    r"MATHPI|UNIVERSALMATH|"
+    # MathDesign (Charter, Garamond, Utopia maths; names come shortened: "MathDesign-CH-Regular-Sy"): symbols,
+    # extension and italic maths, not the OT1/T1 text fonts; Fourier, mathpazo, kpfonts, Lucida maths
+    r"MATHDESIGN-[A-Z]+-[A-Z]+-(SY|EX|MA|IT)|FUTMI|FUTSY|FUTEX|ZPLMR7[MYV]|JKPMI|JKPSY|JKPEX|JKPBMI|"
+    r"LUCIDANEWMATH|LUCIDABRIGHTMATH|"
+    r"(TEX-)?MATH[ABX]\d)",  # mathabx
     re.I)
+# TeX extension fonts (big delimiters, operators, radicals) in the CMEX encoding
+EXT_FONT_RE = re.compile(r"^(CMEX|TXEX|PXEX|NTXEX|EUEX|MTEX|RMTEX|FUTEX|ZPLMR7V|JKPEX|MATHDESIGN-[A-Z]+-[A-Z]+-EX)",
+                         re.I)
 # TeX text fonts that also appear inside formulas (digits, operators, function names)
 TEX_TEXT_FONT_RE = re.compile(r"^(CMR|CMBX|CMSL|CMTI|CMSS|LMROMAN|LMRoman|SFRM|SFBX)", re.I)
 
@@ -35,7 +45,8 @@ def is_math_font(name: str) -> bool:
 
 def is_math_italic(name: str) -> bool:
     """Math italic fonts: their letters are variables and are shown in italic."""
-    return bool(re.match(r"^(CMMI|TXMI|PXMI|NTXMI|ZXMI|EURM|MTMI|RMTMI)", base_font(name), re.I))
+    return bool(re.match(r"^(CMMI|TXMI|PXMI|NTXMI|ZXMI|EURM|MTMI|RMTMI|FUTMI|ZPLMR7M|JKPMI|JKPBMI|"
+                         r"MATHDESIGN-[A-Z]+-[A-Z]+-IT)", base_font(name), re.I))
 
 
 # AMS blackboard bold (MSBM) and TeX calligraphic capitals (CMSY) are stored as plain letters
@@ -66,7 +77,10 @@ def math_char(font: str, ch: str) -> str:
     o = ord(ch)
     if 0xE000 <= o <= 0xF8FF:  # private-use pieces of large brackets
         return ""
-    if name.startswith(("CMEX", "TXEX", "PXEX", "NTXEX", "EUEX", "MTEX", "RMTEX")):
+    if mathabx.FONT_RE.match(name):  # its own codes, read through T1 glyph names
+        sym = mathabx.symbol(name, ch)
+        return ch if sym is None else sym
+    if EXT_FONT_RE.match(name):
         if o in _CMEX:
             return _CMEX[o]
         if 0x62 <= o <= 0x67 or 0x3E <= o <= 0x3F or 0x74 < o <= 0x7F:

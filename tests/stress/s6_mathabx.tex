@@ -1,0 +1,18 @@
+% Stress test: formulas set in the mathabx fonts (their PDF text is T1 placeholder letters).
+\documentclass{article}
+\usepackage{amsmath}
+\usepackage{mathabx}
+\pdfmapfile{+mathabx.map}
+\pagestyle{empty}
+\begin{document}
+Formulas set in the mathabx fonts.
+\begin{equation}
+x_i = \sqrt{1-\beta_i}\, x_{i-1} + \sqrt{\beta_i}\, z_{i-1}
+\end{equation}
+Next, a radical over scripts.
+\[ x_i = x_{i-1} + \sqrt{\sigma_i^2 - \sigma_{i-1}^2}\, z_{i-1} \]
+Relations and a sum with limits.
+\[ a \leq b < c, \qquad S = \sum_{i=1}^{N} \lambda_i \times \mu_i \]
+And a few more symbols.
+\[ f(x) \propto \exp(-x^2) \pm 1 \]
+\end{document}
