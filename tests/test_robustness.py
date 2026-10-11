@@ -1,7 +1,8 @@
 """Local conversion rules that make common layouts come out right without AI: publisher mastheads, affiliation
 marks, large bullets, page numbers in wide margins, letter-spaced footers, dashes at a line start, "(cont)"
-labels, figure DOIs, repeated headers that OCR reads a little differently, and text wrapped around a pull quote.
-Each test also checks the case the rule must leave alone."""
+labels, figure DOIs, repeated headers that OCR reads a little differently, text wrapped around a pull quote, and
+section headings between short paragraphs and in italics. Each test also checks the case the rule must leave
+alone."""
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -21,12 +22,15 @@ FONT = Path(__file__).resolve().parents[1] / "dyslexia_converter" / "assets" / "
 
 def make_pdf(path, pages) -> None:
     """``pages``: per page a list of (x, y, text, size); text is written left to right from (x, y) in a font with
-    dashes and bullets."""
+    dashes and bullets. A fifth item names one of the PDF's standard fonts instead ("helv", "heit" for italic)."""
     doc = pymupdf.open()
     for rows in pages:
         page = doc.new_page(width=595, height=842)
-        for x, y, text, size in rows:
-            page.insert_text((x, y), text, fontsize=size, fontname="lib", fontfile=str(FONT))
+        for x, y, text, size, *font in rows:
+            if font:
+                page.insert_text((x, y), text, fontsize=size, fontname=font[0])
+            else:
+                page.insert_text((x, y), text, fontsize=size, fontname="lib", fontfile=str(FONT))
     doc.save(str(path))
 
 
@@ -232,3 +236,36 @@ def test_ai_order_for_a_page_the_check_flagged_keeps_other_edits_and_undoes(isol
     session.undo_reorder(0, settings)
     assert page1() == ["Second", "First "]
     assert "Line three of the text" in " ".join(it.text for it in session.compose(settings).items)
+
+
+def test_heading_after_short_paragraphs_is_not_their_next_line(isolated_home, tmp_path):
+    """On a page of one-line paragraphs (between display formulas) most gaps between lines are gaps between
+    paragraphs; the usual gap between lines is measured where a sentence runs on, so the larger gap above a heading
+    still ends the paragraph. A sentence running on to the next line stays one paragraph."""
+    rows = [(60, 100, "In degree 2: let W be a vector field. The invariance for W is", 10, "helv"),
+            (60, 114, "equivalent to the condition that its coefficients do not change.", 10, "helv"),
+            (72, 137, "Hence the result follows as in degree 1.", 10, "helv"),
+            (72, 160, "In degree 3 every three-vector field is a cocycle.", 10, "helv"),
+            (60, 183, "Hence Lemma 6.4 implies the result.", 10, "helv"),
+            (60, 209, "6.2. Invariant Poisson cohomology", 10, "helv"),
+            (72, 232, "In this section we compute the invariant cohomology of the Lie algebra.", 10, "helv")]
+    bl = blocks(tmp_path, [rows])
+    assert find(bl, "Lemma 6.4").text == "Hence Lemma 6.4 implies the result."
+    assert find(bl, "6.2. Invariant").text == "6.2. Invariant Poisson cohomology"
+    assert find(bl, "In degree 2").text.endswith("its coefficients do not change.")
+
+
+def test_italic_numbered_heading_on_its_own_line(isolated_home, tmp_path):
+    """"7.2.1. Elliptic cylindrical coordinates" set in italics, with the paragraph right under it: a heading, not
+    the first line of that paragraph. An italic phrase running on into plain text stays in its paragraph."""
+    rows = [(60, 100, "7.2.1. Elliptic cylindrical coordinates", 10, "heit"),
+            (72, 114, "Let 0 < t < 1 and define the map from the plane to the cylinder by the formula", 10, "helv"),
+            (60, 128, "below, which is a diffeomorphism away from the axis of the cylinder.", 10, "helv"),
+            (60, 160, "A remark on the notation used for the coordinates", 10, "heit"),
+            (60, 174, "follows here, before the main computation of the section.", 10, "helv")]
+    bl = blocks(tmp_path, [rows + body_rows(220, 20)])
+    head = find(bl, "Elliptic cylindrical")
+    assert head.kind == BlockKind.HEADING and head.text == "7.2.1. Elliptic cylindrical coordinates"
+    assert head.level == 3
+    assert find(bl, "Let 0 < t < 1").text.startswith("Let 0 < t < 1")
+    assert find(bl, "A remark on the notation").text.endswith("main computation of the section.")
