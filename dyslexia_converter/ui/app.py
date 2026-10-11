@@ -3050,10 +3050,17 @@ def main(page: ft.Page) -> None:
     if app.count_start() and not os.environ.get("DYSLEXIA_CONVERTER_SELFTEST"):
         page.run_task(app.show_donate_reminder)
     page.run_task(app.check_for_update)
-    start_file = file_from_args(sys.argv[1:])
+    # all of argv: the Mac and Linux apps' shell gives Python only the arguments, without the program's name first
+    start_file = file_from_args(sys.argv)
     if start_file:  # a file dropped on the app's icon, or opened with "Open with": convert it straight away
         app.source_path = start_file
-        page.run_task(app.load_document)
+
+        async def open_start_file():
+            await app.load_document()
+            if ready:  # the builds' self-test checks that a document given at start is really opened
+                Path(ready).with_name("opened.txt").write_text(
+                    f"opened {Path(start_file).name}" if app.session else "not opened", encoding="utf-8")
+        page.run_task(open_start_file)
 
 
 OPENABLE = (".pdf", ".docx", ".epub", ".html", ".htm")
@@ -3077,9 +3084,16 @@ def file_drop_support():
 
 def file_from_args(args: list[str]) -> Optional[str]:
     """The document to open at start: the first argument that is an existing PDF, Word or EPUB file (Windows passes
-    the file when one is dropped on the app's icon or opened with "Open with")."""
+    the file when one is dropped on the app's icon or opened with "Open with"; Linux file managers may pass it as a
+    file:// address)."""
+    from urllib.parse import unquote, urlparse
+    from urllib.request import url2pathname
+
     for a in args:
-        p = Path(a.strip('"'))
+        a = a.strip('"')
+        if a.lower().startswith("file:"):
+            a = url2pathname(unquote(urlparse(a).path))
+        p = Path(a)
         if p.suffix.lower() in OPENABLE and p.is_file():
             return str(p)
     return None

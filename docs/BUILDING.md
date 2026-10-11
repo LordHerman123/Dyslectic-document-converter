@@ -22,7 +22,7 @@ the same on all three.
 
 ## Getting the builds without setting anything up
 
-Publishing a release (a tag such as `v1.17.0`) builds all three (*Windows release* and *Linux and macOS builds*) and attaches them to that release, so one page has the Windows, Mac and Linux downloads. Both
+Publishing a release (a tag such as `v1.18.0`) builds all three (*Windows release* and *Linux and macOS builds*) and attaches them to that release, so one page has the Windows, Mac and Linux downloads. Both
 can also be started by hand from the *Actions* tab (*Run workflow*, choose the branch). Each runs the tests, then **starts the packaged app** and lets it convert a scanned PDF from inside it
 (the same self-test as the Windows build: Python, the conversion, OCR with Tesseract, MP3 export and the natural
 voices must all work). The files are under the workflow run's *Artifacts*.
@@ -38,6 +38,11 @@ touch dyslexia_converter/assets/dropzone.enabled      # optional: dropping files
 
 The first `flet build` downloads Flutter (about 1 GB) by itself.
 
+The Mac and Linux apps are built with a slightly changed app shell, so that they open a document they are
+started with ("Open with", a PDF dropped on the app's icon); Flet's own shell takes that file for the address of
+a development server and stays blank. `python tools/flet_template.py build/flet-template` makes the changed
+shell and prints the folder to pass as `--template` (as below).
+
 ### Windows
 
 See [windows/README.md](../windows/README.md) (installer and zip with Tesseract included).
@@ -47,7 +52,8 @@ See [windows/README.md](../windows/README.md) (installer and zip with Tesseract 
 ```bash
 xcode-select --install          # once; flet build also needs Xcode 26 or later (App Store) and CocoaPods:
 brew install cocoapods tesseract tesseract-lang
-flet build macos --arch arm64 --product "Dyslexia Converter" --project DyslexiaConverter
+flet build macos --arch arm64 --product "Dyslexia Converter" --project DyslexiaConverter \
+    --template "$(python3 tools/flet_template.py build/flet-template)"
 # -> build/macos/DyslexiaConverter.app
 ```
 
@@ -60,7 +66,8 @@ macOS 11 and later.
 sudo apt install clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev \
     libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libsecret-1-dev
 sudo apt install tesseract-ocr espeak-ng zenity      # what the app uses when it runs
-flet build linux --product "Dyslexia Converter" --project DyslexiaConverter
+flet build linux --product "Dyslexia Converter" --project DyslexiaConverter \
+    --template "$(python3 tools/flet_template.py build/flet-template)"
 # -> build/linux/DyslexiaConverter (run it from that folder; keep the folder together)
 ```
 
