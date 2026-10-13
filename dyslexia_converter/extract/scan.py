@@ -8,6 +8,7 @@ Typical problems with book scans and what is done about them:
 * lines curving into the spine (book curl)  -> measure the curve strip by strip and straighten it
 * black scanner borders                     -> removed with the illumination step and cropping
 * pages scanned sideways                    -> the PDF page rotation is honoured; OSD as a fallback
+* one page of a spread printed sideways     -> that page alone is turned (OSD, then the other side if needed)
 
 All functions work on greyscale NumPy arrays (0 = black, 255 = white) and
 are pure, so they can be tested and reused on other platforms.

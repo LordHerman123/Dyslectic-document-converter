@@ -204,8 +204,8 @@ BOOK_TEXT_2 = [
 ]
 
 
-def _book_page_image(blocks, dpi=200):
-    """Render one book page (14 x 21 cm, single column, indented paragraphs) to a PIL image."""
+def _book_page_image(blocks, dpi=200, size=(14, 21)):
+    """Render one book page (14 x 21 cm unless given, single column, indented paragraphs) to a PIL image."""
     from PIL import Image
 
     buf = io.BytesIO()
@@ -223,7 +223,7 @@ def _book_page_image(blocks, dpi=200):
             story.append(Paragraph(text, body))
     from reportlab.platypus import SimpleDocTemplate
 
-    SimpleDocTemplate(buf, pagesize=(14 * cm, 21 * cm), leftMargin=1.8 * cm, rightMargin=1.8 * cm,
+    SimpleDocTemplate(buf, pagesize=(size[0] * cm, size[1] * cm), leftMargin=1.8 * cm, rightMargin=1.8 * cm,
                       topMargin=1.5 * cm, bottomMargin=2 * cm).build(story)
     page = pymupdf.open(stream=buf.getvalue(), filetype="pdf")[0]
     pix = page.get_pixmap(dpi=dpi, colorspace=pymupdf.csGRAY)
@@ -264,6 +264,26 @@ def make_book_spread(dst: Path, dpi: int = 200, skew: float = 1.2, rotation: int
         rect = pymupdf.Rect(0, box[1] * 72 / dpi, pw, box[3] * 72 / dpi)
         page.insert_image(rect, stream=b.getvalue())
     page.set_rotation(rotation)  # 90 shows it upright; 270 shows it upside down
+    out.save(dst)
+
+
+def make_spread_with_sideways_page(dst: Path, turn: int = 90, dpi: int = 200) -> None:
+    """A scanned spread whose right page is printed sideways, as books do with a wide table or exhibit: a
+    landscape page turned by `turn` degrees (counter-clockwise) to fit the portrait page."""
+    from PIL import Image
+
+    left = _book_page_image(BOOK_TEXT, dpi)
+    exhibit = [("heading", "Exhibit 4: How the plots were measured")] + BOOK_TEXT_2[1:] + [
+        (kind, text) for kind, text in BOOK_TEXT if kind is None]  # a full page of text
+    right = _book_page_image(exhibit, dpi, size=(21, 14)).rotate(turn, expand=True)
+    spread = Image.new("L", (left.width + right.width, max(left.height, right.height)), 255)
+    spread.paste(left, (0, 0))
+    spread.paste(right, (left.width, 0))
+    b = io.BytesIO()
+    spread.save(b, format="PNG")
+    out = pymupdf.open()
+    page = out.new_page(width=spread.width * 72 / dpi, height=spread.height * 72 / dpi)
+    page.insert_image(page.rect, stream=b.getvalue())
     out.save(dst)
 
 

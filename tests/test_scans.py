@@ -71,6 +71,68 @@ def test_book_spread_is_split_straightened_and_read(samples, name):
     assert "counted trees in sample plots." in joined
 
 
+@needs_tesseract
+@pytest.mark.parametrize("turn", [90, 270])
+def test_sideways_page_of_a_spread_is_turned_upright(tmp_path, turn):
+    """One page of a spread printed sideways (a wide table turned to fit) is read upright, after the other."""
+    from make_samples import make_spread_with_sideways_page
+
+    make_spread_with_sideways_page(tmp_path / "spread.pdf", turn)
+    doc = pipeline.load(tmp_path / "spread.pdf").document
+    assert [p.side for p in doc.pages] == ["left", "right"]
+    texts = [b.text for b in doc.blocks]
+    first = next(i for i, t in enumerate(texts) if t.startswith("The early modern European state"))
+    turned = next(i for i, t in enumerate(texts) if t.startswith("Mathematicians then worked"))
+    assert doc.blocks[first].page == 0 and doc.blocks[turned].page == 1 and first < turned
+    assert "Exhibit 4: How the plots were measured" in texts
+    assert "the second rotation of trees began to fail." in " ".join(texts)
+
+
+@needs_tesseract
+def test_sideways_page_is_turned_upright_when_the_side_is_mistaken(tmp_path, monkeypatch):
+    """On small print Tesseract can tell that a page lies on its side but not on which side (a held-out scanned
+    book showed this): the other quarter turn is tried as well."""
+    from dyslexia_converter.extract.ocr import TesseractEngine
+    from make_samples import make_spread_with_sideways_page
+
+    right_turn = TesseractEngine.orientation
+
+    def wrong_side(self, png):
+        turn = right_turn(self, png)
+        return {90: 270, 270: 90}.get(turn, turn)
+
+    monkeypatch.setattr(TesseractEngine, "orientation", wrong_side)
+    make_spread_with_sideways_page(tmp_path / "spread.pdf", 90)
+    doc = pipeline.load(tmp_path / "spread.pdf").document
+    texts = [b.text for b in doc.blocks if b.page == 1]
+    assert texts and texts[0] == "Exhibit 4: How the plots were measured"
+    assert any(t.startswith("Mathematicians then worked from the shape") for t in texts)
+
+
+@needs_tesseract
+@pytest.mark.parametrize("turn", [90, 270])
+def test_page_scanned_sideways_is_turned_upright(tmp_path, turn):
+    """A page scanned sideways, with no rotation stored in the PDF, is read upright and in order (turned one way,
+    OCR reads it as nonsense; turned the other way, as real words in a scrambled order)."""
+    import io
+
+    from make_samples import BOOK_TEXT, _book_page_image
+
+    img = _book_page_image(BOOK_TEXT, 200).rotate(turn, expand=True)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    out = pymupdf.open()
+    out.new_page(width=img.width * 72 / 200, height=img.height * 72 / 200).insert_image(
+        pymupdf.Rect(0, 0, img.width * 72 / 200, img.height * 72 / 200), stream=buf.getvalue())
+    out.save(tmp_path / "sideways.pdf")
+    texts = [b.text for b in pipeline.load(tmp_path / "sideways.pdf").document.blocks]
+    order = ["The early modern European state", "The best way to appreciate", "Measuring the Forest",
+             "Careful exploitation of the forests"]
+    at = [next(i for i, t in enumerate(texts) if t.startswith(o)) for o in order]
+    assert at == sorted(at)
+    assert "officials who counted trees in sample plots." in " ".join(texts)
+
+
 def test_scanner_text_layer_is_used_without_ocr(samples):
     session = pipeline.load(samples / "scan_with_text_layer.pdf", use_ocr=False)
     doc = session.document

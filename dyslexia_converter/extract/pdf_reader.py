@@ -2513,33 +2513,69 @@ def _scan_pages(rendered, source_page: int, engine: OcrEngine, languages: list[s
     Runs in a worker thread: it only uses the rendered image, never the PDF.
     Page numbers are assigned by the caller.
     """
-    out = _scan_image_pages(rendered, source_page, engine, languages, split_spreads)
-    if _poor_ocr(out) and hasattr(engine, "orientation"):
+    out, halves = _scan_image_pages(rendered, source_page, engine, languages, split_spreads)
+    if not hasattr(engine, "orientation"):
+        return out
+    if _looks_sideways(out):
         # sideways or upside-down scan: ask the OCR engine which way is up and try again
         buf = io.BytesIO()
         rendered.save(buf, format="PNG")
-        turn = engine.orientation(buf.getvalue())
-        if turn:
-            rendered = rendered.rotate(-turn, expand=True)
-            retry = _scan_image_pages(rendered, source_page, engine, languages, split_spreads)
-            if _ocr_quality(retry) > _ocr_quality(out):
-                out = retry
+        for turn in _turns(engine.orientation(buf.getvalue())):
+            retry, turned = _scan_image_pages(rendered.rotate(-turn, expand=True), source_page, engine, languages,
+                                              split_spreads)
+            if _turned_reads_better(retry, out):
+                out, halves = retry, turned
+            if not _looks_sideways(out):
+                break
+    if len(out) > 1:
+        # one page of a spread can be printed sideways on its own (a wide table turned to fit the page); a nearly
+        # empty page has little to gain
+        out = [_upright_half(sp, page, source_page, engine, languages)
+               if _runs_down([page]) or (_poor_ocr([page]) and _word_count([page]) >= 15) else page
+               for sp, page in zip(halves, out)]
     return out
+
+
+def _turns(turn: int) -> list[int]:
+    """The turns to try for a page the OCR engine says needs `turn`: that one, then for a quarter turn the opposite
+    quarter turn (on small print the engine can tell that a page lies on its side, but not on which side)."""
+    if turn in (90, 270):
+        return [turn, (turn + 180) % 360]
+    return [turn] if turn else []
+
+
+def _upright_half(sp, page: RawPage, source_page: int, engine: OcrEngine, languages: list[str]) -> RawPage:
+    """A page of a spread that looks read sideways, read again turned the way the OCR engine says is up, if that
+    reads better."""
+    from .scan import prepare_page
+
+    for turn in _turns(engine.orientation(sp.png())):
+        turned = prepare_page(sp.photo.rotate(-turn, expand=True), SCAN_DPI, split_spreads=False)[0]
+        retry = _ocr_scan_page(turned, source_page, engine, languages, side=sp.side)
+        if _turned_reads_better([retry], [page]):
+            page = retry
+        if not _looks_sideways([page]):
+            break
+    return page
 
 
 def _scan_image_pages(rendered, source_page: int, engine: OcrEngine, languages: list[str],
-                      split_spreads: bool) -> list[RawPage]:
-    """OCR one scanned page (split into two book pages when it is a spread), with its figures."""
+                      split_spreads: bool):
+    """OCR one scanned page (split into two book pages when it is a spread), with its figures; also returns the
+    cleaned book pages."""
     from .scan import prepare_page
 
-    out: list[RawPage] = []
-    for sp in prepare_page(rendered, SCAN_DPI, split_spreads=split_spreads):
-        info = PageInfo(-1, sp.width_pt, sp.height_pt, "scanned", ocr_used=True, source_page=source_page,
-                        side=sp.side, skew=sp.skew)
-        lines, figures = _ocr_image(sp.png(), SCAN_DPI, sp.width_pt, sp.height_pt, -1, engine, languages,
-                                    _photo_crop(lambda page=sp: page.photo, SCAN_DPI))
-        out.append(RawPage(info, lines, figures))
-    return out
+    halves = prepare_page(rendered, SCAN_DPI, split_spreads=split_spreads)
+    return [_ocr_scan_page(sp, source_page, engine, languages) for sp in halves], halves
+
+
+def _ocr_scan_page(sp, source_page: int, engine: OcrEngine, languages: list[str], side=None) -> RawPage:
+    """OCR one cleaned book page, with its figures."""
+    info = PageInfo(-1, sp.width_pt, sp.height_pt, "scanned", ocr_used=True, source_page=source_page,
+                    side=side or sp.side, skew=sp.skew)
+    lines, figures = _ocr_image(sp.png(), SCAN_DPI, sp.width_pt, sp.height_pt, -1, engine, languages,
+                                _photo_crop(lambda page=sp: page.photo, SCAN_DPI))
+    return RawPage(info, lines, figures)
 
 
 def _ocr_quality(pages: list[RawPage]) -> float:
@@ -2550,8 +2586,35 @@ def _ocr_quality(pages: list[RawPage]) -> float:
 
 def _poor_ocr(pages: list[RawPage]) -> bool:
     """Whether OCR found little text or had low confidence (then the scanner's own text may be better)."""
-    words = sum(len(l.conf) for p in pages for l in p.lines)
-    return words < 15 or _ocr_quality(pages) < 55
+    return _word_count(pages) < 15 or _ocr_quality(pages) < 55
+
+
+def _word_count(pages: list[RawPage]) -> int:
+    """Number of words OCR found."""
+    return sum(len(l.conf) for p in pages for l in p.lines)
+
+
+def _runs_down(pages: list[RawPage]) -> bool:
+    """Whether most of the text OCR found runs down the page (lines of words taller than they are wide): text
+    printed sideways, which OCR can read as real words in a scrambled order."""
+    chars = sum(len(l.text) for p in pages for l in p.lines)
+    down = sum(len(l.text) for p in pages for l in p.lines
+               if len(l.conf) >= 2 and l.bbox[3] - l.bbox[1] > l.bbox[2] - l.bbox[0])
+    return down > 0.5 * chars
+
+
+def _looks_sideways(pages: list[RawPage]) -> bool:
+    """Whether a scanned page may have been read the wrong way up: it reads poorly, or (a single page) its text runs
+    down the page."""
+    return _poor_ocr(pages) or (len(pages) == 1 and _runs_down(pages))
+
+
+def _turned_reads_better(turned: list[RawPage], first: list[RawPage]) -> bool:
+    """Whether a page read again after turning it beats the first reading: a reading across the page beats one down
+    the page (if it reads well), and otherwise the more confident one wins."""
+    if _runs_down(turned) != _runs_down(first):
+        return _runs_down(first) and not _poor_ocr(turned)
+    return _ocr_quality(turned) > _ocr_quality(first)
 
 
 def _word_lines(page: pymupdf.Page, pno: int) -> list[RawLine]:
