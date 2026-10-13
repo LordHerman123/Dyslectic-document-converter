@@ -387,8 +387,13 @@ class StructureDetector:
         blocks: list[Block] = []
         paras: list[_Para] = []
         lines_seq = [it for it in ordered if isinstance(it, RawLine)]
-        gaps = [b.y0 - a.y1 for a, b in zip(lines_seq, lines_seq[1:])
-                if 0 <= b.y0 - a.y1 < 1.5 * a.size and abs(a.x0 - b.x0) < 3 * a.size]
+        pairs = [(a, b) for a, b in zip(lines_seq, lines_seq[1:])
+                 if 0 <= b.y0 - a.y1 < 1.5 * a.size and abs(a.x0 - b.x0) < 3 * a.size]
+        # the usual gap between the lines of a paragraph, measured where a sentence runs on to the next line: on a
+        # page of short paragraphs and display formulas the gaps between paragraphs were most of the gaps, and a
+        # heading after a paragraph then looked like its next line
+        gaps = [b.y0 - a.y1 for a, b in pairs if b.text[:1].islower() and not a.text.rstrip().endswith(TERMINAL)] \
+            or [b.y0 - a.y1 for a, b in pairs]
         typical_gap = statistics.median(gaps) if gaps else body_size * 0.25
 
         def flush():
@@ -428,6 +433,9 @@ class StructureDetector:
             return False
         if p.bold != c.bold and (len(p.text) < 120 or len(c.text) < 120):
             return False
+        if len(para.lines) == 1 and p.italic and not c.italic and SUBSECTION_RE.match(p.text) \
+                and not p.text.rstrip().endswith(TERMINAL):
+            return False  # "7.2.1. Elliptic cylindrical coordinates" set in italics: a heading, not a first line
         # "(b) a bar chart and" + "(c) a scatter plot": a sentence running on, not a new list item
         running_on = bool(re.match(r"^\s*\((?:[a-z]|[ivx]{1,4}|\d{1,2})\)\s", c.text)) and \
             not p.text.rstrip().endswith(TERMINAL) and abs(c.x0 - p.x0) < 2 and \
@@ -715,6 +723,9 @@ class StructureDetector:
                 b.kind = BlockKind.HEADING
             elif numbered and b.source == "ocr" and len(words) <= 8 and not text.endswith("."):
                 b.kind = BlockKind.HEADING
+            elif getattr(b, "_italic", False) and nlines == 1 and len(words) <= 12 and SUBSECTION_RE.match(text) \
+                    and not text.endswith(TERMINAL):
+                b.kind = BlockKind.HEADING  # "7.2.1. Elliptic cylindrical coordinates" on a line of its own, in italics
             elif b.source == "ocr" and nlines == 1 and _title_case(text) and b.font_size >= bs * 0.93 \
                     and not text.endswith((".", ":", ";", ",")):
                 # scans carry no bold/italic information: a short, isolated Title Case line

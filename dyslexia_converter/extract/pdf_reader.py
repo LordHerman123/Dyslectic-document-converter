@@ -2172,7 +2172,10 @@ def _split_wide_gaps(groups: dict) -> dict:
 def _ocr_image(png: bytes, dpi: int, width_pt: float, height_pt: float, pno: int, engine: OcrEngine,
                languages: list[str], crop: Callable[[Rect], ImageData]) -> tuple[list[RawLine], list[RawFigure]]:
     """OCR one image and return lines/figures in points relative to that image."""
-    res = engine.recognize(_without_leaders(png), languages)
+    from PIL import Image
+
+    gray = np.asarray(Image.open(io.BytesIO(png)).convert("L"))  # decoded once for all the steps below
+    res = engine.recognize(_without_leaders(png, gray), languages)
     scale = 72.0 / dpi
     groups: dict[tuple[int, int, int], list] = {}
     for w in res.words:
@@ -2199,10 +2202,7 @@ def _ocr_image(png: bytes, dpi: int, width_pt: float, height_pt: float, pno: int
                              source="ocr", block_no=bn * 1000 + par, conf=conf))
     lines = [l for l in lines if not _is_ocr_noise(l)]
     regions = [tuple(v * scale for v in r.bbox) for r in res.regions]
-    regions += _scan_graphic_regions(png, lines, width_pt, height_pt)
-    from PIL import Image
-
-    gray = np.asarray(Image.open(io.BytesIO(png)).convert("L"))
+    regions += _scan_graphic_regions(png, lines, width_pt, height_pt, gray)
     regions = [r for r in regions if _plausible_scan_figure(r, lines, width_pt, height_pt, gray, dpi)]
     figures = _figures_from_regions(regions, lines, width_pt * height_pt, crop)
     fig_rects = [f.bbox for f in figures]
@@ -2263,13 +2263,13 @@ def _leader_spans(ink: np.ndarray) -> list[tuple[int, int, int, int]]:
     return spans
 
 
-def _without_leaders(png: bytes) -> bytes:
+def _without_leaders(png: bytes, gray: Optional[np.ndarray] = None) -> bytes:
     """The page image with the rows of dots of a table of contents taken out: OCR reads them as made-up words,
-    and they make it misread the titles next to them."""
+    and they make it misread the titles next to them. ``gray``: the image already decoded, if it is."""
     from PIL import Image
 
-    im = Image.open(io.BytesIO(png)).convert("L")
-    gray = np.asarray(im)
+    if gray is None:
+        gray = np.asarray(Image.open(io.BytesIO(png)).convert("L"))
     spans = _leader_spans(gray < 150)
     if not spans:
         return png
@@ -2277,7 +2277,7 @@ def _without_leaders(png: bytes) -> bytes:
     for y0, y1, x0, x1 in spans:
         clean[y0:y1, x0:x1] = 255
     buf = io.BytesIO()
-    Image.fromarray(clean).save(buf, format="PNG")
+    Image.fromarray(clean).save(buf, format="PNG", compress_level=1)
     return buf.getvalue()
 
 
@@ -2487,13 +2487,15 @@ def _ocr_page(page: pymupdf.Page, pno: int, engine: OcrEngine, languages: list[s
 
 
 def _photo_crop(photo, dpi: int) -> Callable[[Rect], ImageData]:
-    """A function that cuts a region (points) out of a scanned page's photo as a PNG at up to 200 dpi."""
+    """A function that cuts a region (points) out of a scanned page's photo as a PNG at up to 200 dpi.
+    ``photo``: the picture, or a function that makes it (only called when a region is cut)."""
     def crop(r: Rect) -> ImageData:
         """The region ``r`` (points) of the photo as a PNG."""
+        img = photo() if callable(photo) else photo
         k = dpi / 72.0
-        box = (max(0, int(r[0] * k)), max(0, int(r[1] * k)), min(photo.width, int(r[2] * k)),
-               min(photo.height, int(r[3] * k)))
-        part = photo.crop(box)
+        box = (max(0, int(r[0] * k)), max(0, int(r[1] * k)), min(img.width, int(r[2] * k)),
+               min(img.height, int(r[3] * k)))
+        part = img.crop(box)
         # figures are stored at up to 200 dpi, like figures from text PDFs
         f = min(1.0, FIGURE_DPI / dpi)
         if f < 1:
@@ -2511,33 +2513,69 @@ def _scan_pages(rendered, source_page: int, engine: OcrEngine, languages: list[s
     Runs in a worker thread: it only uses the rendered image, never the PDF.
     Page numbers are assigned by the caller.
     """
-    out = _scan_image_pages(rendered, source_page, engine, languages, split_spreads)
-    if _poor_ocr(out) and hasattr(engine, "orientation"):
+    out, halves = _scan_image_pages(rendered, source_page, engine, languages, split_spreads)
+    if not hasattr(engine, "orientation"):
+        return out
+    if _looks_sideways(out):
         # sideways or upside-down scan: ask the OCR engine which way is up and try again
         buf = io.BytesIO()
         rendered.save(buf, format="PNG")
-        turn = engine.orientation(buf.getvalue())
-        if turn:
-            rendered = rendered.rotate(-turn, expand=True)
-            retry = _scan_image_pages(rendered, source_page, engine, languages, split_spreads)
-            if _ocr_quality(retry) > _ocr_quality(out):
-                out = retry
+        for turn in _turns(engine.orientation(buf.getvalue())):
+            retry, turned = _scan_image_pages(rendered.rotate(-turn, expand=True), source_page, engine, languages,
+                                              split_spreads)
+            if _turned_reads_better(retry, out):
+                out, halves = retry, turned
+            if not _looks_sideways(out):
+                break
+    if len(out) > 1:
+        # one page of a spread can be printed sideways on its own (a wide table turned to fit the page); a nearly
+        # empty page has little to gain
+        out = [_upright_half(sp, page, source_page, engine, languages)
+               if _runs_down([page]) or (_poor_ocr([page]) and _word_count([page]) >= 15) else page
+               for sp, page in zip(halves, out)]
     return out
+
+
+def _turns(turn: int) -> list[int]:
+    """The turns to try for a page the OCR engine says needs `turn`: that one, then for a quarter turn the opposite
+    quarter turn (on small print the engine can tell that a page lies on its side, but not on which side)."""
+    if turn in (90, 270):
+        return [turn, (turn + 180) % 360]
+    return [turn] if turn else []
+
+
+def _upright_half(sp, page: RawPage, source_page: int, engine: OcrEngine, languages: list[str]) -> RawPage:
+    """A page of a spread that looks read sideways, read again turned the way the OCR engine says is up, if that
+    reads better."""
+    from .scan import prepare_page
+
+    for turn in _turns(engine.orientation(sp.png())):
+        turned = prepare_page(sp.photo.rotate(-turn, expand=True), SCAN_DPI, split_spreads=False)[0]
+        retry = _ocr_scan_page(turned, source_page, engine, languages, side=sp.side)
+        if _turned_reads_better([retry], [page]):
+            page = retry
+        if not _looks_sideways([page]):
+            break
+    return page
 
 
 def _scan_image_pages(rendered, source_page: int, engine: OcrEngine, languages: list[str],
-                      split_spreads: bool) -> list[RawPage]:
-    """OCR one scanned page (split into two book pages when it is a spread), with its figures."""
+                      split_spreads: bool):
+    """OCR one scanned page (split into two book pages when it is a spread), with its figures; also returns the
+    cleaned book pages."""
     from .scan import prepare_page
 
-    out: list[RawPage] = []
-    for sp in prepare_page(rendered, SCAN_DPI, split_spreads=split_spreads):
-        info = PageInfo(-1, sp.width_pt, sp.height_pt, "scanned", ocr_used=True, source_page=source_page,
-                        side=sp.side, skew=sp.skew)
-        lines, figures = _ocr_image(sp.png(), SCAN_DPI, sp.width_pt, sp.height_pt, -1, engine, languages,
-                                    _photo_crop(sp.photo, SCAN_DPI))
-        out.append(RawPage(info, lines, figures))
-    return out
+    halves = prepare_page(rendered, SCAN_DPI, split_spreads=split_spreads)
+    return [_ocr_scan_page(sp, source_page, engine, languages) for sp in halves], halves
+
+
+def _ocr_scan_page(sp, source_page: int, engine: OcrEngine, languages: list[str], side=None) -> RawPage:
+    """OCR one cleaned book page, with its figures."""
+    info = PageInfo(-1, sp.width_pt, sp.height_pt, "scanned", ocr_used=True, source_page=source_page,
+                    side=side or sp.side, skew=sp.skew)
+    lines, figures = _ocr_image(sp.png(), SCAN_DPI, sp.width_pt, sp.height_pt, -1, engine, languages,
+                                _photo_crop(lambda page=sp: page.photo, SCAN_DPI))
+    return RawPage(info, lines, figures)
 
 
 def _ocr_quality(pages: list[RawPage]) -> float:
@@ -2548,8 +2586,35 @@ def _ocr_quality(pages: list[RawPage]) -> float:
 
 def _poor_ocr(pages: list[RawPage]) -> bool:
     """Whether OCR found little text or had low confidence (then the scanner's own text may be better)."""
-    words = sum(len(l.conf) for p in pages for l in p.lines)
-    return words < 15 or _ocr_quality(pages) < 55
+    return _word_count(pages) < 15 or _ocr_quality(pages) < 55
+
+
+def _word_count(pages: list[RawPage]) -> int:
+    """Number of words OCR found."""
+    return sum(len(l.conf) for p in pages for l in p.lines)
+
+
+def _runs_down(pages: list[RawPage]) -> bool:
+    """Whether most of the text OCR found runs down the page (lines of words taller than they are wide): text
+    printed sideways, which OCR can read as real words in a scrambled order."""
+    chars = sum(len(l.text) for p in pages for l in p.lines)
+    down = sum(len(l.text) for p in pages for l in p.lines
+               if len(l.conf) >= 2 and l.bbox[3] - l.bbox[1] > l.bbox[2] - l.bbox[0])
+    return down > 0.5 * chars
+
+
+def _looks_sideways(pages: list[RawPage]) -> bool:
+    """Whether a scanned page may have been read the wrong way up: it reads poorly, or (a single page) its text runs
+    down the page."""
+    return _poor_ocr(pages) or (len(pages) == 1 and _runs_down(pages))
+
+
+def _turned_reads_better(turned: list[RawPage], first: list[RawPage]) -> bool:
+    """Whether a page read again after turning it beats the first reading: a reading across the page beats one down
+    the page (if it reads well), and otherwise the more confident one wins."""
+    if _runs_down(turned) != _runs_down(first):
+        return _runs_down(first) and not _poor_ocr(turned)
+    return _ocr_quality(turned) > _ocr_quality(first)
 
 
 def _word_lines(page: pymupdf.Page, pno: int) -> list[RawLine]:
@@ -2636,15 +2701,20 @@ def _estimate_font_size(text: str, height: float) -> float:
     return round(height / em * 2) / 2
 
 
-def _scan_graphic_regions(png: bytes, lines: list[RawLine], width: float, height: float) -> list[Rect]:
-    """Find pictures/diagrams/ruled tables on a scanned page.
+def _scan_graphic_regions(png: bytes, lines: list[RawLine], width: float, height: float,
+                          gray: Optional[np.ndarray] = None) -> list[Rect]:
+    """Find pictures/diagrams/ruled tables on a scanned page (``gray``: the page already decoded, if it is).
 
     Text-line areas are blanked, the remaining ink is gridded into cells and
     connected cells form candidate graphic regions.
     """
-    from PIL import Image, ImageDraw, ImageFilter
+    from PIL import Image, ImageDraw
 
-    img = Image.open(io.BytesIO(png)).convert("L").filter(ImageFilter.MinFilter(5))  # keep thin rules
+    from .scan import min_filter
+
+    if gray is None:
+        gray = np.asarray(Image.open(io.BytesIO(png)).convert("L"))
+    img = Image.fromarray(min_filter(gray, 5))  # keep thin rules
     dpi = 60
     small = img.resize((max(1, int(width * dpi / 72)), max(1, int(height * dpi / 72))), Image.BOX)
     k = dpi / 72

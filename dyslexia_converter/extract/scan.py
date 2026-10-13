@@ -8,6 +8,7 @@ Typical problems with book scans and what is done about them:
 * lines curving into the spine (book curl)  -> measure the curve strip by strip and straighten it
 * black scanner borders                     -> removed with the illumination step and cropping
 * pages scanned sideways                    -> the PDF page rotation is honoured; OSD as a fallback
+* one page of a spread printed sideways     -> that page alone is turned (OSD, then the other side if needed)
 
 All functions work on greyscale NumPy arrays (0 = black, 255 = white) and
 are pure, so they can be tested and reused on other platforms.
@@ -16,7 +17,8 @@ from __future__ import annotations
 
 import io
 from dataclasses import dataclass
-from typing import Optional
+from functools import cached_property, partial
+from typing import Callable, Optional
 
 import numpy as np
 from PIL import Image, ImageFilter
@@ -27,11 +29,17 @@ class ScanPage:
     """One (half) page ready for OCR."""
 
     image: Image.Image  # cleaned greyscale image for OCR
-    photo: Image.Image  # straightened original (colour kept) for cropping figures
+    make_photo: Callable[[], Image.Image]  # makes the straightened original, see ``photo``
     dpi: int
     skew: float  # degrees corrected
     origin: tuple[int, int]  # top-left of this half inside the full rendered page (pixels, before deskew)
     side: str  # "full", "left" or "right"
+
+    @cached_property
+    def photo(self) -> Image.Image:
+        """The straightened original (colour kept) for cropping figures. Made the first time it is needed:
+        turning and uncurling the colour picture is slow, and most pages have no figures."""
+        return self.make_photo()
 
     @property
     def width_pt(self) -> float:
@@ -46,7 +54,7 @@ class ScanPage:
     def png(self) -> bytes:
         """The cleaned picture as PNG bytes, for OCR."""
         buf = io.BytesIO()
-        self.image.save(buf, format="PNG")
+        self.image.save(buf, format="PNG", compress_level=1)  # the same picture, made several times faster
         return buf.getvalue()
 
 
@@ -55,6 +63,33 @@ class ScanPage:
 def to_gray(img: Image.Image) -> np.ndarray:
     """A picture as a greyscale array of floats (0 = black, 255 = white)."""
     return np.asarray(img.convert("L"), dtype=np.float32)
+
+
+def max_filter(a: np.ndarray, size: int) -> np.ndarray:
+    """The largest value in the ``size`` x ``size`` square around each pixel (``size`` odd), with the edge
+    pixels repeated outward: the same result as PIL's MaxFilter, but done as a maximum along the rows and then
+    along the columns, which is many times faster."""
+    return _square_filter(a, size, np.maximum)
+
+
+def min_filter(a: np.ndarray, size: int) -> np.ndarray:
+    """The smallest value in the square around each pixel: the same result as PIL's MinFilter, many times faster."""
+    return _square_filter(a, size, np.minimum)
+
+
+def _square_filter(a: np.ndarray, size: int, pick) -> np.ndarray:
+    """``pick`` (np.maximum or np.minimum) over the square around each pixel: first along the rows, then along
+    the columns of those results, which gives the same as over the whole square."""
+    r = size // 2
+    h, w = a.shape
+    padded = np.pad(a, r, mode="edge")
+    rows = padded[:, :w].copy()
+    for i in range(1, size):
+        pick(rows, padded[:, i:i + w], out=rows)
+    out = rows[:h].copy()
+    for i in range(1, size):
+        pick(out, rows[i:i + h], out=out)
+    return out
 
 
 def flatten_illumination(gray: np.ndarray, radius: int = 25) -> np.ndarray:
@@ -68,17 +103,25 @@ def flatten_illumination(gray: np.ndarray, radius: int = 25) -> np.ndarray:
     k = max(1, min(h, w) // 600)  # work at roughly 600 px on the short side
     small = Image.fromarray(gray.astype(np.uint8)).resize((max(1, w // k), max(1, h // k)))
     r = max(3, radius // k)
-    size = r | 1  # MaxFilter needs an odd size
-    bg = small.filter(ImageFilter.MaxFilter(size)).filter(ImageFilter.GaussianBlur(r))
+    size = r | 1  # the max filter needs an odd size
+    bg = Image.fromarray(max_filter(np.asarray(small), size)).filter(ImageFilter.GaussianBlur(r))
     bg = np.asarray(bg.resize((w, h)), dtype=np.float32)
-    out = gray / np.maximum(bg, 1.0) * 255.0
-    return np.clip(out, 0, 255)
+    out = gray / np.maximum(bg, 1.0)
+    out *= 255.0
+    return np.clip(out, 0, 255, out=out)  # in place: these are large pictures
+
+
+def _histogram(gray: np.ndarray) -> np.ndarray:
+    """How many pixels have each grey level 0..255 (a value is counted at its whole part)."""
+    if gray.ndim == 2 and gray.size and 0 <= gray.min() and gray.max() < 256:  # always so for pictures
+        return np.asarray(Image.fromarray(gray.astype(np.uint8)).histogram())  # many times faster
+    return np.histogram(gray, bins=256, range=(0, 256))[0]
 
 
 def binarize(gray: np.ndarray, level: Optional[float] = None) -> np.ndarray:
     """Boolean ink mask (True = ink). Otsu threshold when ``level`` is None."""
     if level is None:
-        hist, _ = np.histogram(gray, bins=256, range=(0, 256))
+        hist = _histogram(gray)
         total = gray.size
         cum = np.cumsum(hist)
         cum_mean = np.cumsum(hist * np.arange(256))
@@ -363,8 +406,8 @@ def prepare_page(rendered: Image.Image, dpi: int, split_spreads: bool = True,
     border = raw_ink & ~ink
     if border.any():
         # whiten scanner borders in the cleaned image so they never look like pictures
-        grown = Image.fromarray((border * 255).astype(np.uint8)).filter(ImageFilter.MaxFilter(7))
-        flat = np.where(np.asarray(grown) > 0, 255.0, flat)
+        grown = max_filter(border.astype(np.uint8), 7)
+        flat = np.where(grown > 0, 255.0, flat)
     halves: list[tuple[int, int, str]] = [(0, gray.shape[1], "full")]
     if split_spreads:
         g = find_gutter(ink)
@@ -376,18 +419,26 @@ def prepare_page(rendered: Image.Image, dpi: int, split_spreads: bool = True,
         part_ink = ink[:, x0:x1]
         angle = estimate_skew(part_ink) if deskew else 0.0
         clean = Image.fromarray(part_flat.astype(np.uint8))
-        photo = rendered.crop((x0, 0, x1, rendered.height))
-        white = (255, 255, 255) if photo.mode == "RGB" else 255
         clean = rotate(clean, angle, 255)
-        photo = rotate(photo, angle, white)
+        field = None
         if dewarp:
             field = curl_displacement(binarize(np.asarray(clean, dtype=np.float32)))
             if field is not None:
                 clean = apply_displacement(clean, field, 255)
-                photo = apply_displacement(photo, field, white)
         c_ink = clear_edge_blobs(binarize(np.asarray(clean, dtype=np.float32)))
-        bx0, by0, bx1, by1 = content_box(c_ink, margin=int(dpi * 0.15))
-        clean = clean.crop((bx0, by0, bx1, by1))
-        photo = photo.crop((bx0, by0, bx1, by1))
-        out.append(ScanPage(clean, photo, dpi, angle, (x0 + bx0, by0), side))
+        box = content_box(c_ink, margin=int(dpi * 0.15))
+        clean = clean.crop(box)
+        photo = partial(_straightened_photo, rendered, (x0, 0, x1, rendered.height), angle, field, box)
+        out.append(ScanPage(clean, photo, dpi, angle, (x0 + box[0], box[1]), side))
     return out
+
+
+def _straightened_photo(rendered: Image.Image, part: tuple[int, int, int, int], angle: float, field,
+                        box: tuple[int, int, int, int]) -> Image.Image:
+    """The part of the original picture that became a cleaned page, turned, uncurled and cropped like it."""
+    photo = rendered.crop(part)
+    white = (255, 255, 255) if photo.mode == "RGB" else 255
+    photo = rotate(photo, angle, white)
+    if field is not None:
+        photo = apply_displacement(photo, field, white)
+    return photo.crop(box)
