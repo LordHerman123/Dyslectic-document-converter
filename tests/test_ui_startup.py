@@ -41,6 +41,30 @@ def test_a_file_given_at_start_is_opened(tmp_path):
     assert file_from_args(["--flag", str(txt), str(pdf)]) == str(pdf)
     assert file_from_args([str(tmp_path / "missing.epub")]) is None
     assert file_from_args([]) is None
+    # a Linux file manager passes a file:// address (spaces written as %20)
+    assert file_from_args([pdf.as_uri()]) == str(pdf)
+
+
+def test_mac_and_linux_app_shell_lets_a_document_through():
+    """The `flet build` shell took any first argument for a development server's address, so the Mac and Linux apps
+    stayed blank when opened with a file; tools/flet_template.py changes that, and stops if the template changes."""
+    import importlib.util
+    from pathlib import Path
+
+    import pytest
+
+    tool = Path(__file__).resolve().parent.parent / "tools" / "flet_template.py"
+    spec = importlib.util.spec_from_file_location("flet_template", tool)
+    tpl = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(tpl)
+    shell = (tpl.ANCHOR + "\nif (kIsWeb || (isDesktopPlatform() && _args.isNotEmpty)) {}\n"
+             "if (kIsWeb || (isDesktopPlatform() && _args.isNotEmpty)) {}\n"
+             "if (kIsWeb) {\n} else if (_args.isNotEmpty && isDesktopPlatform()) {\n  pageUrl = _args[0];\n}\n")
+    patched = tpl.patch(shell)
+    assert "_args.isNotEmpty)" not in patched and patched.count("_devMode()") == 4
+    assert '".pdf"' in patched and 'startsWith("file:")' in patched
+    with pytest.raises(SystemExit):
+        tpl.patch("a template without the expected code")
 
 
 def test_focus_mode_resizes_before_its_pages_are_built(isolated_home):
