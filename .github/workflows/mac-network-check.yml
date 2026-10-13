@@ -14,7 +14,7 @@ permissions:
 jobs:
   check:
     runs-on: macos-15
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -22,10 +22,11 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install what the sample files and settings need
+      - name: Install the tests' needs and Tesseract, as the macOS build job does
         run: |
+          brew install tesseract
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements.txt pytest "flet==1.0.1"
 
       - uses: actions/download-artifact@v4
         with:
