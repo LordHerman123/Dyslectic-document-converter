@@ -136,7 +136,8 @@ class FocusMode:
         self._check: Optional[tuple[int, int]] = None  # page being checked and the part shown
         self.quality_labels: list[ft.Control] = []  # the small quality label on each page
         self._picture: Optional[tuple[int, str]] = None  # page and key of the picture being resized
-        self._picture_task: Optional[asyncio.Task] = None  # the size chosen with - / +, applied after a moment
+        self._picture_task: Optional[asyncio.Task] = None  # gives pictures the sizes asked for, one after another
+        self._picture_wish: Optional[tuple[str, float]] = None  # the latest size asked for: picture key, share
 
     # ------------------------------------------------------------------ settings kept between sessions
     @property
@@ -1394,29 +1395,30 @@ class FocusMode:
             show()
             value.update()
 
-        def step(by: int):
+        async def step(by: int):
             """Smaller or larger by 10 %, applied when the clicking stops."""
             slider.value = max(lo, min(hi, round((slider.value + by) / 5) * 5))
             show()
             app.page.update()
-            if self._picture_task:
-                self._picture_task.cancel()
-            self._picture_task = asyncio.get_running_loop().create_task(
-                self.size_picture(slider.value / 100, key, wait=0.7))
+            self.size_picture(slider.value / 100, key, wait=0.7)
+
+        async def give(share: float):
+            """Full width, Automatic or the slider let go: applied at once."""
+            self.size_picture(share, key)
 
         show()
         slider.on_change = moved
-        slider.on_change_end = lambda e: app.page.run_task(self.size_picture, slider.value / 100, key)
+        slider.on_change_end = lambda e: app.page.run_task(give, slider.value / 100)
         row: list[ft.Control] = [
             app.text(t("Picture size"), 14, weight=ft.FontWeight.BOLD),
-            ft.IconButton(ft.Icons.REMOVE, tooltip=t("Smaller"), icon_size=20, on_click=lambda e: step(-10)),
+            ft.IconButton(ft.Icons.REMOVE, tooltip=t("Smaller"), icon_size=20, on_click=lambda e: app.page.run_task(step, -10)),
             slider,
-            ft.IconButton(ft.Icons.ADD, tooltip=t("Larger"), icon_size=20, on_click=lambda e: step(10)),
+            ft.IconButton(ft.Icons.ADD, tooltip=t("Larger"), icon_size=20, on_click=lambda e: app.page.run_task(step, 10)),
             value,
             ft.TextButton(t("Full width"), icon=ft.Icons.WIDTH_FULL_OUTLINED,
-                          on_click=lambda e: app.page.run_task(self.size_picture, 1.0, key)),
+                          on_click=lambda e: app.page.run_task(give, 1.0)),
             ft.TextButton(t("Automatic"), icon=ft.Icons.RESTART_ALT, tooltip=t("The size the converter chose"),
-                          disabled=chosen is None, on_click=lambda e: app.page.run_task(self.size_picture, 0.0, key))]
+                          disabled=chosen is None, on_click=lambda e: app.page.run_task(give, 0.0))]
         if chosen and shown < chosen - 0.02:  # a tall picture: the page is not high enough for that width
             row.insert(5, app.text(t("(as large as fits on a page)"), 13, color=ft.Colors.ON_SURFACE_VARIANT))
         bar = ft.Container(ft.Row(row + [ft.IconButton(ft.Icons.CLOSE, tooltip=t("Close (Esc)"),
@@ -1428,19 +1430,26 @@ class FocusMode:
                            shadow=ft.BoxShadow(blur_radius=12, color="#40000000"))
         return ft.Column([bar], tight=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
 
-    async def size_picture(self, share: float, key: str, wait: float = 0.0) -> None:
+    def size_picture(self, share: float, key: str, wait: float = 0.0) -> None:
         """Give picture ``key`` this width (a share of the text width; 0: the size the converter chose), keep it
-        for this document and convert again (after ``wait`` seconds, so a few clicks on - / + convert once)."""
-        if wait:
-            await asyncio.sleep(wait)
-            self._picture_task = None
+        for this document and convert again. ``wait`` seconds first, so a few clicks on - / + convert once; a size
+        asked for while converting is given right after, so no click is lost. Called in the app's event loop."""
+        self._picture_wish = (key, share)
+        if self._picture_task is None or self._picture_task.done():
+            self._picture_task = asyncio.get_running_loop().create_task(self._give_sizes(wait))
+
+    async def _give_sizes(self, wait: float) -> None:
+        """Give the sizes asked for (see :meth:`size_picture`), the latest one each time."""
+        await asyncio.sleep(wait)
         app = self.app
-        session = app.session
-        if session is None or (session.picture_sizes.get(key) or 0.0) == (round(share, 3) if share else 0.0):
-            return
-        session.set_picture_size(key, share)
-        app.save_reading_position("pictures", dict(session.picture_sizes))
-        await app.rerender()
+        while self._picture_wish:
+            (key, share), self._picture_wish = self._picture_wish, None
+            session = app.session
+            if session is None or (session.picture_sizes.get(key) or 0.0) == (round(share, 3) if share else 0.0):
+                continue
+            session.set_picture_size(key, share)
+            app.save_reading_position("pictures", dict(session.picture_sizes))
+            await app.rerender()
 
     async def _follow_picture(self) -> None:
         """After converting again: outline the picture just resized where it is now (it may have moved to another
