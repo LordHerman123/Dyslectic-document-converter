@@ -57,6 +57,10 @@ class Session:
     page_map: dict[int, list[int]] = field(default_factory=dict)  # converted page -> original pages (preview)
     # where the words to check are in the converted PDF (preview): (page, x0, y0, x1, y1, reason), top-left origin
     unsure_marks: list[tuple[int, float, float, float, float, str]] = field(default_factory=list)
+    # the widths the reader chose for pictures (picture key -> share of the column width), and where the pictures are
+    # in the converted PDF (preview): (page, x0, y0, x1, y1, picture key, share of the column), top-left origin
+    picture_sizes: dict[str, float] = field(default_factory=dict)
+    picture_marks: list[tuple[int, float, float, float, float, str, float]] = field(default_factory=list)
     layout_orders: dict[int, list[int]] = field(default_factory=dict)  # page -> reading order from the AI
     # the whole-document AI check: what it found (fixed or not), and how many parts it could not check
     check_findings: list[check.Finding] = field(default_factory=list)
@@ -567,9 +571,18 @@ class Session:
     # ------------------------------------------------------------------ render
     def compose(self, settings: FormatSettings) -> ComposeResult:
         """The document laid out for the settings (items ready for any output format), with the fixes chosen from
-        the AI check and the words to check marked."""
+        the AI check, the words to check marked and the pictures as large as the reader made them."""
         doc = self.view()
-        return compose(doc, settings, self.ai_citation_decisions, unsure=self.quality(doc).unsure)
+        return compose(doc, settings, self.ai_citation_decisions, unsure=self.quality(doc).unsure,
+                       picture_sizes=self.picture_sizes)
+
+    def set_picture_size(self, key: str, share: float) -> None:
+        """Give a figure or table picture its own width, a share of the column width (kept between 0.2 and 1);
+        0 gives it back its automatic size. Used by the next export."""
+        if share:
+            self.picture_sizes[key] = round(max(0.2, min(1.0, share)), 3)
+        else:
+            self.picture_sizes.pop(key, None)
 
     def quality(self, doc: Optional[Document] = None) -> "Quality":
         """How much to trust the conversion (document and pages) and the words to check: see :mod:`quality`.
@@ -589,6 +602,7 @@ class Session:
             if fmt == "pdf":
                 self.page_map = pdf_writer.last_page_map()  # for the side-by-side preview
                 self.unsure_marks = pdf_writer.last_unsure_marks()  # for checking words in focus mode
+                self.picture_marks = pdf_writer.last_picture_marks()  # for resizing pictures in focus mode
             return data
         if fmt == "docx":
             return docx_writer.build_docx(result, settings, doc.title or _first_title(result), doc.author)

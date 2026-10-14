@@ -55,6 +55,7 @@ class RItem:
     keep_with_next: bool = False
     note: str = ""  # small print (e.g. "table shown as image")
     natural_width: float = 0.0  # width in the original PDF (points)
+    size: float = 0.0  # figures and table pictures: the width the reader chose, a share of the column (0: automatic)
 
     @property
     def text(self) -> str:
@@ -156,13 +157,15 @@ def _superscript_spans(text: str, styles) -> list[tuple[int, int]]:
 
 def compose(doc: Document, settings: FormatSettings, ai_citation_decisions: Optional[dict[str, bool]] = None,
             citation_threshold: float = 0.9,
-            unsure: Optional[dict[str, list[tuple[int, int, str]]]] = None) -> ComposeResult:
+            unsure: Optional[dict[str, list[tuple[int, int, str]]]] = None,
+            picture_sizes: Optional[dict[str, float]] = None) -> ComposeResult:
     """Lay out the document for the settings: drop page furniture, move citations and footnotes when asked, number
     references, add the contents page and the note about the conversion.
 
     ``ai_citation_decisions`` holds the AI's verdicts on uncertain citations (only in AI-assisted mode);
     ``citation_threshold`` is how sure the rules must be to move a citation on their own; ``unsure`` holds the
-    words to check per block (see :mod:`quality`), marked on the runs so the PDF can note where they are.
+    words to check per block (see :mod:`quality`), marked on the runs so the PDF can note where they are;
+    ``picture_sizes`` holds the widths the reader chose for pictures (picture key -> share of the column width).
     """
     ai_citation_decisions = ai_citation_decisions or {}
     lang = doc.language or "en"
@@ -229,12 +232,13 @@ def compose(doc: Document, settings: FormatSettings, ai_citation_decisions: Opti
             if b.image and (b.image.kind != "decorative"
                             or (settings.show_decorative_images and not settings.ink_saving)):
                 items.append(RItem("image", image=b.image, block_id=b.id,
-                                   natural_width=b.bbox[2] - b.bbox[0]))
+                                   natural_width=b.bbox[2] - b.bbox[0], size=_size_of(b.image, picture_sizes)))
                 if b.image.kind == "unreadable-text":
                     items.append(RItem("small", [Run(doc_label(lang, "unreadable"))]))
             continue
         if b.kind == BlockKind.TABLE:
-            items.append(RItem("table", table=b.table, block_id=b.id, natural_width=b.bbox[2] - b.bbox[0]))
+            items.append(RItem("table", table=b.table, block_id=b.id, natural_width=b.bbox[2] - b.bbox[0],
+                               size=_size_of(b.table.fallback_image if b.table else None, picture_sizes)))
             continue
         if b.kind == BlockKind.FOOTNOTE and settings.move_footnotes:
             continue  # collected at the end
@@ -390,6 +394,13 @@ def _typed_formulas(doc: Document, b: Block) -> list[StyleRange]:
     replace, moved with the other styles to where the formula text is)."""
     return [StyleRange(c.start, c.end, math=True) for c in doc.corrections_for(b.id)
             if c.latex and c.applied and b.text[c.start:c.end] == c.original]
+
+
+def _size_of(image: Optional[ImageData], picture_sizes: Optional[dict[str, float]]) -> float:
+    """The width the reader chose for a picture (a share of the column width), or 0 for the automatic size."""
+    if not picture_sizes or image is None:
+        return 0.0
+    return picture_sizes.get(image.key, 0.0)
 
 
 def _unsure_in(doc: Document, b: Block, unsure: Optional[dict]) -> list[tuple[int, int, str]]:

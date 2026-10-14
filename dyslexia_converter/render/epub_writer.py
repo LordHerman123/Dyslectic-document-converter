@@ -32,6 +32,11 @@ def _x(text: str) -> str:
     return escape(_BAD_XML.sub("", text), {'"': "&quot;"})
 
 
+def _width(it: RItem) -> str:
+    """The width the reader chose for a picture, as a style attribute ("" for the automatic size)."""
+    return f' style="width:{100 * max(0.2, min(1.0, it.size)):.0f}%"' if it.size else ""
+
+
 class _Book:
     """Builds the EPUB's chapters, pictures, stylesheet and links from the composed document."""
     def __init__(self, result: ComposeResult, s: FormatSettings):
@@ -102,7 +107,7 @@ class _Book:
             if tab is not None and tab.fallback_image is not None:
                 img = tab.fallback_image
                 return (f'<figure class="table-picture"><img src="{self.image_file(img)}" '
-                        f'alt="{_x(doc_label(self.result.language, "table_picture"))}"/></figure>')
+                        f'alt="{_x(doc_label(self.result.language, "table_picture"))}"{_width(it)}/></figure>')
             return ""
         n = max(len(r) for r in rows)
         head = max(1, min(tab.header_rows, len(rows) - 1)) if len(rows) > 1 else 0
@@ -165,7 +170,8 @@ class _Book:
                     if it.image is not None:
                         alt = it.image.alt or (re.sub(r"<[^>]+>", "", self.inline(cap.runs)) if cap else "") \
                             or doc_label(self.result.language, "figure")
-                        fig = f'<figure id="{aid}"><img src="../{self.image_file(it.image)}" alt="{_x(alt)}"/>'
+                        fig = (f'<figure id="{aid}"><img src="../{self.image_file(it.image)}" alt="{_x(alt)}"'
+                               f'{_width(it)}/>')
                         if cap is not None:
                             fig += f"<figcaption>{self.inline(cap.runs)}</figcaption>"
                             i += 1

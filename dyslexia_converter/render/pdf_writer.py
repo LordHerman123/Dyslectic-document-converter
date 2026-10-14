@@ -619,6 +619,8 @@ class _Doc(BaseDocTemplate):
         self.page_map: dict[int, set[int]] = {}
         self.unsure_marks: list[tuple] = []
         self.canv._unsure = self.unsure_marks
+        self.picture_marks: list[tuple] = []
+        self.canv._pictures = self.picture_marks
         self._source: Optional[int] = None
         self.tagger.reset()
         self.canv._tagger = self.tagger
@@ -702,19 +704,51 @@ def _styles(s: FormatSettings, printable: bool) -> dict[str, PStyle]:
     return styles
 
 
-def _image_flowable(item: RItem, col_w: float, max_h: float) -> Optional[Flowable]:
-    """A figure as a picture in the column, a little larger than in the original but never taller than ``max_h``."""
+PICTURE_SHARES = (0.2, 1.0)  # the smallest and largest width a reader can give a picture (share of the column)
+PICTURE_ROOM = 0.9  # a picture the reader sized may be this high (share of the page's text area)
+
+
+class _Picture(Image):
+    """A figure or a table's picture that notes where it was drawn (as :func:`_note_unsure` does for words), so
+    the reader can pick it in focus mode and give it another size."""
+
+    def __init__(self, img: ImageData, width: float, height: float, share: float):
+        super().__init__(io.BytesIO(img.data), width=width, height=height, hAlign="LEFT")
+        self._key, self._share = img.key, share
+
+    def draw(self):
+        """Draw the picture and note its box: page, x0, y0, x1, y1 in points from the top-left corner, its key
+        and its width as a share of the column."""
+        super().draw()
+        c = self.canv
+        sink = getattr(c, "_pictures", None)
+        if sink is None:
+            return
+        a, _, _, d, e, f = c._currentMatrix
+        x0, y0 = e + a * getattr(self, "_offs_x", 0), f + d * getattr(self, "_offs_y", 0)
+        page_h = c._pagesize[1]
+        sink.append((c.getPageNumber() - 1, round(x0, 2), round(page_h - y0 - d * self.drawHeight, 2),
+                     round(x0 + a * self.drawWidth, 2), round(page_h - y0, 2), self._key, round(self._share, 3)))
+
+
+def _image_flowable(item: RItem, col_w: float, max_h: float, room: float = 0.0) -> Optional[Flowable]:
+    """A figure as a picture in the column, a little larger than in the original but never taller than ``max_h``;
+    or as wide as the reader chose (``item.size``), then up to most of the text area high (``room``)."""
     img = item.image
     if img is None:
         return None
     pw, ph = img.width, img.height
-    natural = item.natural_width or pw * 72 / 200
-    w = min(col_w, max(natural * 1.35, col_w * 0.6))
+    if item.size:
+        w = col_w * max(PICTURE_SHARES[0], min(PICTURE_SHARES[1], item.size))
+        max_h = max(max_h, room * PICTURE_ROOM)
+    else:
+        natural = item.natural_width or pw * 72 / 200
+        w = min(col_w, max(natural * 1.35, col_w * 0.6))
     h = w * ph / max(1, pw)
     if h > max_h:
         h = max_h
         w = h * pw / max(1, ph)
-    return Image(io.BytesIO(img.data), width=w, height=h, hAlign="LEFT")
+    return _Picture(img, w, h, w / col_w)
 
 
 def _equation_flowable(item: RItem, s: FormatSettings, col_w: float) -> Optional[Flowable]:
@@ -731,7 +765,8 @@ def _equation_flowable(item: RItem, s: FormatSettings, col_w: float) -> Optional
     return fl
 
 
-def _table_flowable(item: RItem, s: FormatSettings, col_w: float, max_h: float, printable: bool) -> tuple[Flowable, str]:
+def _table_flowable(item: RItem, s: FormatSettings, col_w: float, max_h: float, printable: bool,
+                    room: float = 0.0) -> tuple[Flowable, str]:
     """A table in the column, or its picture from the original when the table could not be read reliably (or the user
     chose pictures). Returns the flowable and a note for the user, if any.
     """
@@ -745,8 +780,8 @@ def _table_flowable(item: RItem, s: FormatSettings, col_w: float, max_h: float, 
     def picture(note: str) -> tuple[Flowable, str]:
         """The table's picture from the original, with ``note`` for the user."""
         if tab is not None and tab.fallback_image is not None:
-            fake = RItem("image", image=tab.fallback_image, natural_width=item.natural_width)
-            return _image_flowable(fake, col_w, max_h), note
+            fake = RItem("image", image=tab.fallback_image, natural_width=item.natural_width, size=item.size)
+            return _image_flowable(fake, col_w, max_h, room), note
         return Spacer(1, 1), ""
 
     if not usable:
@@ -880,7 +915,7 @@ def build_pdf(result: ComposeResult, s: FormatSettings, title: str = "", author:
             story.append(_SourceMark(source))
             last_source = source
         if kind == "image":
-            fl = _image_flowable(it, col_w, frame_h * 0.7)
+            fl = _image_flowable(it, col_w, frame_h * 0.7, frame_h)
             if fl is not None:
                 has_caption = i + 1 < len(items) and items[i + 1].kind == "caption"
                 alt = (it.image.alt if it.image else "") or (items[i + 1].text if has_caption else "")
@@ -904,7 +939,7 @@ def build_pdf(result: ComposeResult, s: FormatSettings, title: str = "", author:
             i += 1
             continue
         if kind == "table":
-            fl, note = _table_flowable(it, s, col_w, frame_h * 0.8, printable)
+            fl, note = _table_flowable(it, s, col_w, frame_h * 0.8, printable, frame_h)
             story.append(tag(fl, tagger, "Table"))
             if note:
                 story.append(tag(RichParagraph([Run(note)], styles["small"]), tagger, "P"))
@@ -937,7 +972,7 @@ def build_pdf(result: ComposeResult, s: FormatSettings, title: str = "", author:
             continue
         st = styles.get(kind, styles["paragraph"])
         if kind == "caption" and it.keep_with_next and i + 1 < len(items) and items[i + 1].kind == "table":
-            fl, note = _table_flowable(items[i + 1], s, col_w, frame_h * 0.8, printable)
+            fl, note = _table_flowable(items[i + 1], s, col_w, frame_h * 0.8, printable, frame_h)
             group = [tag(RichParagraph(it.runs, st), tagger, "Caption"), tag(fl, tagger, "Table")]
             if note:
                 group.append(tag(RichParagraph([Run(note)], styles["small"]), tagger, "P"))
@@ -978,12 +1013,19 @@ def build_pdf(result: ComposeResult, s: FormatSettings, title: str = "", author:
     doc.multiBuild(story)
     _render_state.page_map = {page: sorted(src) for page, src in doc.page_map.items()}
     _render_state.unsure = list(doc.unsure_marks)
+    _render_state.pictures = list(doc.picture_marks)
     return pdf_tags.add_structure(buf.getvalue(), tagger, result.language)
 
 
 def last_unsure_marks() -> list[tuple]:
     """For the PDF just built on this thread: where the words to check are, as (page, x0, y0, x1, y1, reason)."""
     return list(getattr(_render_state, "unsure", []) or [])
+
+
+def last_picture_marks() -> list[tuple]:
+    """For the PDF just built on this thread: where the figures and table pictures are, as (page, x0, y0, x1, y1,
+    picture key, width as a share of the column)."""
+    return list(getattr(_render_state, "pictures", []) or [])
 
 
 def last_page_map() -> dict[int, list[int]]:

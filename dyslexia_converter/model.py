@@ -7,8 +7,10 @@ applied at render time, so every transformation can be reversed.
 """
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field, replace
 from enum import Enum
+from functools import cached_property
 from typing import Optional
 
 
@@ -65,6 +67,12 @@ class ImageData:
     text_size: float = 0.0  # font size of the text around it in the original (equations are scaled with it)
     descent: float = 0.0  # inline formulas: how far the picture reaches below the text baseline (points)
     width_pt: float = 0.0  # size in the original (points)
+
+    @cached_property
+    def key(self) -> str:
+        """Names the picture by what it shows: the same picture has the same name when the document is read again,
+        so a size the reader chose for it is found again."""
+        return hashlib.sha1(self.data).hexdigest()[:16]
 
 
 @dataclass

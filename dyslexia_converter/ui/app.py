@@ -1904,6 +1904,7 @@ class ConverterApp:
         self.orig_count = preview.page_count(self.original_view)
         self.orig_page = (self._page_range() or (1, 1))[0] - 1
         self.conv_page = int(self.reading_position("focus", 0))  # where this document was left last time
+        self.session.picture_sizes = dict(self.reading_position("pictures", {}))  # sizes given to its pictures
         self.busy(False, self.doc_status())
         self._update_doc_language_option()
         self._notices = [("warning", w, None) for w in d.warnings]
@@ -2252,7 +2253,8 @@ class ConverterApp:
     POSITIONS_KEPT = 200
 
     def reading_position(self, kind: str, default=0):
-        """Where the open document was left in ``kind`` ("focus": a page, "reflow": a paragraph)."""
+        """Where the open document was left in ``kind`` ("focus": a page, "reflow": a paragraph), or what the
+        reader set for it ("pictures": the sizes given to its pictures)."""
         if not self.doc_key:
             return default
         return self.ui.get("positions", {}).get(self.doc_key, {}).get(kind, default)
