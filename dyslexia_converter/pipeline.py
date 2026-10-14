@@ -20,6 +20,7 @@ from .extract.ocr import OcrEngine, default_engine
 from .extract.pdf_reader import read_pdf
 from .extract.structured import is_structured, read_structured
 from .model import BlockKind, Correction, Document, effective_corrections
+from .quality import Quality, assess
 from .render.compose import ComposeResult, compose
 from .settings import FormatSettings
 from .structure.detector import StructureDetector
@@ -54,6 +55,8 @@ class Session:
     ai_citation_decisions: dict[str, bool] = field(default_factory=dict)
     ai_log: list[str] = field(default_factory=list)
     page_map: dict[int, list[int]] = field(default_factory=dict)  # converted page -> original pages (preview)
+    # where the words to check are in the converted PDF (preview): (page, x0, y0, x1, y1, reason), top-left origin
+    unsure_marks: list[tuple[int, float, float, float, float, str]] = field(default_factory=list)
     layout_orders: dict[int, list[int]] = field(default_factory=dict)  # page -> reading order from the AI
     # the whole-document AI check: what it found (fixed or not), and how many parts it could not check
     check_findings: list[check.Finding] = field(default_factory=list)
@@ -551,8 +554,15 @@ class Session:
     # ------------------------------------------------------------------ render
     def compose(self, settings: FormatSettings) -> ComposeResult:
         """The document laid out for the settings (items ready for any output format), with the fixes chosen from
-        the AI check."""
-        return compose(self.view(), settings, self.ai_citation_decisions)
+        the AI check and the words to check marked."""
+        doc = self.view()
+        return compose(doc, settings, self.ai_citation_decisions, unsure=self.quality(doc).unsure)
+
+    def quality(self, doc: Optional[Document] = None) -> "Quality":
+        """How much to trust the conversion (document and pages) and the words to check: see :mod:`quality`.
+        Words the reader corrected are not to check any more."""
+        doc = doc or self.view()
+        return assess(doc, Dictionary([doc.language], self.custom_words).known)
 
     def export(self, fmt: str, settings: FormatSettings) -> bytes:
         """The document in an output format: "pdf", "printable_pdf", "docx", "epub", "txt" or "md" (bytes)."""
@@ -565,6 +575,7 @@ class Session:
                                         printable=fmt == "printable_pdf")
             if fmt == "pdf":
                 self.page_map = pdf_writer.last_page_map()  # for the side-by-side preview
+                self.unsure_marks = pdf_writer.last_unsure_marks()  # for checking words in focus mode
             return data
         if fmt == "docx":
             return docx_writer.build_docx(result, settings, doc.title or _first_title(result), doc.author)

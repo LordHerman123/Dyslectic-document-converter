@@ -117,6 +117,7 @@ class _Piece:
     back: float = 0.0  # drawn this far to the left (an index stacked under/over the previous one)
     image: Optional[ImageData] = None  # a small formula picture instead of text
     height: float = 0.0
+    unsure: str = ""  # a word the converter is unsure about: why (see Run.unsure)
 
 
 class RichParagraph(Flowable):
@@ -225,7 +226,10 @@ class RichParagraph(Flowable):
                         words.append(cur)
                         cur = []
                     continue
-                cur += self._pieces_for(token, r.bold, r.italic, r.superscript, r.subscript, r.math)
+                pieces = self._pieces_for(token, r.bold, r.italic, r.superscript, r.subscript, r.math)
+                for p in pieces:
+                    p.unsure = r.unsure
+                cur += pieces
         if cur:
             words.append(cur)
         for word in words:
@@ -297,11 +301,12 @@ class RichParagraph(Flowable):
                 if cur_w + w > width and cur:
                     chunks.append(cur)
                     cur, cur_w = [], 0.0
-                if cur and cur[-1].font == p.font and cur[-1].size == p.size and cur[-1].rise == p.rise:
+                if cur and cur[-1].font == p.font and cur[-1].size == p.size and cur[-1].rise == p.rise \
+                        and cur[-1].unsure == p.unsure:
                     cur[-1].text += ch
                     cur[-1].width += w
                 else:
-                    cur.append(_Piece(ch, p.font, p.size, p.rise, w))
+                    cur.append(_Piece(ch, p.font, p.size, p.rise, w, unsure=p.unsure))
                 cur_w += w
         if cur:
             chunks.append(cur)
@@ -443,6 +448,8 @@ class RichParagraph(Flowable):
                         t.setRise(0)
                         t.textOut(" ")  # real space so copied text keeps word breaks
                     c.drawText(t)
+                    if p.unsure:
+                        _note_unsure(c, px - p.back, baseline + p.rise, p)
                     px += p.width
                 x += sum(p.width for p in word) + gap
         if s.rule_below is not None and self._last:
@@ -481,6 +488,19 @@ INLINE_FORMULA_BOOST = 1.15
 class _RenderState(threading.local):
     """Per-thread data for the PDF being built (the inline formula pictures)."""
     images: dict = {}
+
+
+def _note_unsure(c, x: float, y: float, p: _Piece) -> None:
+    """Note where a word to check was drawn: page and box in PDF points from the top-left corner (as text
+    extraction gives word boxes), so the app can mark it over the page."""
+    sink = getattr(c, "_unsure", None)
+    if sink is None:
+        return
+    a, _, _, d, e, f = c._currentMatrix
+    x0, base = e + a * x, f + d * y
+    page_h = c._pagesize[1]
+    sink.append((c.getPageNumber() - 1, round(x0, 2), round(page_h - base - p.size * 0.8, 2),
+                 round(x0 + a * p.width, 2), round(page_h - base + p.size * 0.25, 2), p.unsure))
 
 
 _render_state = _RenderState()
@@ -597,6 +617,8 @@ class _Doc(BaseDocTemplate):
         # every build pass starts afresh: page of the converted PDF -> pages of the original shown on it
         """Start of a build pass (ReportLab builds more than once for the contents page): reset the bookkeeping."""
         self.page_map: dict[int, set[int]] = {}
+        self.unsure_marks: list[tuple] = []
+        self.canv._unsure = self.unsure_marks
         self._source: Optional[int] = None
         self.tagger.reset()
         self.canv._tagger = self.tagger
@@ -955,7 +977,13 @@ def build_pdf(result: ComposeResult, s: FormatSettings, title: str = "", author:
         story.append(tag(RichParagraph([Run(doc_label(result.language, "no_text"))], styles["paragraph"]), tagger, "P"))
     doc.multiBuild(story)
     _render_state.page_map = {page: sorted(src) for page, src in doc.page_map.items()}
+    _render_state.unsure = list(doc.unsure_marks)
     return pdf_tags.add_structure(buf.getvalue(), tagger, result.language)
+
+
+def last_unsure_marks() -> list[tuple]:
+    """For the PDF just built on this thread: where the words to check are, as (page, x0, y0, x1, y1, reason)."""
+    return list(getattr(_render_state, "unsure", []) or [])
 
 
 def last_page_map() -> dict[int, list[int]]:

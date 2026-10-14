@@ -19,6 +19,7 @@ import flet as ft
 
 from .. import dictionary
 from .. import highlights as hl
+from .. import quality
 from ..fonts import FONT_CHOICES
 from ..ai.assistant import EXPLAIN_WORDS
 from ..ai.providers import PROVIDERS
@@ -131,6 +132,9 @@ class FocusMode:
         self._settle: Optional[int] = None
         self._saved: list = []
         self._prev_keys = None
+        self._checks: dict[int, list[tuple[int, int, str]]] = {}  # page -> words to check (first, last, why)
+        self._check: Optional[tuple[int, int]] = None  # page being checked and the part shown
+        self.quality_labels: list[ft.Control] = []  # the small quality label on each page
 
     # ------------------------------------------------------------------ settings kept between sessions
     @property
@@ -388,9 +392,16 @@ class FocusMode:
             self._sentences = hl.sentence_spans(self.words)
             self._paragraphs = hl.paragraph_spans(self.words)
             self._toc_starts = await app.in_thread(self._heading_starts)
+        marks = app.session.unsure_marks if app.session and self.source == "converted" else []
+        self._checks = quality.parts_on_pages(self.words, marks) if self.words else {}
+        if self._check and (self._check[0] >= n or self.source != "converted"):
+            self._check = None
+        elif self._check:
+            self._check = (self._check[0], min(self._check[1], max(0, len(self._checks.get(self._check[0], [])) - 1)))
         self._lines = {}
         page_bg = TINT_COLOURS.get(self.tint, TINT_COLOURS["white"])[0]
         self.images, self.frames, self.detectors, self.overlays, self.marks = [], [], [], [], []
+        self.quality_labels = []
         for i, (pw, ph) in enumerate(self.sizes):
             img = ft.Image(src=_blank(), fit=ft.BoxFit.FILL, gapless_playback=True, expand=True)
             # the selection and the picked word are drawn as a few shapes over the picture: moving them while
@@ -410,8 +421,11 @@ class FocusMode:
                                      on_long_press_end=self.on_select_end, on_secondary_tap_down=self.on_word_card,
                                      on_size_change=self.on_size, mouse_cursor=ft.MouseCursor.CLICK, expand=True)
             w = self._page_w(i)
-            frame = ft.Container(det, width=w, height=w * ph / pw, bgcolor=page_bg,
-                                 shadow=ft.BoxShadow(blur_radius=10, color="#33000000"))
+            label = self._quality_label(i)
+            self.quality_labels.append(label)
+            frame = ft.Container(ft.Stack([det, label], fit=ft.StackFit.EXPAND) if label else det, width=w,
+                                 height=w * ph / pw, bgcolor=page_bg, shadow=ft.BoxShadow(blur_radius=10,
+                                                                                         color="#33000000"))
             self.images.append(img)
             self.overlays.append(overlay)
             self.marks.append(marks)
@@ -625,6 +639,8 @@ class FocusMode:
                 out.append(ft.Container(left=x0 * s - 3, top=y0 * s - 2, width=(x1 - x0) * s + 6,
                                         height=(y1 - y0) * s + 4, border_radius=4, bgcolor="#3C7A2E3A",
                                         border=ft.Border.all(2, edge)))
+        if self._check and self._check[0] == i:
+            out += self._check_shapes(i, s)
         if self.ruler and self.ruler[0] == i:
             lines = self._lines_of(i)
             if lines:
@@ -735,6 +751,8 @@ class FocusMode:
         self.current = min(len(self.sizes) - 1, round(self.current * len(self.sizes) / old))
         await self._show_layout()
         self._start_rendering()
+        if self._check:  # checking a page goes on after a correction
+            self._show_card(self._check_card(), "check")
 
     def _zoom_by(self, factor: float) -> None:
         """Make the pages ``factor`` times larger (or smaller); page by page this zooms into the page."""
@@ -1288,8 +1306,12 @@ class FocusMode:
         self._paint_selection(old | self._pages_of(self.sel))
         self._show_card(self._selection_card(a, b), "selection")
 
-    async def close_card(self, e=None) -> None:
-        """Close the card and take the outline or selection off the page."""
+    async def close_card(self, e=None, keep_check: bool = False) -> None:
+        """Close the card and take the outline or selection off the page (and the words to check, unless
+        ``keep_check``: a word was just corrected while checking a page, and checking goes on)."""
+        if self._check is not None and not keep_check:
+            page, self._check = self._check[0], None
+            await self.redraw(page)
         self._typing = False
         self.card_layer.visible = False
         self.card_layer.content = None
@@ -1298,6 +1320,126 @@ class FocusMode:
         self.sel, self.card_word = None, None
         self._paint_selection(pages)
         self.app.page.update()
+
+    # ------------------------------------------------------------------ how far to trust each page
+    def _quality_label(self, i: int) -> Optional[ft.Control]:
+        """A small label in the top corner of converted page ``i``: a coloured dot and the page's quality; clicking
+        it shows the words to check on the page. None for pages without a rating (contents, notes)."""
+        app = self.app
+        if self.source != "converted" or app.quality is None:
+            return None
+        r = app.quality.page_rating(app._page_map().get(i, []))
+        if r is None:
+            return None
+        t = app.t
+        colour = app.QUALITY_STYLE[r.level][0]
+        n = len(self._checks.get(i, []))
+        tip = t("Quality estimate for this page: {level}.", level=app.level_name(r.level)) + "\n" + "\n".join(
+            app.quality_reasons(r)) + "\n" + (t("Click to see the {n} word(s) to check.", n=n) if n
+                                              else t("Nothing to check on this page."))
+        return ft.Container(
+            ft.Row([ft.Container(width=8, height=8, border_radius=4, bgcolor=colour),
+                    app.text(app.level_name(r.level), 11, color="#4A4A4A")], spacing=4, tight=True,
+                   vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            top=6, right=8, padding=ft.Padding.symmetric(horizontal=6, vertical=1), border_radius=8,
+            bgcolor="#C8FFFFFF", tooltip=tip, visible=not self.bars_hidden, ink=True,
+            on_click=lambda e, i=i: app.page.run_task(self.toggle_checking, i))
+
+    async def toggle_checking(self, i: int) -> None:
+        """The page's quality label was clicked: mark the words to check on page ``i`` and show the first one in a
+        slim bar (step through them, correct one with Edit); clicked again, the marks go."""
+        old = self._check[0] if self._check else None
+        if old == i:
+            await self.close_card()
+            return
+        self._check = (i, 0)
+        if old is not None:
+            await self.redraw(old)
+        await self.redraw(i)
+        self._show_card(self._check_card(), "check")
+
+    async def open_checking(self, source_page: Optional[int]) -> None:
+        """From the quality notice: open focus mode at the first page to check, with its words marked."""
+        app = self.app
+        if source_page is not None:
+            pages = sorted(app._page_map().items())
+            hit = next((p for p, src in pages if source_page in src), None)
+            if hit is not None:
+                app.conv_page = hit
+        if not self.active:
+            await self.open()
+        else:
+            self.current = app.conv_page
+            await self._show_layout()
+        page = self.current
+        if not self._checks.get(page):  # the first page with words to check, from here on
+            page = next((p for p in sorted(self._checks) if p >= self.current), page)
+            if page != self.current:
+                self.current = page
+                await self._show_layout()
+        await self.toggle_checking(page)
+
+    def _check_shapes(self, i: int, s: float) -> list[ft.Control]:
+        """The words to check on page ``i``: a thin orange line under each, the one shown in the bar boxed."""
+        out: list[ft.Control] = []
+        parts = self._checks.get(i, [])
+        shown = self._check[1] if self._check else -1
+        for k, (a, b, _why) in enumerate(parts):
+            for n in range(a, b + 1):
+                for x0, y0, x1, y1 in self.words[n][2]:
+                    out.append(ft.Container(left=x0 * s, top=y1 * s, width=(x1 - x0) * s, height=max(2.0, 1.6 * s),
+                                            bgcolor="#E8590C"))
+                    if k == shown:
+                        out.append(ft.Container(left=x0 * s - 3, top=y0 * s - 2, width=(x1 - x0) * s + 6,
+                                                height=(y1 - y0) * s + 5, border_radius=4, bgcolor="#22E8590C",
+                                                border=ft.Border.all(2, "#E8590C")))
+        return out
+
+    def _check_card(self) -> ft.Control:
+        """The slim bar for checking a page: which word of how many, why it is to check, previous / next, Edit
+        (the reader's own correction, as for selected words) and Close."""
+        app, t = self.app, self.app.t
+        page, k = self._check
+        parts = self._checks.get(page, [])
+        r = app.quality.page_rating(app._page_map().get(page, [])) if app.quality else None
+
+        def btn(icon, tip, handler, disabled=False):
+            return ft.IconButton(icon, tooltip=tip, on_click=handler, disabled=disabled, icon_size=20)
+
+        if not parts:
+            reasons = app.quality_reasons(r) if r else []
+            row = [app.text(t("Nothing to check on this page."), 14, weight=ft.FontWeight.BOLD),
+                   app.text(" ".join(reasons), 13, color=ft.Colors.ON_SURFACE_VARIANT)]
+        else:
+            a, b, why = parts[k]
+            row = [app.text(t("Word {k} of {n} to check", k=k + 1, n=len(parts)), 14, weight=ft.FontWeight.BOLD),
+                   app.text(app.check_reason(why), 13, color=ft.Colors.ON_SURFACE_VARIANT),
+                   btn(ft.Icons.CHEVRON_LEFT, t("Previous word to check"),
+                       lambda e: app.page.run_task(self.step_check, -1), disabled=k == 0),
+                   btn(ft.Icons.CHEVRON_RIGHT, t("Next word to check"),
+                       lambda e: app.page.run_task(self.step_check, 1), disabled=k >= len(parts) - 1),
+                   ft.TextButton(t("Edit"), icon=ft.Icons.EDIT_OUTLINED,
+                                 tooltip=t("Correct these words (for example a word split by a space)"),
+                                 on_click=lambda e: app.page.run_task(self.edit_selection, a, b),
+                                 visible=app.session is not None)]
+        bar = ft.Container(ft.Row(row + [ft.IconButton(ft.Icons.CLOSE, tooltip=t("Close (Esc)"),
+                                                       on_click=self.close_card)],
+                                  spacing=6, tight=True, wrap=True, alignment=ft.MainAxisAlignment.CENTER,
+                                  vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                           bgcolor=ft.Colors.SURFACE_CONTAINER_HIGH, border_radius=28,
+                           padding=ft.Padding.symmetric(horizontal=16, vertical=4),
+                           shadow=ft.BoxShadow(blur_radius=12, color="#40000000"))
+        return ft.Column([bar], tight=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
+
+    async def step_check(self, step: int) -> None:
+        """Show the previous (-1) or next (1) word to check on the page."""
+        if not self._check:
+            return
+        page, k = self._check
+        parts = self._checks.get(page, [])
+        self._check = (page, max(0, min(len(parts) - 1, k + step)))
+        await self.redraw(page)
+        self._show_card(self._check_card(), "check")
 
     def _card_box(self, rows: list[ft.Control], bgcolor=None) -> ft.Control:
         """A card of these rows, as wide as fits (at most 480 pixels)."""
@@ -1509,7 +1651,7 @@ class FocusMode:
             if edit is None:
                 self._toast(t("Nothing was changed."))
                 return
-            await self.close_card()
+            await self.close_card(keep_check=True)
             app.refresh_review()
             await app.rerender()
 
@@ -2460,6 +2602,9 @@ class FocusMode:
         self.divider.height = 0
         self.divider.thickness = 0
         self.show_bars.visible = True
+        for label in self.quality_labels:
+            if label is not None:
+                label.visible = False
         self._update_label()
         self._full_screen(True)
         self.app.page.update()
@@ -2474,6 +2619,9 @@ class FocusMode:
         self.divider.height = 1
         self.divider.thickness = None
         self.show_bars.visible = False
+        for label in self.quality_labels:
+            if label is not None:
+                label.visible = True
         self._update_label()
         self._full_screen(False)
         self.app.page.update()
