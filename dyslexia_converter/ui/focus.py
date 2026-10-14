@@ -1628,7 +1628,11 @@ class FocusMode:
 
     async def edit_selection(self, a: int, b: int) -> None:
         """Let the reader retype the selected words: stored as their own correction (the original is kept, and
-        it can be undone here or in the OCR review tab), then the document is converted again."""
+        it can be undone here or in the OCR review tab), then the document is converted again. With "Maths
+        (LaTeX)" switched on, the words are a formula typed in LaTeX, shown as formula text in the maths font
+        (with a live preview); a formula typed before opens again as its LaTeX."""
+        from ..transform.latex import to_formula_text
+
         app, t = self.app, self.app.t
         session = app.session
         where = session.find_passage(hl.text_of(self.words, a, b)) if session else None
@@ -1636,8 +1640,42 @@ class FocusMode:
             self._toast(t("These words can't be edited: the converter added or moved them (for example reference "
                           "numbers). Select words of the text itself."))
             return
-        field = ft.TextField(value=session.passage_as_shown(*where), multiline=True, min_lines=2, max_lines=8,
-                             autofocus=True, text_size=app.fs(16), width=560)
+        latex = session.passage_latex(*where)
+        field = ft.TextField(value=latex or session.passage_as_shown(*where), multiline=True, min_lines=2,
+                             max_lines=8, autofocus=True, text_size=app.fs(16), width=560)
+        maths = ft.Switch(label=t("Maths (LaTeX)"), value=bool(latex))
+        preview = app.text("", 20, font_family="DejaVu", selectable=True)
+        problem = app.text("", 13, color=ft.Colors.ERROR)
+        examples = app.text(t("Examples:") + "  \\frac{a}{b} \u2192 a/b   x^{2} \u2192 x\u00b2   x_{i} \u2192 x\u1d62   "
+                            "\\sqrt{x} \u2192 \u221ax   \\alpha \u2192 \u03b1   \\le \u2192 \u2264   "
+                            "\\sum_{i=1}^{n} \u2192 \u2211\u1d62\u208c\u2081\u207f   \\int_a^b   "
+                            "\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}", 13,
+                            color=ft.Colors.ON_SURFACE_VARIANT, selectable=True, font_family="DejaVu")
+        maths_box = ft.Container(ft.Column([
+            ft.Row([app.text(t("Shown as:"), 13, color=ft.Colors.ON_SURFACE_VARIANT), preview], wrap=True,
+                   vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            problem, examples], spacing=6, tight=True), width=560, visible=bool(latex))
+        save_btn = ft.FilledButton(t("Save"), icon=ft.Icons.CHECK)
+
+        def show(_=None):
+            """The live preview of the formula, and what is wrong with it (unknown commands, braces)."""
+            maths_box.visible = bool(maths.value)
+            save_btn.disabled = False
+            if maths.value:
+                r = to_formula_text(field.value or "")
+                preview.value = r.text
+                notes = []
+                if r.unknown:
+                    notes.append(t("Not known, kept as typed: {commands}", commands=" ".join(dict.fromkeys(r.unknown))))
+                if not r.balanced:
+                    notes.append(t("The {open} and {close} do not match yet.", open="{", close="}"))
+                    save_btn.disabled = True
+                problem.value = "  ".join(notes)
+                problem.visible = bool(notes)
+            app.page.update()
+
+        field.on_change = show
+        maths.on_change = show
 
         def close(_=None):
             """Close the dialog; the keyboard shortcuts work again."""
@@ -1645,9 +1683,13 @@ class FocusMode:
             app.page.pop_dialog()
 
         async def save(_):
-            """Store the words as typed and convert again."""
+            """Store the words (or the formula) as typed and convert again."""
             close()
-            edit = session.edit_passage(*where, field.value or "")
+            if maths.value:
+                r = to_formula_text(field.value or "")
+                edit = session.edit_passage(*where, r.text, latex=field.value or "")
+            else:
+                edit = session.edit_passage(*where, field.value or "")
             if edit is None:
                 self._toast(t("Nothing was changed."))
                 return
@@ -1663,15 +1705,20 @@ class FocusMode:
 
             self._toast(t("Your correction was saved."), undo=undo)
 
+        save_btn.on_click = save
         self._typing = True
         app.page.show_dialog(ft.AlertDialog(
             modal=True, title=app.text(t("Correct the text"), 18, weight=ft.FontWeight.BOLD),
             content=ft.Column([
                 app.text(t("Type the words as they should read. The original document is not changed and you can "
                            "undo this."), 13),
-                field], tight=True, spacing=12),
-            actions=[ft.TextButton(t("Cancel"), on_click=close),
-                     ft.FilledButton(t("Save"), icon=ft.Icons.CHECK, on_click=save)]))
+                field, maths,
+                ft.Container(app.text(t("For a formula: switch on Maths and type it in LaTeX; it is shown in the "
+                                        "maths font."), 13, color=ft.Colors.ON_SURFACE_VARIANT), width=560),
+                maths_box], tight=True, spacing=12),
+            actions=[ft.TextButton(t("Cancel"), on_click=close), save_btn]))
+        if latex:
+            show()
 
     async def copy(self, a: int, b: int) -> None:
         """Copy words a..b to the clipboard."""

@@ -220,7 +220,7 @@ def compose(doc: Document, settings: FormatSettings, ai_citation_decisions: Opti
 
     for b in blocks:
         text = doc.display_text(b)
-        styles = map_styles(b.styles, b.text, doc.corrections_for(b.id))
+        styles = map_styles(b.styles + _typed_formulas(doc, b), b.text, doc.corrections_for(b.id))
 
         if b.kind == BlockKind.IMAGE and b.image is not None and b.image.kind == "equation":
             items.append(RItem("equation", image=b.image, block_id=b.id, natural_width=b.bbox[2] - b.bbox[0]))
@@ -383,6 +383,13 @@ def compose(doc: Document, settings: FormatSettings, ai_citation_decisions: Opti
 
     return ComposeResult(items, headings, uncertain, lang, dict(doc.inline_images),
                          {b.id: _physical_page(doc, b.page) for b in doc.blocks}, popups)
+
+
+def _typed_formulas(doc: Document, b: Block) -> list[StyleRange]:
+    """Formulas the reader typed in LaTeX for this block: set in the maths font (as a style over the words they
+    replace, moved with the other styles to where the formula text is)."""
+    return [StyleRange(c.start, c.end, math=True) for c in doc.corrections_for(b.id)
+            if c.latex and c.applied and b.text[c.start:c.end] == c.original]
 
 
 def _unsure_in(doc: Document, b: Block, unsure: Optional[dict]) -> list[tuple[int, int, str]]:

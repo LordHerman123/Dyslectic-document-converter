@@ -370,17 +370,19 @@ class Session:
         corrections."""
         import unicodedata
 
-        parts = unicodedata.normalize("NFKC", words).split()
-        if not parts:
-            return None
-        # the words in order, with any spacing (or a hyphen at the end of a line) between them
-        pattern = re.compile(r"(?<!\w)" + r"(?:\s+|-\s*\n\s*)".join(re.escape(p) for p in parts) + r"(?!\w)")
-        for b in self.document.blocks:
-            shown, origin = self._shown_with_origin(b)
-            m = pattern.search(shown)
-            if m:
-                return b.id, min(origin[k][0] for k in range(m.start(), m.end())), \
-                    max(origin[k][1] for k in range(m.start(), m.end()))
+        # the words as shown first (a typed formula keeps its ² and ᵢ), then with ligatures and such undone
+        for variant in dict.fromkeys((words, unicodedata.normalize("NFKC", words))):
+            parts = variant.split()
+            if not parts:
+                return None
+            # the words in order, with any spacing (or a hyphen at the end of a line) between them
+            pattern = re.compile(r"(?<!\w)" + r"(?:\s+|-\s*\n\s*)".join(re.escape(p) for p in parts) + r"(?!\w)")
+            for b in self.document.blocks:
+                shown, origin = self._shown_with_origin(b)
+                m = pattern.search(shown)
+                if m:
+                    return b.id, min(origin[k][0] for k in range(m.start(), m.end())), \
+                        max(origin[k][1] for k in range(m.start(), m.end()))
         return None
 
     def _shown_with_origin(self, b) -> tuple[str, list[tuple[int, int]]]:
@@ -409,19 +411,30 @@ class Session:
         shown, origin = self._shown_with_origin(b)
         return "".join(ch for ch, (s, e) in zip(shown, origin) if start <= s and e <= end)
 
-    def edit_passage(self, block_id: str, start: int, end: int, new_text: str) -> Optional[Correction]:
+    def edit_passage(self, block_id: str, start: int, end: int, new_text: str, latex: str = "") -> Optional[Correction]:
         """The user retyped the words ``start:end`` of a block (picked in focus mode). Stored like
-        :meth:`edit_text`: only the changed words, as a correction of source "user" that can be undone."""
+        :meth:`edit_text`: only the changed words, as a correction of source "user" that can be undone. ``latex``:
+        the words are a formula the user typed in LaTeX, and ``new_text`` its formula text (kept with it, so it
+        can be edited again, and set in the maths font)."""
         b = self.document.block(block_id)
         new = " ".join(new_text.split())
-        if b is None or not new or new == " ".join(self.passage_as_shown(block_id, start, end).split()):
+        if b is None or not new or (new == " ".join(self.passage_as_shown(block_id, start, end).split())
+                                    and latex == self.passage_latex(block_id, start, end)):
             return None
         old = b.text[start:end]
         edit = Correction(id=f"user-{uuid.uuid4().hex[:10]}", block_id=block_id, start=start, end=end,
-                          original=old, replacement=new, confidence=1.0, status="accepted", source="user")
+                          original=old, replacement=new, confidence=1.0, status="accepted", source="user",
+                          latex=latex.strip())
         self.document.corrections = [x for x in self.document.corrections
                                      if not (x.source == "user" and x.overlaps(edit))] + [edit]
         return edit
+
+    def passage_latex(self, block_id: str, start: int, end: int) -> str:
+        """The LaTeX the user typed for a formula in this passage (to edit it again), or ""."""
+        for c in self.document.corrections_for(block_id):
+            if c.source == "user" and c.latex and c.start < end and start < c.end:
+                return c.latex
+        return ""
 
     def remove_user_edit(self, correction_id: str) -> None:
         """Undo text the user typed in; the scan's own text (and any suggestion) comes back."""

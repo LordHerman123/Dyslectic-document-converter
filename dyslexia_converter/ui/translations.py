@@ -2013,6 +2013,27 @@ T: dict[str, dict[str, str]] = {
         "de": "Das Literaturverzeichnis und die Anmerkungen am Ende bleiben immer erhalten, mit ihren Nummern; nur der Platz auf dem Papier ändert sich.",
         "es": "La lista de referencias y las notas del final se conservan siempre, con sus números; solo cambia cuánto papel ocupan.",
         "it": "La bibliografia e le note alla fine restano sempre, con i loro numeri; cambia solo quanta carta occupano."},
+    # ---------------------------------------------------------------- typing a formula in LaTeX
+    "Maths (LaTeX)": {"nl": "Wiskunde (LaTeX)", "fr": "Maths (LaTeX)", "de": "Mathematik (LaTeX)",
+                      "es": "Matemáticas (LaTeX)", "it": "Matematica (LaTeX)"},
+    "Examples:": {"nl": "Voorbeelden:", "fr": "Exemples :", "de": "Beispiele:", "es": "Ejemplos:", "it": "Esempi:"},
+    "Shown as:": {"nl": "Wordt getoond als:", "fr": "Affiché comme :", "de": "Angezeigt als:",
+                  "es": "Se muestra como:", "it": "Mostrato come:"},
+    "Not known, kept as typed: {commands}": {
+        "nl": "Onbekend, gelaten zoals getypt: {commands}", "fr": "Inconnu, gardé tel quel : {commands}",
+        "de": "Unbekannt, wie getippt behalten: {commands}", "es": "Desconocido, se deja tal cual: {commands}",
+        "it": "Sconosciuto, lasciato come scritto: {commands}"},
+    "The {open} and {close} do not match yet.": {
+        "nl": "De {open} en {close} kloppen nog niet.", "fr": "Les {open} et {close} ne correspondent pas encore.",
+        "de": "Die {open} und {close} passen noch nicht zusammen.", "es": "Las {open} y {close} aún no coinciden.",
+        "it": "Le {open} e {close} non corrispondono ancora."},
+    "For a formula: switch on Maths and type it in LaTeX; it is shown in the maths font.": {
+        "nl": "Voor een formule: zet Wiskunde aan en typ hem in LaTeX; hij wordt in het wiskundelettertype getoond.",
+        "fr": "Pour une formule : activez Maths et tapez-la en LaTeX ; elle s'affiche dans la police des maths.",
+        "de": "Für eine Formel: Mathematik einschalten und sie in LaTeX tippen; sie wird in der Mathematikschrift "
+              "gezeigt.",
+        "es": "Para una fórmula: active Matemáticas y escríbala en LaTeX; se muestra con la fuente de matemáticas.",
+        "it": "Per una formula: attiva Matematica e scrivila in LaTeX; viene mostrata nel carattere matematico."},
     # ---------------------------------------------------------------- how far to trust the conversion
     "Excellent": {"nl": "Uitstekend", "fr": "Excellente", "de": "Ausgezeichnet", "es": "Excelente", "it": "Eccellente"},
     "High": {"nl": "Hoog", "fr": "Élevée", "de": "Hoch", "es": "Alta", "it": "Alta"},

@@ -127,6 +127,7 @@ class Correction:
     confidence: float  # 0..1
     status: str = "pending"  # pending / auto / accepted / rejected
     source: str = "dictionary"  # dictionary / ai / user (typed in by the user) / check (a fix from the AI check)
+    latex: str = ""  # a formula the user typed in LaTeX (the replacement is its formula text, set in the maths font)
 
     @property
     def applied(self) -> bool:
