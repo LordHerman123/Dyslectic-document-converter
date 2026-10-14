@@ -93,7 +93,7 @@ class FocusMode:
         self._lines: dict[int, list] = {}
         self.ruler: Optional[tuple[int, int]] = None  # page, line
         self.card_word: Optional[tuple[int, int]] = None  # page, word number shown on the word card
-        self.card_mode: Optional[str] = None  # "drag", "word", "selection", "note" or "bubble"
+        self.card_mode: Optional[str] = None  # "drag", "word", "selection", "note", "bubble", "check" or "picture"
         self.sel: Optional[tuple[int, int]] = None  # first and last word number of the selected text
         self.sel_unit: Optional[str] = None  # "word", "sentence" or "paragraph" when selected as a whole
         self._orig_idx = -1  # the original page shown beside the pages
@@ -135,6 +135,9 @@ class FocusMode:
         self._checks: dict[int, list[tuple[int, int, str]]] = {}  # page -> words to check (first, last, why)
         self._check: Optional[tuple[int, int]] = None  # page being checked and the part shown
         self.quality_labels: list[ft.Control] = []  # the small quality label on each page
+        self._picture: Optional[tuple[int, str]] = None  # page and key of the picture being resized
+        self._picture_task: Optional[asyncio.Task] = None  # gives pictures the sizes asked for, one after another
+        self._picture_wish: Optional[tuple[str, float]] = None  # the latest size asked for: picture key, share
 
     # ------------------------------------------------------------------ settings kept between sessions
     @property
@@ -641,6 +644,8 @@ class FocusMode:
                                         border=ft.Border.all(2, edge)))
         if self._check and self._check[0] == i:
             out += self._check_shapes(i, s)
+        if self._picture and self._picture[0] == i:
+            out += self._picture_shapes(i, s)
         if self.ruler and self.ruler[0] == i:
             lines = self._lines_of(i)
             if lines:
@@ -753,6 +758,8 @@ class FocusMode:
         self._start_rendering()
         if self._check:  # checking a page goes on after a correction
             self._show_card(self._check_card(), "check")
+        elif self._picture:  # the picture just resized: follow it (it may have moved to another page)
+            await self._follow_picture()
 
     def _zoom_by(self, factor: float) -> None:
         """Make the pages ``factor`` times larger (or smaller); page by page this zooms into the page."""
@@ -908,7 +915,8 @@ class FocusMode:
         """A tap on a page.
 
         With the highlighter on it marks (or erases) one word; with text selected or a card open it clears the
-        selection and closes the card; on a note sign it opens the note; on a highlight it opens the
+        selection and closes the card; on a figure or table picture it opens the bar to change its size; on a
+        note sign it opens the note; on a highlight it opens the
         highlight's toolbar; with the ruler on it moves the ruler to that line; and with *tap to read* on,
         reading aloud starts at the sentence tapped.
         """
@@ -920,6 +928,10 @@ class FocusMode:
             n = hl.word_at(hl.words_on_page(self.words, i), *pt)
             if n is not None:
                 await self._apply(i, n, n)
+            return
+        picture = self._picture_at(i, *pt)
+        if picture is not None and (self.card_mode == "picture" or not (self.card_layer.visible or self.sel)):
+            await self.open_picture(i, picture[5])  # a tap on a figure: make it larger or smaller
             return
         if self.card_layer.visible or self.sel:  # a tap anywhere else clears the selection and closes the card
             await self.close_card()
@@ -1312,6 +1324,9 @@ class FocusMode:
         if self._check is not None and not keep_check:
             page, self._check = self._check[0], None
             await self.redraw(page)
+        if self._picture is not None:
+            page, self._picture = self._picture[0], None
+            await self.redraw(page)
         self._typing = False
         self.card_layer.visible = False
         self.card_layer.content = None
@@ -1320,6 +1335,133 @@ class FocusMode:
         self.sel, self.card_word = None, None
         self._paint_selection(pages)
         self.app.page.update()
+
+    # ------------------------------------------------------------------ the size of a picture
+    def _picture_marks(self) -> list:
+        """Where the figures and table pictures are in the converted document (the original has none to resize)."""
+        session = self.app.session
+        return session.picture_marks if session and self.source == "converted" else []
+
+    def _picture_at(self, i: int, x: float, y: float) -> Optional[tuple]:
+        """The figure or table picture at (x, y) on page ``i`` (in points), or None."""
+        return next((m for m in self._picture_marks() if m[0] == i and m[1] <= x <= m[3] and m[2] <= y <= m[4]),
+                    None)
+
+    def _picture_mark(self) -> Optional[tuple]:
+        """Where the picture being resized is now: on the same page, else where it moved to."""
+        if not self._picture:
+            return None
+        page, key = self._picture
+        found = [m for m in self._picture_marks() if m[5] == key]
+        return next((m for m in found if m[0] == page), found[0] if found else None)
+
+    def _picture_shapes(self, i: int, s: float) -> list[ft.Control]:
+        """An outline around the picture being resized, if it is on page ``i``."""
+        m = self._picture_mark()
+        if m is None or m[0] != i:
+            return []
+        _, x0, y0, x1, y1, _, _ = m
+        return [ft.Container(left=x0 * s - 4, top=y0 * s - 4, width=(x1 - x0) * s + 8, height=(y1 - y0) * s + 8,
+                             border_radius=6, border=ft.Border.all(2, "#1565C0"))]
+
+    async def open_picture(self, i: int, key: str) -> None:
+        """A figure or table picture was tapped: outline it and show the bar to change its size."""
+        old = self._picture[0] if self._picture else None
+        self._picture = (i, key)
+        if old is not None and old != i:
+            await self.redraw(old)
+        await self.redraw(i)
+        self._show_card(self._picture_card(), "picture")
+
+    def _picture_card(self) -> ft.Control:
+        """The slim bar for a picture's size: smaller / larger and a slider (its width as a share of the text
+        width), Full width, Automatic (back to the size the converter chose) and Close."""
+        app, t = self.app, self.app.t
+        key = self._picture[1]
+        chosen = app.session.picture_sizes.get(key) if app.session else None
+        m = self._picture_mark()
+        shown = m[6] if m else 0.6
+        lo, hi = 20, 100
+        value = app.text("", 14, width=48)
+        slider = ft.Slider(min=lo, max=hi, divisions=(hi - lo) // 5, width=180,
+                           value=max(lo, min(hi, round(100 * (chosen or shown) / 5) * 5)),
+                           tooltip=t("Width of the picture, as a share of the text width"))
+
+        def show(_=None):
+            """The size on the slider, as a percentage."""
+            value.value = f"{round(slider.value)} %"
+
+        def moved(e):
+            show()
+            value.update()
+
+        async def step(by: int):
+            """Smaller or larger by 10 %, applied when the clicking stops."""
+            slider.value = max(lo, min(hi, round((slider.value + by) / 5) * 5))
+            show()
+            app.page.update()
+            self.size_picture(slider.value / 100, key, wait=0.7)
+
+        async def give(share: float):
+            """Full width, Automatic or the slider let go: applied at once."""
+            self.size_picture(share, key)
+
+        show()
+        slider.on_change = moved
+        slider.on_change_end = lambda e: app.page.run_task(give, slider.value / 100)
+        row: list[ft.Control] = [
+            app.text(t("Picture size"), 14, weight=ft.FontWeight.BOLD),
+            ft.IconButton(ft.Icons.REMOVE, tooltip=t("Smaller"), icon_size=20, on_click=lambda e: app.page.run_task(step, -10)),
+            slider,
+            ft.IconButton(ft.Icons.ADD, tooltip=t("Larger"), icon_size=20, on_click=lambda e: app.page.run_task(step, 10)),
+            value,
+            ft.TextButton(t("Full width"), icon=ft.Icons.WIDTH_FULL_OUTLINED,
+                          on_click=lambda e: app.page.run_task(give, 1.0)),
+            ft.TextButton(t("Automatic"), icon=ft.Icons.RESTART_ALT, tooltip=t("The size the converter chose"),
+                          disabled=chosen is None, on_click=lambda e: app.page.run_task(give, 0.0))]
+        if chosen and shown < chosen - 0.02:  # a tall picture: the page is not high enough for that width
+            row.insert(5, app.text(t("(as large as fits on a page)"), 13, color=ft.Colors.ON_SURFACE_VARIANT))
+        bar = ft.Container(ft.Row(row + [ft.IconButton(ft.Icons.CLOSE, tooltip=t("Close (Esc)"),
+                                                       on_click=self.close_card)],
+                                  spacing=6, tight=True, wrap=True, alignment=ft.MainAxisAlignment.CENTER,
+                                  vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                           bgcolor=ft.Colors.SURFACE_CONTAINER_HIGH, border_radius=28,
+                           padding=ft.Padding.symmetric(horizontal=16, vertical=4),
+                           shadow=ft.BoxShadow(blur_radius=12, color="#40000000"))
+        return ft.Column([bar], tight=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
+
+    def size_picture(self, share: float, key: str, wait: float = 0.0) -> None:
+        """Give picture ``key`` this width (a share of the text width; 0: the size the converter chose), keep it
+        for this document and convert again. ``wait`` seconds first, so a few clicks on - / + convert once; a size
+        asked for while converting is given right after, so no click is lost. Called in the app's event loop."""
+        self._picture_wish = (key, share)
+        if self._picture_task is None or self._picture_task.done():
+            self._picture_task = asyncio.get_running_loop().create_task(self._give_sizes(wait))
+
+    async def _give_sizes(self, wait: float) -> None:
+        """Give the sizes asked for (see :meth:`size_picture`), the latest one each time."""
+        await asyncio.sleep(wait)
+        app = self.app
+        while self._picture_wish:
+            (key, share), self._picture_wish = self._picture_wish, None
+            session = app.session
+            if session is None or (session.picture_sizes.get(key) or 0.0) == (round(share, 3) if share else 0.0):
+                continue
+            session.set_picture_size(key, share)
+            app.save_reading_position("pictures", dict(session.picture_sizes))
+            await app.rerender()
+
+    async def _follow_picture(self) -> None:
+        """After converting again: outline the picture just resized where it is now (it may have moved to another
+        page), bring it into view and show its bar again."""
+        m = self._picture_mark()
+        if m is None:
+            self._picture = None
+            return
+        self._picture = (m[0], m[5])
+        await self.scroll_to(m[0], animate=False, within=m[2])
+        await self.redraw(m[0])
+        self._show_card(self._picture_card(), "picture")
 
     # ------------------------------------------------------------------ how far to trust each page
     def _quality_label(self, i: int) -> Optional[ft.Control]:

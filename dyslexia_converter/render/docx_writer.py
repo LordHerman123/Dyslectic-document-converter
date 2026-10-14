@@ -79,6 +79,14 @@ def _add_runs(p, item: RItem, s: FormatSettings, size: float, bold_all: bool = F
             _set_char_spacing(run, s.letter_spacing)
 
 
+def _picture_width(it: RItem, col: int) -> int:
+    """How wide a figure or table picture is (EMU): as wide as the reader chose (a share of the column ``col``), or
+    a little larger than in the original."""
+    if it.size:
+        return int(col * max(0.2, min(1.0, it.size)))
+    return min(col, int((it.natural_width or 300) * 1.35 * 12700))
+
+
 def _columns_section(d, n: int) -> None:
     """Continue on the same page in a new section with ``n`` text columns (the reference list in two)."""
     from docx.enum.section import WD_SECTION
@@ -154,7 +162,7 @@ def build_docx(result: ComposeResult, s: FormatSettings, title: str = "", author
             d.add_picture(io.BytesIO(it.image.data), width=w)
             d.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
         elif k == "image" and it.image is not None:
-            w = min(Cm(col).emu, int((it.natural_width or 300) * 1.35 * 12700))
+            w = _picture_width(it, Cm(col).emu)
             d.add_picture(io.BytesIO(it.image.data), width=w)
             d.paragraphs[-1].paragraph_format.keep_with_next = True
         elif k == "table":
@@ -176,7 +184,7 @@ def build_docx(result: ComposeResult, s: FormatSettings, title: str = "", author
                         cp.paragraph_format.space_after = Pt(2)
                 d.add_paragraph()
             elif tab is not None and tab.fallback_image is not None:
-                w = min(Cm(col).emu, int((it.natural_width or 300) * 1.35 * 12700))
+                w = _picture_width(it, Cm(col).emu)
                 d.add_picture(io.BytesIO(tab.fallback_image.data), width=w)
                 note = d.add_paragraph().add_run("Table shown as an image of the original.")
                 note.font.size = Pt(max(8.5, s.font_size * 0.78))
