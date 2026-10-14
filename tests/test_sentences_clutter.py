@@ -262,3 +262,22 @@ def test_a_scanned_table_with_headings_over_groups_of_columns():
     assert [t.table.rows for t in tables] == [[["", "Vision", "", "Language", "", "Audio", "", ""],
                                                ["Method", "Top-1", "Top-5", "BLEU", "PPL", "WER", "CER", "Avg."]]
                                               + [list(r) for r in values]]
+
+
+def test_labels_scattered_over_a_scanned_drawing_are_no_table():
+    """Panel titles above a drawing and its labels a few points apart (not lines of text below each other): the
+    words and confidences OCR gave for such a figure in a scanned article."""
+    from dyslexia_converter.extract.ocr import OcrWord
+    from dyslexia_converter.extract.pdf_reader import _ocr_tables
+    k = 200 / 72  # points to pixels at 200 dpi
+    printed = [(492.6, [("A)", 84, 93, 96), ("Current", 143, 177, 96), ("Driven", 180, 209, 96),
+                        ("Extraction", 212, 258, 96), ("B)", 303, 313, 92), ("Donnan", 351, 386, 96),
+                        ("Dialysis", 389, 424, 96)]),
+               (512.2, [("[CEM", 158, 180, 77), ("Feed", 314, 334, 90), ("[CEM", 345, 368, 68)]),
+               (515.5, [("(Feed", 114, 147, 37), ("Cathode", 186, 216, 95), ("cove", 257, 277, 92),
+                        ("Cathode", 373, 409, 91), ("COV", 444, 459, 89)]),
+               (518.9, [("thigher]", 77, 103, 41)]),
+               (526.9, [("IK)", 225, 238, 23)])]
+    words = [OcrWord(t, (x0 * k, (cy - 3) * k, x1 * k, (cy + 3) * k), conf, 0, 1, n)
+             for n, (cy, line) in enumerate(printed) for t, x0, x1, conf in line]
+    assert _ocr_tables(words, 1 / k, lambda r: None)[0] == []

@@ -2545,8 +2545,9 @@ def _ocr_tables(words: list, scale: float, crop: Callable[[Rect], ImageData]) ->
             return out
         block, edge = list(heads), hx0
         while j < len(rows):
-            ws = own(kept(rows[j][1]))
-            if ws == []:
+            line = kept(rows[j][1])
+            ws = own(line) if line else []
+            if line and ws == []:
                 j += 1  # a line of the text beside the table only
                 continue
             if not ws or min(w[1] for w in ws) - max(w[3] for w in block[-1]) > 2.5 * size:
@@ -2572,7 +2573,17 @@ def _ocr_tables(words: list, scale: float, crop: Callable[[Rect], ImageData]) ->
             under = [(v[0] + v[2]) / 2 for v in top if v[1] > w[3] - 0.1 * size]
             return any(lo < x < cuts[i] for x in under) and any(cuts[i] < x < hi for x in under)
         cuts = [c for i, c in enumerate(cuts) if all(grouped(w, i) for w in top if w[0] < c < w[2])]
-        if len(body) >= 3 and confident and sum(1 for ws in body if len(_split_at(ws, cuts)) >= 2) >= 2:
+
+        def apart(lines: list) -> int:
+            """The lines of text among ``lines``: a line a skewed scan split into rows a little apart counts once,
+            and labels scattered over a drawing are not lines below each other."""
+            n, last = 0, None
+            for ws in lines:
+                cy = statistics.median((w[1] + w[3]) / 2 for w in ws)
+                if last is None or cy - last >= 0.75 * size:
+                    n, last = n + 1, cy
+            return n
+        if apart(body) >= 3 and confident and sum(1 for ws in body if len(_split_at(ws, cuts)) >= 2) >= 2:
             def column(w: tuple) -> int:
                 """The column of a word; a heading over a group of columns goes in the first one."""
                 x = w[0] if any(w[0] < c < w[2] for c in cuts) else (w[0] + w[2]) / 2
