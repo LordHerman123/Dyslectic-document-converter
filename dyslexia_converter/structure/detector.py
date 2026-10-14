@@ -649,8 +649,9 @@ class StructureDetector:
 
     def _join_markers(self, blocks: list[Block]) -> list[Block]:
         """Put a lone superscript marker back in front of its line: the "b" of an affiliation "b University
-        of…", printed a little higher and smaller, is read as a line of its own. Figure DOIs printed under a
-        caption ("doi:10.1371/journal.pone.0127502.g001") join the caption."""
+        of…", printed a little higher and smaller, is read as a line of its own; so is a note's number set in the
+        margin beside the note. Figure DOIs printed under a caption ("doi:10.1371/journal.pone.0127502.g001") join
+        the caption."""
         out: list[Block] = []
         for i, b in enumerate(blocks):
             prev = out[-1] if out else None
@@ -660,14 +661,19 @@ class StructureDetector:
                 if cap is not None and cap.kind == BlockKind.CAPTION and cap.page == b.page:
                     cap.text = cap.text.rstrip() + " " + b.text.strip()
                     continue
-            if prev is not None and prev.kind == BlockKind.PARAGRAPH and MARKER_RE.fullmatch(prev.text.strip()) \
-                    and b.kind == BlockKind.PARAGRAPH and b.page == prev.page and prev.font_size < b.font_size \
-                    and 0 <= b.bbox[0] - prev.bbox[2] < 2 * b.font_size \
-                    and abs(b.bbox[1] - prev.bbox[1]) < max(b.font_size, 4.0):
+            beside = prev is not None and prev.kind == BlockKind.PARAGRAPH and b.kind == BlockKind.PARAGRAPH \
+                and b.page == prev.page and 0 <= b.bbox[0] - prev.bbox[2] < 2 * b.font_size \
+                and abs(b.bbox[1] - prev.bbox[1]) < max(b.font_size, 4.0)
+            raised = beside and MARKER_RE.fullmatch(prev.text.strip()) and prev.font_size < b.font_size
+            # a note's number in the margin, as large as the note (a scanned list of notes reads it apart)
+            number = beside and re.fullmatch(r"\d{1,3}\.?", prev.text.strip()) and \
+                abs(prev.font_size - b.font_size) <= 1.0 and not re.match(r"\d", b.text)
+            if raised or number:
                 mark = prev.text.strip()
                 shift = len(mark) + 1
                 b.text = mark + " " + b.text
-                b.styles = [StyleRange(0, len(mark), superscript=True)] + [st.moved(shift) for st in b.styles]
+                b.styles = [StyleRange(0, len(mark), superscript=True)] * bool(raised) + \
+                    [st.moved(shift) for st in b.styles]
                 b.ocr_confidence = [OcrWordConfidence(c.start + shift, c.end + shift, c.confidence)
                                     for c in b.ocr_confidence]
                 b.bbox = (prev.bbox[0], min(prev.bbox[1], b.bbox[1]), b.bbox[2], max(prev.bbox[3], b.bbox[3]))
