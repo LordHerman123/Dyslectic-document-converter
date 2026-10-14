@@ -7,6 +7,7 @@ from __future__ import annotations
 import concurrent.futures
 import io
 import itertools
+import logging
 import os
 import re
 import statistics
@@ -2303,6 +2304,18 @@ def _aligned_table(run: list[tuple[float, list]]) -> Optional[tuple[Rect, list[l
         rows.append(cells)
     if sum(1 for r in rows for c in r if c) < 0.6 * len(rows) * len(rows[0]):
         return None  # mostly empty cells: a formula or a scatter of labels, not a table
+    lengths = sorted(len(c.split()) for r in rows for c in r if c)
+    if lengths[len(lengths) // 2] > 3:
+        return None  # cells of several words on one line each: columns of running text side by side
+    # a row whose first cell is empty goes on with the row above (a cell wrapped onto a second line), unless it is
+    # numbers (a row of values without a label)
+    merged: list[list[str]] = []
+    for r in rows:
+        if len(merged) > 1 and not r[0] and not any(re.fullmatch(r"[-–+]?[\d.,±%]+", c) for c in r if c):
+            merged[-1] = [(a + " " + b).strip() for a, b in zip(merged[-1], r)]
+        else:
+            merged.append(r)
+    rows = merged
     y0 = min(w[1] for _, ws in run for w in ws)
     y1 = max(w[3] for _, ws in run for w in ws)
     return (x0, y0, x1, y1), rows
@@ -2371,7 +2384,11 @@ def _ocr_image(png: bytes, dpi: int, width_pt: float, height_pt: float, pno: int
     scale = 72.0 / dpi
     # the lines of a table stay until the page's way up is settled (see _settle_tables): which way reads best is
     # judged on all the words
-    tables, _ = _ocr_tables(res.words, scale, crop)
+    try:
+        tables, _ = _ocr_tables(res.words, scale, crop)
+    except Exception:  # tables are a help: a page is always read, with or without them
+        logging.getLogger(__name__).exception("table detection failed on a scanned page")
+        tables = []
     groups: dict[tuple[int, int, int], list] = {}
     for w in res.words:
         groups.setdefault((w.block, w.paragraph, w.line), []).append(w)
@@ -2473,9 +2490,21 @@ def _ocr_tables(words: list, scale: float, crop: Callable[[Rect], ImageData]) ->
     k = 0
     while k < len(rows):
         head = kept(rows[k][1])
+        if not head:
+            k += 1
+            continue
         head_cuts = _channels([head], size, narrow)
         cells = _split_at(head, head_cuts)
-        if len(cells) < 3 or any(not c or len(c) > 4 for c in cells):
+        labels = sum(1 for c in cells if any(sum(ch.isalpha() for ch in w[4]) >= 2 for w in c))
+        # column headings start with a capital and do not end a sentence ("program?", "hard." are line ends)
+        capitals = sum(1 for c in cells if c[0][4][:1].isupper() or c[0][4][:1].isdigit())
+        endings = sum(1 for c in cells if c[-1][4].rstrip()[-1:] in ".?!;,")
+        labels = labels if capitals * 2 >= len(cells) and endings <= 1 else 0
+        above = kept(rows[k - 1][1]) if k else []
+        # a header of labels (not numbers: "1 2 3" is a matrix), not a line in the middle of a column of text
+        in_text = bool(above) and min(w[1] for w in head) - max(w[3] for w in above) < 0.6 * size and \
+            any(w[0] < max(x[2] for x in head) and w[2] > min(x[0] for x in head) for w in above)
+        if len(cells) < 3 or any(not c or len(c) > 4 for c in cells) or labels < 2 or in_text:
             k += 1
             continue
         block, j = [head], k + 1

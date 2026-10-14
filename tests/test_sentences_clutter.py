@@ -172,3 +172,41 @@ def test_a_scanned_table_is_read_row_by_row_but_scanned_prose_is_not_a_table():
             prose.append(word(w, x, 300 + 40 * k, 0, k))
             x += 14 * len(w) + 8
     assert _ocr_tables(prose, 72 / 200, lambda r: None) == ([], set())
+
+
+def test_a_scanned_table_with_wrapped_cells_keeps_its_columns_apart():
+    from dyslexia_converter.extract.ocr import OcrWord
+    from dyslexia_converter.extract.pdf_reader import _ocr_tables
+
+    words = []
+
+    def line(y, cells, line_no, conf=95.0):
+        """A printed line: per column (its left edge, its words); OCR reads it straight across."""
+        for x, text in cells:
+            for w in text.split():
+                words.append(OcrWord(w, (x, y, x + 13 * len(w), y + 20), conf, 0, 1, line_no))
+                x += 13 * len(w) + 8
+
+    columns = (200, 700, 1200)  # at 200 dpi; the columns are a few points apart
+    line(300, list(zip(columns, ("Type of Interview", "Characteristics", "Strengths"))), 0)
+    body = [[("Informal", 0), ("Questions emerge", 1), ("Increases the", 2)],
+            [("", 0), ("from the context", 1), ("salience of", 2)],
+            [("", 0), ("and are asked", 1), ("questions", 2)],
+            [("Guide approach", 0), ("Topics are", 1), ("The outline", 2)],
+            [("", 0), ("specified", 1), ("helps", 2)]]
+    for k, cells in enumerate(body):
+        y = 350 + 28 * k + (12 if k >= 3 else 0)
+        line(y, [(columns[c], t) for t, c in cells if t], k + 1)
+    tables, _ = _ocr_tables(words, 72 / 200, lambda r: None)
+    assert [t.table.rows for t in tables] == [[
+        ["Type of Interview", "Characteristics", "Strengths"],
+        ["Informal", "Questions emerge from the context and are asked", "Increases the salience of questions"],
+        ["Guide approach", "Topics are specified", "The outline helps"]]]
+    # columns of running text side by side, the ends of their sentences in a row, are no table
+    words.clear()
+    line(300, list(zip(columns, ("program?", "hard.", "program?"))), 0)
+    prose = (BODY + " " + BODY + " " + BODY + " " + BODY).split()
+    for k in range(5):  # six words a line in each column, as narrow columns of text have
+        line(350 + 28 * k, [(x, " ".join(prose[(k * 3 + c) * 6:(k * 3 + c) * 6 + 6])) for c, x in enumerate(columns)],
+             k + 1)
+    assert _ocr_tables(words, 72 / 200, lambda r: None)[0] == []
