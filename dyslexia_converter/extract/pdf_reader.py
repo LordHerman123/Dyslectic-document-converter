@@ -2301,6 +2301,8 @@ def _aligned_table(run: list[tuple[float, list]]) -> Optional[tuple[Rect, list[l
         if sum(1 for c in cells if c) < 2 or any(len(c.split()) > 6 for c in cells):
             return None
         rows.append(cells)
+    if sum(1 for r in rows for c in r if c) < 0.6 * len(rows) * len(rows[0]):
+        return None  # mostly empty cells: a formula or a scatter of labels, not a table
     y0 = min(w[1] for _, ws in run for w in ws)
     y1 = max(w[3] for _, ws in run for w in ws)
     return (x0, y0, x1, y1), rows
@@ -2367,11 +2369,12 @@ def _ocr_image(png: bytes, dpi: int, width_pt: float, height_pt: float, pno: int
     gray = np.asarray(Image.open(io.BytesIO(png)).convert("L"))  # decoded once for all the steps below
     res = engine.recognize(_without_leaders(png, gray), languages)
     scale = 72.0 / dpi
-    tables, in_tables = _ocr_tables(res.words, scale, crop)
+    # the lines of a table stay until the page's way up is settled (see _settle_tables): which way reads best is
+    # judged on all the words
+    tables, _ = _ocr_tables(res.words, scale, crop)
     groups: dict[tuple[int, int, int], list] = {}
     for w in res.words:
-        if id(w) not in in_tables:
-            groups.setdefault((w.block, w.paragraph, w.line), []).append(w)
+        groups.setdefault((w.block, w.paragraph, w.line), []).append(w)
     lines: list[RawLine] = []
     for (bn, par, _ln), words in _split_wide_gaps(groups).items():
         text = ""
@@ -2402,6 +2405,15 @@ def _ocr_image(png: bytes, dpi: int, width_pt: float, height_pt: float, pno: int
     formulas, lines = _scan_formulas(lines, width_pt, crop)
     tables = [t for t in tables if not any(overlap_ratio(t.bbox, f) > 0.5 for f in fig_rects)]
     return lines, figures + formulas, tables
+
+
+def _settle_tables(page: RawPage) -> RawPage:
+    """A scanned page with its tables in place of the lines (and formula crops) they were read from."""
+    if page.tables:
+        rects = [t.bbox for t in page.tables]
+        page.lines = [l for l in page.lines if not any(overlap_ratio(l.bbox, r) > 0.5 for r in rects)]
+        page.figures = [f for f in page.figures if not any(overlap_ratio(f.bbox, r) > 0.6 for r in rects)]
+    return page
 
 
 def _ocr_tables(words: list, scale: float, crop: Callable[[Rect], ImageData]) -> tuple[list[RawTable], set[int]]:
@@ -2438,14 +2450,104 @@ def _ocr_tables(words: list, scale: float, crop: Callable[[Rect], ImageData]) ->
         if ok and run and min(w[1] for w in ws) - max(w[3] for w in run[-1][1]) <= 1.2 * size:
             run.append((size, ws))
             continue
-        if len(run) >= 3:
+        confident = len(run) >= 3 and statistics.mean(
+            w[5].confidence for _, rws in run for w in rws) >= 60  # not text read the wrong way up
+        if confident:
             got = _aligned_table(run)
             if got is not None:
                 rect, cells = got
                 tables.append(RawTable(rect, TableData(cells, crop(_expand(rect, 3)), True)))
                 used |= {id(w[5]) for _, rws in run for w in rws}
         run = [(size, ws)] if ok else []
+    # tables whose cells wrap over several lines: a header of short labels in three or more columns, then lines that
+    # keep its columns apart; OCR reads such lines straight across the columns
+    def kept(ws) -> list:
+        """A line's words without the table's rules, which OCR reads as "|" and other low specks."""
+        return as_words([w for w in ws if id(w) not in used and w.confidence >= 30 and w.text.strip() not in ("|", "!", "l")])
+
+    narrow = 0.6  # columns of such tables are often set close together; the line wraps keep them apart
+
+    def sure(ws) -> list:
+        """The words OCR is fairly sure of: a doubtful one may run over a column border (two words read as one)."""
+        return [w for w in ws if w[5].confidence >= 60]
+    k = 0
+    while k < len(rows):
+        head = kept(rows[k][1])
+        head_cuts = _channels([head], size, narrow)
+        cells = _split_at(head, head_cuts)
+        if len(cells) < 3 or any(not c or len(c) > 4 for c in cells):
+            k += 1
+            continue
+        block, j = [head], k + 1
+        while j < len(rows):
+            ws = kept(rows[j][1])
+            if not ws or min(w[1] for w in ws) - max(w[3] for w in block[-1]) > 2.5 * size:
+                break
+            cuts = _channels([sure(x) for x in block + [ws]], size, narrow)
+            if not all(any(a < c < b for c in cuts) for a, b in _gaps_between(head, head_cuts)):
+                break  # a line across the columns: the table has ended
+            block.append(ws)
+            j += 1
+        body = block[1:]
+        confident = statistics.mean(w[5].confidence for ws in block for w in ws) >= 60
+        cuts = _channels([sure(x) for x in block], size, narrow)
+        if len(body) >= 3 and confident and sum(1 for ws in body if len(_split_at(ws, cuts)) >= 2) >= 2:
+            # a row of the table starts where the first column has words again (after lines where it had none),
+            # or after more room than between the lines of a cell
+            gaps = [min(w[1] for w in b) - max(w[3] for w in a) for a, b in zip(body, body[1:])]
+            usual = sorted(gaps)[len(gaps) // 2] if gaps else 0
+
+            def first(ws) -> bool:
+                return any((w[0] + w[2]) / 2 < cuts[0] for w in ws)
+
+            groups = [[body[0]]]
+            for g, prev, ws in zip(gaps, body, body[1:]):
+                if first(ws) and (not first(prev) or g > usual + 0.4 * size):
+                    groups.append([ws])
+                else:
+                    groups[-1].append(ws)
+            n = len(cuts) + 1
+            table_rows = [[" ".join(w[4] for w in head if sum(1 for c in cuts if (w[0] + w[2]) / 2 > c) == ci)
+                           for ci in range(n)]]
+            for g in groups:
+                table_rows.append([" ".join(w[4] for ws in g for w in ws
+                                            if sum(1 for c in cuts if (w[0] + w[2]) / 2 > c) == ci) for ci in range(n)])
+            all_words = [w for ws in block for w in ws]
+            rect = (min(w[0] for w in all_words), min(w[1] for w in all_words), max(w[2] for w in all_words),
+                    max(w[3] for w in all_words))
+            tables.append(RawTable(rect, TableData(table_rows, crop(_expand(rect, 3)), True)))
+            used |= {id(w[5]) for w in all_words}
+            k = j
+        else:
+            k += 1
     return tables, used
+
+
+def _channels(rows: list[list], size: float, width: float = 0.9) -> list[float]:
+    """The middles of the white channels (at least ``width`` times the type size wide) that run down through all
+    ``rows`` of words, (x0, y0, x1, y1, ...), between their leftmost and rightmost word."""
+    spans = sorted((w[0], w[2]) for ws in rows for w in ws)
+    cuts, right = [], None
+    for a, b in spans:
+        if right is not None and a - right >= width * size:
+            cuts.append((right + a) / 2)
+        right = b if right is None else max(right, b)
+    return cuts
+
+
+def _split_at(ws: list, cuts: list[float]) -> list[list]:
+    """A row of words (left to right) split at the column borders ``cuts`` (empty columns left out)."""
+    cells: list[list] = [[] for _ in range(len(cuts) + 1)]
+    for w in ws:
+        cells[sum(1 for c in cuts if (w[0] + w[2]) / 2 > c)].append(w)
+    return [c for c in cells if c]
+
+
+def _gaps_between(ws: list, cuts: list[float]) -> list[tuple[float, float]]:
+    """The white space around each column border of a row: from the end of one column's words to the start of the
+    next one's."""
+    cells = _split_at(ws, cuts)
+    return [(max(w[2] for w in a), min(w[0] for w in b)) for a, b in zip(cells, cells[1:])]
 
 
 def _leader_spans(ink: np.ndarray) -> list[tuple[int, int, int, int]]:
@@ -2753,7 +2855,7 @@ def _scan_pages(rendered, source_page: int, engine: OcrEngine, languages: list[s
     """
     out, halves = _scan_image_pages(rendered, source_page, engine, languages, split_spreads)
     if not hasattr(engine, "orientation"):
-        return out
+        return [_settle_tables(p) for p in out]
     if _looks_sideways(out):
         # sideways or upside-down scan: ask the OCR engine which way is up and try again
         buf = io.BytesIO()
@@ -2771,7 +2873,7 @@ def _scan_pages(rendered, source_page: int, engine: OcrEngine, languages: list[s
         out = [_upright_half(sp, page, source_page, engine, languages)
                if _runs_down([page]) or (_poor_ocr([page]) and _word_count([page]) >= 15) else page
                for sp, page in zip(halves, out)]
-    return out
+    return [_settle_tables(p) for p in out]
 
 
 def _turns(turn: int) -> list[int]:
@@ -3103,6 +3205,7 @@ def read_pdf(path: str, ocr_engine: Optional[OcrEngine] = None, languages: Optio
                                               if not any(overlap_ratio(l.bbox, t.bbox) > 0.3 for t in text_lines)]
                         tabs = [t for t in tabs if not any(overlap_ratio(l.bbox, t.bbox) > 0.3 for l in text_lines)]
                     rp.lines, rp.figures, rp.tables = lines, figs, tabs
+                    _settle_tables(rp)
                     info.ocr_used = True
             else:
                 all_lines = _text_lines(page, vno, known_word)
