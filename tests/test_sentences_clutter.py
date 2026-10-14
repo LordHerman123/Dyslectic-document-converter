@@ -150,3 +150,25 @@ def test_the_kind_of_article_above_the_title_is_small_print(isolated_home, tmp_p
     assert label.kind == BlockKind.PARAGRAPH and label.font_size < 10
     assert find(bl, "Big Data and new").kind == BlockKind.TITLE
     assert find(bl, "Introduction").kind == BlockKind.HEADING
+
+
+def test_a_scanned_table_is_read_row_by_row_but_scanned_prose_is_not_a_table():
+    from dyslexia_converter.extract.ocr import OcrWord
+    from dyslexia_converter.extract.pdf_reader import _ocr_tables
+
+    def word(text, x, y, block, line):  # at 200 dpi: a 10 pt word is about 20 pixels high
+        return OcrWord(text, (x, y, x + 14 * len(text), y + 20), 90.0, block, 1, line)
+
+    rows = [("Name", "Role", "Office"), ("Anna", "Editor", "2.14"), ("Bram", "Reviewer", "3.02"),
+            ("Chen", "Author", "1.07")]
+    words = [word(c, x, 300 + 40 * k, block=ci, line=k)  # OCR reads each column as a block of its own
+             for k, row in enumerate(rows) for ci, (x, c) in enumerate(zip((200, 400, 600), row))]
+    tables, used = _ocr_tables(words, 72 / 200, lambda r: None)
+    assert [t.table.rows for t in tables] == [[list(r) for r in rows]] and len(used) == len(words)
+    prose, text = [], (BODY + " " + BODY).split()
+    for k in range(6):  # lines of running text: ordinary word spaces
+        x = 200
+        for w in text[k * 6:k * 6 + 6]:
+            prose.append(word(w, x, 300 + 40 * k, 0, k))
+            x += 14 * len(w) + 8
+    assert _ocr_tables(prose, 72 / 200, lambda r: None) == ([], set())

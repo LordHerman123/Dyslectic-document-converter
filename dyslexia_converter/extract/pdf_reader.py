@@ -2258,44 +2258,52 @@ def _gap_tables(page: pymupdf.Page, lines: list[RawLine], existing: list[RawTabl
     runs += open_runs
     out: list[RawTable] = []
     for run in runs:
-        if len(run) < 3:
-            continue
-        size = max(l.size for l, _ in run)
-        x0, x1 = min(l.x0 for l, _ in run), max(l.x1 for l, _ in run)
-        gx0 = int(x0) - 1
-        covered = [False] * (int(x1) + 2 - gx0)
-        for _, ws in run:
-            for w in ws:
-                for x in range(max(0, int(w[0]) - gx0), min(len(covered), int(w[2]) + 1 - gx0)):
-                    covered[x] = True
-        cuts, start = [], None
-        for i, c in enumerate(covered):
-            if not c:
-                start = i if start is None else start
-            else:
-                if start is not None and start > 0 and i - start >= 0.9 * size:
-                    cuts.append(gx0 + (start + i) / 2)
-                start = None
-        if len(cuts) < 2:
-            continue
-        rows, good = [], True
-        for l, ws in run:
-            if any(not any(a < c < b for c in cuts) for a, b in wide_gaps(ws, l.size)):
-                good = False  # a wide gap that is no column border: not a table
-                break
-            cells = [""] * (len(cuts) + 1)
-            for w in ws:
-                ci = sum(1 for c in cuts if (w[0] + w[2]) / 2 > c)
-                cells[ci] = (cells[ci] + " " + w[4]).strip()
-            if sum(1 for c in cells if c) < 2 or any(len(c.split()) > 6 for c in cells):
-                good = False
-                break
-            rows.append(cells)
-        if not good:
-            continue
-        rect = (x0, min(l.y0 for l, _ in run), x1, max(l.y1 for l, _ in run))
-        out.append(RawTable(rect, TableData(rows, render_clip(page, _expand(rect, 3)), True)))
+        found = _aligned_table([(l.size, ws) for l, ws in run])
+        if found is not None:
+            rect, rows = found
+            out.append(RawTable(rect, TableData(rows, render_clip(page, _expand(rect, 3)), True)))
     return out
+
+
+def _aligned_table(run: list[tuple[float, list]]) -> Optional[tuple[Rect, list[list[str]]]]:
+    """The table that rows of words make, if they make one (see :func:`_gap_tables`): (box, rows of cells), or
+    None. ``run``: per row its text size and its words, as (x0, y0, x1, y1, text, ...) from left to right."""
+    if len(run) < 3:
+        return None
+    size = max(sz for sz, _ in run)
+    x0 = min(w[0] for _, ws in run for w in ws)
+    x1 = max(w[2] for _, ws in run for w in ws)
+    gx0 = int(x0) - 1
+    covered = [False] * (int(x1) + 2 - gx0)
+    for _, ws in run:
+        for w in ws:
+            for x in range(max(0, int(w[0]) - gx0), min(len(covered), int(w[2]) + 1 - gx0)):
+                covered[x] = True
+    cuts, start = [], None
+    for i, c in enumerate(covered):
+        if not c:
+            start = i if start is None else start
+        else:
+            if start is not None and start > 0 and i - start >= 0.9 * size:
+                cuts.append(gx0 + (start + i) / 2)
+            start = None
+    if len(cuts) < 2:
+        return None
+    rows = []
+    for sz, ws in run:
+        gaps = [(a[2], b[0]) for a, b in zip(ws, ws[1:]) if b[0] - a[2] >= 0.9 * sz]
+        if any(not any(a < c < b for c in cuts) for a, b in gaps):
+            return None  # a wide gap that is no column border: not a table
+        cells = [""] * (len(cuts) + 1)
+        for w in ws:
+            ci = sum(1 for c in cuts if (w[0] + w[2]) / 2 > c)
+            cells[ci] = (cells[ci] + " " + w[4]).strip()
+        if sum(1 for c in cells if c) < 2 or any(len(c.split()) > 6 for c in cells):
+            return None
+        rows.append(cells)
+    y0 = min(w[1] for _, ws in run for w in ws)
+    y1 = max(w[3] for _, ws in run for w in ws)
+    return (x0, y0, x1, y1), rows
 
 
 # --------------------------------------------------------------------------- OCR pages
@@ -2351,16 +2359,19 @@ def _split_wide_gaps(groups: dict) -> dict:
 
 
 def _ocr_image(png: bytes, dpi: int, width_pt: float, height_pt: float, pno: int, engine: OcrEngine,
-               languages: list[str], crop: Callable[[Rect], ImageData]) -> tuple[list[RawLine], list[RawFigure]]:
-    """OCR one image and return lines/figures in points relative to that image."""
+               languages: list[str], crop: Callable[[Rect], ImageData]
+               ) -> tuple[list[RawLine], list[RawFigure], list[RawTable]]:
+    """OCR one image and return lines, figures and tables in points relative to that image."""
     from PIL import Image
 
     gray = np.asarray(Image.open(io.BytesIO(png)).convert("L"))  # decoded once for all the steps below
     res = engine.recognize(_without_leaders(png, gray), languages)
     scale = 72.0 / dpi
+    tables, in_tables = _ocr_tables(res.words, scale, crop)
     groups: dict[tuple[int, int, int], list] = {}
     for w in res.words:
-        groups.setdefault((w.block, w.paragraph, w.line), []).append(w)
+        if id(w) not in in_tables:
+            groups.setdefault((w.block, w.paragraph, w.line), []).append(w)
     lines: list[RawLine] = []
     for (bn, par, _ln), words in _split_wide_gaps(groups).items():
         text = ""
@@ -2389,7 +2400,52 @@ def _ocr_image(png: bytes, dpi: int, width_pt: float, height_pt: float, pno: int
     fig_rects = [f.bbox for f in figures]
     lines = [l for l in lines if not any(overlap_ratio(l.bbox, f) > 0.6 for f in fig_rects)]
     formulas, lines = _scan_formulas(lines, width_pt, crop)
-    return lines, figures + formulas
+    tables = [t for t in tables if not any(overlap_ratio(t.bbox, f) > 0.5 for f in fig_rects)]
+    return lines, figures + formulas, tables
+
+
+def _ocr_tables(words: list, scale: float, crop: Callable[[Rect], ImageData]) -> tuple[list[RawTable], set[int]]:
+    """Tables on a scanned page: rows of short cells whose columns line up (see :func:`_aligned_table`). OCR often
+    reads each cell of a row as a line of its own, or a row as one line with wide gaps, so the words are first put
+    back into the rows they are printed on. Returns the tables and the ids of the words in them."""
+    found = [w for w in words if w.text.strip()]
+    if len(found) < 6:
+        return [], set()
+    heights = sorted(w.bbox[3] - w.bbox[1] for w in found)
+    h = heights[len(heights) // 2]
+    rows: list[list] = []
+    for w in sorted(found, key=lambda w: (w.bbox[1] + w.bbox[3]) / 2):
+        cy = (w.bbox[1] + w.bbox[3]) / 2
+        if rows and abs(cy - rows[-1][0]) < 0.5 * h:
+            rows[-1][1].append(w)
+        else:
+            rows.append([cy, [w]])
+    size = h * scale / 0.72  # the ink of a line of letters is about 0.72 of the type size
+
+    def as_words(ws):
+        return [(w.bbox[0] * scale, w.bbox[1] * scale, w.bbox[2] * scale, w.bbox[3] * scale, w.text, w)
+                for w in sorted(ws, key=lambda w: w.bbox[0])]
+
+    def row_like(ws) -> bool:
+        return 2 <= len(ws) <= 12 and any(b[0] - a[2] >= 0.9 * size for a, b in zip(ws, ws[1:]))
+
+    tables: list[RawTable] = []
+    used: set[int] = set()
+    run: list = []
+    for k in range(len(rows) + 1):
+        ws = as_words(rows[k][1]) if k < len(rows) else []
+        ok = k < len(rows) and row_like(ws)
+        if ok and run and min(w[1] for w in ws) - max(w[3] for w in run[-1][1]) <= 1.2 * size:
+            run.append((size, ws))
+            continue
+        if len(run) >= 3:
+            got = _aligned_table(run)
+            if got is not None:
+                rect, cells = got
+                tables.append(RawTable(rect, TableData(cells, crop(_expand(rect, 3)), True)))
+                used |= {id(w[5]) for _, rws in run for w in rws}
+        run = [(size, ws)] if ok else []
+    return tables, used
 
 
 def _leader_spans(ink: np.ndarray) -> list[tuple[int, int, int, int]]:
@@ -2660,7 +2716,8 @@ def _figures_from_regions(regions: list[Rect], lines: list[RawLine], page_area: 
     return figures
 
 
-def _ocr_page(page: pymupdf.Page, pno: int, engine: OcrEngine, languages: list[str]) -> tuple[list[RawLine], list[RawFigure]]:
+def _ocr_page(page: pymupdf.Page, pno: int, engine: OcrEngine, languages: list[str]
+              ) -> tuple[list[RawLine], list[RawFigure], list[RawTable]]:
     """OCR a page as it is (used for mixed pages that are not full scans)."""
     pix = page.get_pixmap(dpi=OCR_DPI, alpha=False)
     return _ocr_image(pix.tobytes("png"), OCR_DPI, page.rect.width, page.rect.height, pno, engine, languages,
@@ -2754,9 +2811,9 @@ def _ocr_scan_page(sp, source_page: int, engine: OcrEngine, languages: list[str]
     """OCR one cleaned book page, with its figures."""
     info = PageInfo(-1, sp.width_pt, sp.height_pt, "scanned", ocr_used=True, source_page=source_page,
                     side=side or sp.side, skew=sp.skew)
-    lines, figures = _ocr_image(sp.png(), SCAN_DPI, sp.width_pt, sp.height_pt, -1, engine, languages,
-                                _photo_crop(lambda page=sp: page.photo, SCAN_DPI))
-    return RawPage(info, lines, figures)
+    lines, figures, tables = _ocr_image(sp.png(), SCAN_DPI, sp.width_pt, sp.height_pt, -1, engine, languages,
+                                        _photo_crop(lambda page=sp: page.photo, SCAN_DPI))
+    return RawPage(info, lines, figures, tables)
 
 
 def _ocr_quality(pages: list[RawPage]) -> float:
@@ -3039,12 +3096,13 @@ def read_pdf(path: str, ocr_engine: Optional[OcrEngine] = None, languages: Optio
                 else:
                     if progress:
                         progress(f"Running OCR on page {pno + 1} of {n}", pno / max(1, n))
-                    lines, figs = _ocr_page(page, vno, ocr_engine, ocr_langs)
+                    lines, figs, tabs = _ocr_page(page, vno, ocr_engine, ocr_langs)
                     if kind == "mixed":
                         text_lines = _text_lines(page, vno, known_word)
                         lines = text_lines + [l for l in lines
                                               if not any(overlap_ratio(l.bbox, t.bbox) > 0.3 for t in text_lines)]
-                    rp.lines, rp.figures = lines, figs
+                        tabs = [t for t in tabs if not any(overlap_ratio(l.bbox, t.bbox) > 0.3 for l in text_lines)]
+                    rp.lines, rp.figures, rp.tables = lines, figs, tabs
                     info.ocr_used = True
             else:
                 all_lines = _text_lines(page, vno, known_word)
