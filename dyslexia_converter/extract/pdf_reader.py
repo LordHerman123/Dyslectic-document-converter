@@ -2487,60 +2487,122 @@ def _ocr_tables(words: list, scale: float, crop: Callable[[Rect], ImageData]) ->
     def sure(ws) -> list:
         """The words OCR is fairly sure of: a doubtful one may run over a column border (two words read as one)."""
         return [w for w in ws if w[5].confidence >= 60]
+    def heading(ws: list, least: int, mostly: bool = False) -> bool:
+        """A line of column headings: ``least`` or more short labels, two or more of them words (not numbers: "1 2 3"
+        is a matrix), most starting with a capital and not ending a sentence ("program?", "hard." are line ends).
+        ``mostly``: words in at least half the columns (a further line of headings, not a row of values)."""
+        cells = _split_at(ws, _channels([ws], size, narrow))
+        if len(cells) < least or any(len(c) > 4 for c in cells):
+            return False
+        labels = sum(1 for c in cells if any(sum(ch.isalpha() for ch in w[4]) >= 2 for w in c))
+        capitals = sum(1 for c in cells if c[0][4][:1].isupper() or c[0][4][:1].isdigit())
+        endings = sum(1 for c in cells if c[-1][4].rstrip()[-1:] in ".?!;,")
+        return labels >= 2 and (not mostly or labels * 2 >= len(cells)) and capitals * 2 >= len(cells) and endings <= 1
+
     k = 0
     while k < len(rows):
         head = kept(rows[k][1])
-        if not head:
-            k += 1
-            continue
-        head_cuts = _channels([head], size, narrow)
-        cells = _split_at(head, head_cuts)
-        labels = sum(1 for c in cells if any(sum(ch.isalpha() for ch in w[4]) >= 2 for w in c))
-        # column headings start with a capital and do not end a sentence ("program?", "hard." are line ends)
-        capitals = sum(1 for c in cells if c[0][4][:1].isupper() or c[0][4][:1].isdigit())
-        endings = sum(1 for c in cells if c[-1][4].rstrip()[-1:] in ".?!;,")
-        labels = labels if capitals * 2 >= len(cells) and endings <= 1 else 0
         above = kept(rows[k - 1][1]) if k else []
-        # a header of labels (not numbers: "1 2 3" is a matrix), not a line in the middle of a column of text
-        in_text = bool(above) and min(w[1] for w in head) - max(w[3] for w in above) < 0.6 * size and \
-            any(w[0] < max(x[2] for x in head) and w[2] > min(x[0] for x in head) for w in above)
-        if len(cells) < 3 or any(not c or len(c) > 4 for c in cells) or labels < 2 or in_text:
+        # not a line in the middle of a column of text
+        in_text = bool(head) and bool(above) and min(w[1] for w in head) - max(w[3] for w in above) < 0.6 * size \
+            and any(w[0] < max(x[2] for x in head) and w[2] > min(x[0] for x in head) for w in above)
+        if not head or in_text or not heading(head, 3):
             k += 1
             continue
-        block, j = [head], k + 1
-        while j < len(rows):
+        # headings over two or three lines (a label over a group of columns, the labels of the columns under it, a
+        # label set midway between the two) lie close together; the first row of the table is further down
+        heads, j = [head], k + 1
+        while j < len(rows) and len(heads) < 3:
             ws = kept(rows[j][1])
+            if not ws or min(w[1] for w in ws) - max(w[3] for w in heads[-1]) > 0.6 * size or \
+                    not heading(ws, 2, mostly=True):
+                break
+            heads.append(ws)
+            j += 1
+        top = [w for ws in heads for w in ws]
+        head_cuts = _channels([top], size, narrow)
+        hx0, hx1 = min(w[0] for w in top), max(w[2] for w in top)
+        hy0, hy1 = min(w[1] for w in top), max(w[3] for w in top)
+        # a column of running text beside the table (a two-column page) has lines level with the headings; its words
+        # are left out of the table's lines (a column of row labels under no heading has nothing level with them)
+        level = [w for r in rows[max(0, k - 3):j] for w in kept(r[1]) if w[3] > hy0 - 0.6 * size and w[1] < hy1]
+        left = max((w[2] for w in level if w[2] < hx0 - 0.9 * size), default=None)
+        right = min((w[0] for w in level if w[0] > hx1 + 0.9 * size), default=None)
+
+        def own(ws: list) -> Optional[list]:
+            """The words of a line that can be the table's (a ragged line of the text beside it may end a little
+            further on); None when one runs from that text into the table's room."""
+            out = []
+            for w in ws:
+                if left is not None and w[0] < left + 0.9 * size:
+                    if w[2] > hx0 - 0.9 * size:
+                        return None
+                elif right is not None and w[2] > right - 0.9 * size:
+                    if w[0] < hx1 + 0.9 * size:
+                        return None
+                else:
+                    out.append(w)
+            return out
+        block, edge = list(heads), hx0
+        while j < len(rows):
+            ws = own(kept(rows[j][1]))
+            if ws == []:
+                j += 1  # a line of the text beside the table only
+                continue
             if not ws or min(w[1] for w in ws) - max(w[3] for w in block[-1]) > 2.5 * size:
                 break
+            if len(block) > len(heads) and min(w[0] for w in ws) < edge - 1.5 * size:
+                break  # a line that starts well left of the table's first column: text after the table
             cuts = _channels([sure(x) for x in block + [ws]], size, narrow)
-            if not all(any(a < c < b for c in cuts) for a, b in _gaps_between(head, head_cuts)):
+            if not all(any(a < c < b for c in cuts) for a, b in _gaps_between(top, head_cuts)):
                 break  # a line across the columns: the table has ended
             block.append(ws)
+            edge = min(edge, min(w[0] for w in ws))
             j += 1
-        body = block[1:]
-        confident = statistics.mean(w[5].confidence for ws in block for w in ws) >= 60
-        cuts = _channels([sure(x) for x in block], size, narrow)
+        body = block[len(heads):]
+        confident = body and statistics.mean(w[5].confidence for ws in block for w in ws) >= 60
+        # the columns are those of the body: a heading over a group of columns covers the border between them
+        cuts = _channels([sure(x) for x in body], size, narrow)
+
+        def grouped(w: tuple, i: int) -> bool:
+            """A heading over a group of columns: both columns beside border ``i`` have headings of their own on a
+            lower line."""
+            lo = cuts[i - 1] if i else -1e9
+            hi = cuts[i + 1] if i + 1 < len(cuts) else 1e9
+            under = [(v[0] + v[2]) / 2 for v in top if v[1] > w[3] - 0.1 * size]
+            return any(lo < x < cuts[i] for x in under) and any(cuts[i] < x < hi for x in under)
+        cuts = [c for i, c in enumerate(cuts) if all(grouped(w, i) for w in top if w[0] < c < w[2])]
         if len(body) >= 3 and confident and sum(1 for ws in body if len(_split_at(ws, cuts)) >= 2) >= 2:
-            # a row of the table starts where the first column has words again (after lines where it had none),
-            # or after more room than between the lines of a cell
-            gaps = [min(w[1] for w in b) - max(w[3] for w in a) for a, b in zip(body, body[1:])]
-            usual = sorted(gaps)[len(gaps) // 2] if gaps else 0
+            def column(w: tuple) -> int:
+                """The column of a word; a heading over a group of columns goes in the first one."""
+                x = w[0] if any(w[0] < c < w[2] for c in cuts) else (w[0] + w[2]) / 2
+                return sum(1 for c in cuts if x > c)
 
             def first(ws) -> bool:
-                return any((w[0] + w[2]) / 2 < cuts[0] for w in ws)
-
+                return any(column(w) == 0 for w in ws)
+            # a row of the table starts where the first column has words again (after lines where it had none),
+            # or after more room than between the lines of a cell; when every line has words in the first column,
+            # each line is a row
+            gaps = [min(w[1] for w in b) - max(w[3] for w in a) for a, b in zip(body, body[1:])]
+            usual = sorted(gaps)[len(gaps) // 2] if gaps else 0
+            every = all(first(ws) for ws in body)
             groups = [[body[0]]]
             for g, prev, ws in zip(gaps, body, body[1:]):
-                if first(ws) and (not first(prev) or g > usual + 0.4 * size):
+                if first(ws) and (every or not first(prev) or g > usual + 0.4 * size):
                     groups.append([ws])
                 else:
                     groups[-1].append(ws)
             n = len(cuts) + 1
-            table_rows = [[" ".join(w[4] for w in head if sum(1 for c in cuts if (w[0] + w[2]) / 2 > c) == ci)
-                           for ci in range(n)]]
-            for g in groups:
-                table_rows.append([" ".join(w[4] for ws in g for w in ws
-                                            if sum(1 for c in cuts if (w[0] + w[2]) / 2 > c) == ci) for ci in range(n)])
+            # lines of headings that fill different columns are one row (a label set midway between two lines)
+            head_rows: list[list[str]] = []
+            for ws in reversed(heads):
+                r = [" ".join(w[4] for w in ws if column(w) == ci) for ci in range(n)]
+                if head_rows and all(not a or not b for a, b in zip(r, head_rows[0])):
+                    head_rows[0] = [a or b for a, b in zip(r, head_rows[0])]
+                else:
+                    head_rows.insert(0, r)
+            table_rows = head_rows + [[" ".join(w[4] for ws in g for w in ws if column(w) == ci) for ci in range(n)]
+                                      for g in groups]
             all_words = [w for ws in block for w in ws]
             rect = (min(w[0] for w in all_words), min(w[1] for w in all_words), max(w[2] for w in all_words),
                     max(w[3] for w in all_words))

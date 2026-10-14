@@ -210,3 +210,55 @@ def test_a_scanned_table_with_wrapped_cells_keeps_its_columns_apart():
         line(350 + 28 * k, [(x, " ".join(prose[(k * 3 + c) * 6:(k * 3 + c) * 6 + 6])) for c, x in enumerate(columns)],
              k + 1)
     assert _ocr_tables(words, 72 / 200, lambda r: None)[0] == []
+
+
+def _ocr_line(words: list, y: int, cells: list, line_no: int, conf: float = 95.0) -> None:
+    """A printed line on a page scanned at 200 dpi: per column (its left edge, its words), read straight across."""
+    from dyslexia_converter.extract.ocr import OcrWord
+    for x, text in cells:
+        for w in text.split():
+            words.append(OcrWord(w, (x, y, x + 13 * len(w), y + 20), conf, 0, 1, line_no))
+            x += 13 * len(w) + 8
+
+
+def test_a_scanned_table_beside_a_column_of_text_leaves_the_text_out():
+    """A table in the right-hand column of a two-column page: the lines of the left-hand column level with it are
+    not a column of the table, and the heading below the table is not a row of it."""
+    from dyslexia_converter.extract.pdf_reader import _ocr_tables
+    words: list = []
+    prose = (BODY + " " + BODY + " " + BODY).split()
+    for k in range(13):  # the left-hand column: justified lines of six words, 12 pt apart
+        line = prose[k * 6:k * 6 + 6]
+        x = 650 - sum(13 * len(w) + 8 for w in line) + 8
+        _ocr_line(words, 905 + 33 * k, [(x, " ".join(line))], 100 + k)
+    columns = (850, 1100, 1300)  # the table, set in from the right-hand column's edge (760)
+    _ocr_line(words, 987, list(zip(columns, ("Condition", "Time", "Accuracy"))), 0)
+    for k, row in enumerate((("Standard", "61.2", "0.84"), ("Spacious", "55.9", "0.85"), ("Wide", "58.4", "0.83"))):
+        _ocr_line(words, 1037 + 40 * k, list(zip(columns, row)), 1 + k)
+    _ocr_line(words, 1190, [(760, "4 Discussion")], 10)
+    _ocr_line(words, 1235, [(760, "The present findings suggest that simple changes help")], 11)
+    tables, used = _ocr_tables(words, 72 / 200, lambda r: None)
+    assert [t.table.rows for t in tables] == [[["Condition", "Time", "Accuracy"], ["Standard", "61.2", "0.84"],
+                                               ["Spacious", "55.9", "0.85"], ["Wide", "58.4", "0.83"]]]
+    assert {w.text for w in words if id(w) in used} == {"Condition", "Time", "Accuracy", "Standard", "Spacious", "Wide",
+                                                        "61.2", "55.9", "58.4", "0.84", "0.85", "0.83"}
+
+
+def test_a_scanned_table_with_headings_over_groups_of_columns():
+    """Headings over two lines with a label over each group of columns (and labels set midway between the lines):
+    the columns under a group stay apart, and every line of values is a row."""
+    from dyslexia_converter.extract.pdf_reader import _ocr_tables
+    words: list = []
+    x = (200, 420, 560, 700, 840, 980, 1120, 1260)
+    _ocr_line(words, 300, [(477, "Vision"), (744, "Language"), (1037, "Audio")], 0)
+    _ocr_line(words, 316, [(x[0], "Method"), (x[7], "Avg.")], 1)
+    _ocr_line(words, 334, list(zip(x[1:7], ("Top-1", "Top-5", "BLEU", "PPL", "WER", "CER"))), 2)
+    values = (("Baseline", "71.2", "90.1", "27.3", "18.4", "9.1", "3.2", "36.6"),
+              ("Wide", "73.5", "91.0", "28.1", "17.2", "8.7", "3.0", "37.6"),
+              ("Deep", "74.0", "91.8", "29.4", "16.9", "8.5", "2.9", "38.3"))
+    for k, row in enumerate(values):
+        _ocr_line(words, 380 + 30 * k, list(zip(x, row)), 3 + k)
+    tables, _ = _ocr_tables(words, 72 / 200, lambda r: None)
+    assert [t.table.rows for t in tables] == [[["", "Vision", "", "Language", "", "Audio", "", ""],
+                                               ["Method", "Top-1", "Top-5", "BLEU", "PPL", "WER", "CER", "Avg."]]
+                                              + [list(r) for r in values]]
