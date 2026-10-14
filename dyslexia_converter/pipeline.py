@@ -20,6 +20,7 @@ from .extract.ocr import OcrEngine, default_engine
 from .extract.pdf_reader import read_pdf
 from .extract.structured import is_structured, read_structured
 from .model import BlockKind, Correction, Document, effective_corrections
+from .quality import Quality, assess
 from .render.compose import ComposeResult, compose
 from .settings import FormatSettings
 from .structure.detector import StructureDetector
@@ -54,6 +55,8 @@ class Session:
     ai_citation_decisions: dict[str, bool] = field(default_factory=dict)
     ai_log: list[str] = field(default_factory=list)
     page_map: dict[int, list[int]] = field(default_factory=dict)  # converted page -> original pages (preview)
+    # where the words to check are in the converted PDF (preview): (page, x0, y0, x1, y1, reason), top-left origin
+    unsure_marks: list[tuple[int, float, float, float, float, str]] = field(default_factory=list)
     layout_orders: dict[int, list[int]] = field(default_factory=dict)  # page -> reading order from the AI
     # the whole-document AI check: what it found (fixed or not), and how many parts it could not check
     check_findings: list[check.Finding] = field(default_factory=list)
@@ -367,17 +370,19 @@ class Session:
         corrections."""
         import unicodedata
 
-        parts = unicodedata.normalize("NFKC", words).split()
-        if not parts:
-            return None
-        # the words in order, with any spacing (or a hyphen at the end of a line) between them
-        pattern = re.compile(r"(?<!\w)" + r"(?:\s+|-\s*\n\s*)".join(re.escape(p) for p in parts) + r"(?!\w)")
-        for b in self.document.blocks:
-            shown, origin = self._shown_with_origin(b)
-            m = pattern.search(shown)
-            if m:
-                return b.id, min(origin[k][0] for k in range(m.start(), m.end())), \
-                    max(origin[k][1] for k in range(m.start(), m.end()))
+        # the words as shown first (a typed formula keeps its ² and ᵢ), then with ligatures and such undone
+        for variant in dict.fromkeys((words, unicodedata.normalize("NFKC", words))):
+            parts = variant.split()
+            if not parts:
+                return None
+            # the words in order, with any spacing (or a hyphen at the end of a line) between them
+            pattern = re.compile(r"(?<!\w)" + r"(?:\s+|-\s*\n\s*)".join(re.escape(p) for p in parts) + r"(?!\w)")
+            for b in self.document.blocks:
+                shown, origin = self._shown_with_origin(b)
+                m = pattern.search(shown)
+                if m:
+                    return b.id, min(origin[k][0] for k in range(m.start(), m.end())), \
+                        max(origin[k][1] for k in range(m.start(), m.end()))
         return None
 
     def _shown_with_origin(self, b) -> tuple[str, list[tuple[int, int]]]:
@@ -406,19 +411,30 @@ class Session:
         shown, origin = self._shown_with_origin(b)
         return "".join(ch for ch, (s, e) in zip(shown, origin) if start <= s and e <= end)
 
-    def edit_passage(self, block_id: str, start: int, end: int, new_text: str) -> Optional[Correction]:
+    def edit_passage(self, block_id: str, start: int, end: int, new_text: str, latex: str = "") -> Optional[Correction]:
         """The user retyped the words ``start:end`` of a block (picked in focus mode). Stored like
-        :meth:`edit_text`: only the changed words, as a correction of source "user" that can be undone."""
+        :meth:`edit_text`: only the changed words, as a correction of source "user" that can be undone. ``latex``:
+        the words are a formula the user typed in LaTeX, and ``new_text`` its formula text (kept with it, so it
+        can be edited again, and set in the maths font)."""
         b = self.document.block(block_id)
         new = " ".join(new_text.split())
-        if b is None or not new or new == " ".join(self.passage_as_shown(block_id, start, end).split()):
+        if b is None or not new or (new == " ".join(self.passage_as_shown(block_id, start, end).split())
+                                    and latex == self.passage_latex(block_id, start, end)):
             return None
         old = b.text[start:end]
         edit = Correction(id=f"user-{uuid.uuid4().hex[:10]}", block_id=block_id, start=start, end=end,
-                          original=old, replacement=new, confidence=1.0, status="accepted", source="user")
+                          original=old, replacement=new, confidence=1.0, status="accepted", source="user",
+                          latex=latex.strip())
         self.document.corrections = [x for x in self.document.corrections
                                      if not (x.source == "user" and x.overlaps(edit))] + [edit]
         return edit
+
+    def passage_latex(self, block_id: str, start: int, end: int) -> str:
+        """The LaTeX the user typed for a formula in this passage (to edit it again), or ""."""
+        for c in self.document.corrections_for(block_id):
+            if c.source == "user" and c.latex and c.start < end and start < c.end:
+                return c.latex
+        return ""
 
     def remove_user_edit(self, correction_id: str) -> None:
         """Undo text the user typed in; the scan's own text (and any suggestion) comes back."""
@@ -551,8 +567,15 @@ class Session:
     # ------------------------------------------------------------------ render
     def compose(self, settings: FormatSettings) -> ComposeResult:
         """The document laid out for the settings (items ready for any output format), with the fixes chosen from
-        the AI check."""
-        return compose(self.view(), settings, self.ai_citation_decisions)
+        the AI check and the words to check marked."""
+        doc = self.view()
+        return compose(doc, settings, self.ai_citation_decisions, unsure=self.quality(doc).unsure)
+
+    def quality(self, doc: Optional[Document] = None) -> "Quality":
+        """How much to trust the conversion (document and pages) and the words to check: see :mod:`quality`.
+        Words the reader corrected are not to check any more."""
+        doc = doc or self.view()
+        return assess(doc, Dictionary([doc.language], self.custom_words).known)
 
     def export(self, fmt: str, settings: FormatSettings) -> bytes:
         """The document in an output format: "pdf", "printable_pdf", "docx", "epub", "txt" or "md" (bytes)."""
@@ -565,6 +588,7 @@ class Session:
                                         printable=fmt == "printable_pdf")
             if fmt == "pdf":
                 self.page_map = pdf_writer.last_page_map()  # for the side-by-side preview
+                self.unsure_marks = pdf_writer.last_unsure_marks()  # for checking words in focus mode
             return data
         if fmt == "docx":
             return docx_writer.build_docx(result, settings, doc.title or _first_title(result), doc.author)

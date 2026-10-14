@@ -18,7 +18,7 @@ import re
 from dataclasses import dataclass, field, replace
 from typing import Optional
 
-from ..model import Block, BlockKind, Document, ImageData, TableData, map_styles
+from ..model import Block, BlockKind, Document, ImageData, StyleRange, TableData, map_styles
 from ..settings import FormatSettings
 from ..transform.bionic import bold_ranges
 from ..transform.citations import Citation, find_citations, match_reference
@@ -37,6 +37,7 @@ class Run:
     marker: bool = False  # inserted marker such as [3] or [Note 1]
     subscript: bool = False
     math: bool = False  # part of a formula: shown in a serif maths font
+    unsure: str = ""  # words the converter is unsure about: why ("unclear", "unknown" or "split"), else ""
 
 
 @dataclass
@@ -78,9 +79,14 @@ class ComposeResult:
 # -------------------------------------------------------------------- helpers
 
 def _runs_from(text: str, styles, bold_spans: list[tuple[int, int]],
-               replacements: list[tuple[int, int, str]], keep_italic: bool = True) -> list[Run]:
-    """Split ``text`` into runs honouring styles, bionic bold and replacements."""
+               replacements: list[tuple[int, int, str]], keep_italic: bool = True,
+               unsure: Optional[list[tuple[int, int, str]]] = None) -> list[Run]:
+    """Split ``text`` into runs honouring styles, bionic bold, replacements and the words to check (``unsure``:
+    (start, end, reason) ranges)."""
+    unsure = unsure or []
     cuts = {0, len(text)}
+    for a, b, _ in unsure:
+        cuts |= {max(0, min(len(text), a)), max(0, min(len(text), b))}
     for s in styles:
         cuts |= {max(0, min(len(text), s.start)), max(0, min(len(text), s.end))}
     for a, b in bold_spans:
@@ -108,7 +114,9 @@ def _runs_from(text: str, styles, bold_spans: list[tuple[int, int]],
         sub = any(s.subscript and s.start <= a and b <= s.end for s in styles)
         math = any(s.math and s.start <= a and b <= s.end for s in styles)
         bb = any(x <= a and b <= y for x, y in bold_spans)
-        runs.append(Run(seg, bold=bold or bb, italic=italic, superscript=sup, subscript=sub and not sup, math=math))
+        why = next((r for x, y, r in unsure if x <= a and b <= y), "")
+        runs.append(Run(seg, bold=bold or bb, italic=italic, superscript=sup, subscript=sub and not sup, math=math,
+                        unsure=why))
     # merge neighbours with identical style
     merged: list[Run] = []
     for r in runs:
@@ -122,7 +130,7 @@ def _runs_from(text: str, styles, bold_spans: list[tuple[int, int]],
 
 def _style(r: Run) -> tuple:
     """The style of a run as a tuple (runs with equal styles can be merged)."""
-    return r.bold, r.italic, r.superscript, r.subscript, r.math
+    return r.bold, r.italic, r.superscript, r.subscript, r.math, r.unsure
 
 
 def _math_spans(styles) -> list[tuple[int, int]]:
@@ -147,12 +155,14 @@ def _superscript_spans(text: str, styles) -> list[tuple[int, int]]:
 # -------------------------------------------------------------------- compose
 
 def compose(doc: Document, settings: FormatSettings, ai_citation_decisions: Optional[dict[str, bool]] = None,
-            citation_threshold: float = 0.9) -> ComposeResult:
+            citation_threshold: float = 0.9,
+            unsure: Optional[dict[str, list[tuple[int, int, str]]]] = None) -> ComposeResult:
     """Lay out the document for the settings: drop page furniture, move citations and footnotes when asked, number
     references, add the contents page and the note about the conversion.
 
     ``ai_citation_decisions`` holds the AI's verdicts on uncertain citations (only in AI-assisted mode);
-    ``citation_threshold`` is how sure the rules must be to move a citation on their own.
+    ``citation_threshold`` is how sure the rules must be to move a citation on their own; ``unsure`` holds the
+    words to check per block (see :mod:`quality`), marked on the runs so the PDF can note where they are.
     """
     ai_citation_decisions = ai_citation_decisions or {}
     lang = doc.language or "en"
@@ -210,7 +220,7 @@ def compose(doc: Document, settings: FormatSettings, ai_citation_decisions: Opti
 
     for b in blocks:
         text = doc.display_text(b)
-        styles = map_styles(b.styles, b.text, doc.corrections_for(b.id))
+        styles = map_styles(b.styles + _typed_formulas(doc, b), b.text, doc.corrections_for(b.id))
 
         if b.kind == BlockKind.IMAGE and b.image is not None and b.image.kind == "equation":
             items.append(RItem("equation", image=b.image, block_id=b.id, natural_width=b.bbox[2] - b.bbox[0]))
@@ -293,7 +303,7 @@ def compose(doc: Document, settings: FormatSettings, ai_citation_decisions: Opti
         marker, rest = "", text
         if b.kind == BlockKind.LIST_ITEM:
             marker, rest = _strip_marker(text)
-        runs = _runs_from(text, styles, bold_spans, clean)
+        runs = _runs_from(text, styles, bold_spans, clean, unsure=_unsure_in(doc, b, unsure))
         if marker:
             runs = _drop_prefix(runs, len(text) - len(rest))
         item = RItem(kind, runs, level=b.level, marker=marker, block_id=b.id)
@@ -349,7 +359,7 @@ def compose(doc: Document, settings: FormatSettings, ai_citation_decisions: Opti
             styles = map_styles(fn.styles, fn.text, doc.corrections_for(fn.id))
             m = FOOTNOTE_START_RE.match(text) if fn.footnote_label else None
             body_start = m.end() if m else 0
-            runs = _drop_prefix(_runs_from(text, styles, [], []), body_start)
+            runs = _drop_prefix(_runs_from(text, styles, [], [], unsure=_unsure_in(doc, fn, unsure)), body_start)
             while runs and not runs[0].text.strip():
                 runs.pop(0)
             if runs:
@@ -373,6 +383,22 @@ def compose(doc: Document, settings: FormatSettings, ai_citation_decisions: Opti
 
     return ComposeResult(items, headings, uncertain, lang, dict(doc.inline_images),
                          {b.id: _physical_page(doc, b.page) for b in doc.blocks}, popups)
+
+
+def _typed_formulas(doc: Document, b: Block) -> list[StyleRange]:
+    """Formulas the reader typed in LaTeX for this block: set in the maths font (as a style over the words they
+    replace, moved with the other styles to where the formula text is)."""
+    return [StyleRange(c.start, c.end, math=True) for c in doc.corrections_for(b.id)
+            if c.latex and c.applied and b.text[c.start:c.end] == c.original]
+
+
+def _unsure_in(doc: Document, b: Block, unsure: Optional[dict]) -> list[tuple[int, int, str]]:
+    """The words to check in a block, moved like its styles to where they are once corrections are applied."""
+    spans = (unsure or {}).get(b.id)
+    if not spans:
+        return []
+    moved = map_styles([StyleRange(a, e) for a, e, _ in spans], b.text, doc.corrections_for(b.id))
+    return [(m.start, m.end, why) for m, (_, _, why) in zip(moved, spans) if m.end > m.start]
 
 
 def _physical_page(doc: Document, page: int) -> int:

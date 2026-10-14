@@ -2013,6 +2013,155 @@ T: dict[str, dict[str, str]] = {
         "de": "Das Literaturverzeichnis und die Anmerkungen am Ende bleiben immer erhalten, mit ihren Nummern; nur der Platz auf dem Papier ändert sich.",
         "es": "La lista de referencias y las notas del final se conservan siempre, con sus números; solo cambia cuánto papel ocupan.",
         "it": "La bibliografia e le note alla fine restano sempre, con i loro numeri; cambia solo quanta carta occupano."},
+    # ---------------------------------------------------------------- typing a formula in LaTeX
+    "Maths (LaTeX)": {"nl": "Wiskunde (LaTeX)", "fr": "Maths (LaTeX)", "de": "Mathematik (LaTeX)",
+                      "es": "Matemáticas (LaTeX)", "it": "Matematica (LaTeX)"},
+    "Examples:": {"nl": "Voorbeelden:", "fr": "Exemples :", "de": "Beispiele:", "es": "Ejemplos:", "it": "Esempi:"},
+    "Shown as:": {"nl": "Wordt getoond als:", "fr": "Affiché comme :", "de": "Angezeigt als:",
+                  "es": "Se muestra como:", "it": "Mostrato come:"},
+    "Not known, kept as typed: {commands}": {
+        "nl": "Onbekend, gelaten zoals getypt: {commands}", "fr": "Inconnu, gardé tel quel : {commands}",
+        "de": "Unbekannt, wie getippt behalten: {commands}", "es": "Desconocido, se deja tal cual: {commands}",
+        "it": "Sconosciuto, lasciato come scritto: {commands}"},
+    "The {open} and {close} do not match yet.": {
+        "nl": "De {open} en {close} kloppen nog niet.", "fr": "Les {open} et {close} ne correspondent pas encore.",
+        "de": "Die {open} und {close} passen noch nicht zusammen.", "es": "Las {open} y {close} aún no coinciden.",
+        "it": "Le {open} e {close} non corrispondono ancora."},
+    "For a formula: switch on Maths and type it in LaTeX; it is shown in the maths font.": {
+        "nl": "Voor een formule: zet Wiskunde aan en typ hem in LaTeX; hij wordt in het wiskundelettertype getoond.",
+        "fr": "Pour une formule : activez Maths et tapez-la en LaTeX ; elle s'affiche dans la police des maths.",
+        "de": "Für eine Formel: Mathematik einschalten und sie in LaTeX tippen; sie wird in der Mathematikschrift "
+              "gezeigt.",
+        "es": "Para una fórmula: active Matemáticas y escríbala en LaTeX; se muestra con la fuente de matemáticas.",
+        "it": "Per una formula: attiva Matematica e scrivila in LaTeX; viene mostrata nel carattere matematico."},
+    # ---------------------------------------------------------------- how far to trust the conversion
+    "Excellent": {"nl": "Uitstekend", "fr": "Excellente", "de": "Ausgezeichnet", "es": "Excelente", "it": "Eccellente"},
+    "High": {"nl": "Hoog", "fr": "Élevée", "de": "Hoch", "es": "Alta", "it": "Alta"},
+    "Medium": {"nl": "Gemiddeld", "fr": "Moyenne", "de": "Mittel", "es": "Media", "it": "Media"},
+    "Low": {"nl": "Laag", "fr": "Faible", "de": "Niedrig", "es": "Baja", "it": "Bassa"},
+    "Very low": {"nl": "Zeer laag", "fr": "Très faible", "de": "Sehr niedrig", "es": "Muy baja", "it": "Molto bassa"},
+    "Quality estimate: {level}": {"nl": "Geschatte kwaliteit: {level}", "fr": "Qualité estimée : {level}",
+                                  "de": "Geschätzte Qualität: {level}", "es": "Calidad estimada: {level}",
+                                  "it": "Qualità stimata: {level}"},
+    "Scanned: the text was read by text recognition.": {
+        "nl": "Gescand: de tekst is gelezen met tekstherkenning.",
+        "fr": "Numérisé : le texte a été lu par reconnaissance de texte.",
+        "de": "Gescannt: Der Text wurde mit Texterkennung gelesen.",
+        "es": "Escaneado: el texto se ha leído con reconocimiento de texto.",
+        "it": "Scansionato: il testo è stato letto con il riconoscimento del testo."},
+    "{n}% of the recognised words are uncertain.": {
+        "nl": "{n}% van de herkende woorden is onzeker.",
+        "fr": "{n} % des mots reconnus sont incertains.",
+        "de": "{n} % der erkannten Wörter sind unsicher.",
+        "es": "El {n} % de las palabras reconocidas son dudosas.",
+        "it": "Il {n}% delle parole riconosciute è incerto."},
+    "A few recognised words are uncertain.": {
+        "nl": "Enkele herkende woorden zijn onzeker.",
+        "fr": "Quelques mots reconnus sont incertains.",
+        "de": "Einige erkannte Wörter sind unsicher.",
+        "es": "Algunas palabras reconocidas son dudosas.",
+        "it": "Alcune parole riconosciute sono incerte."},
+    "Many formulas (about {n} a page).": {
+        "nl": "Veel formules (ongeveer {n} per pagina).",
+        "fr": "Beaucoup de formules (environ {n} par page).",
+        "de": "Viele Formeln (etwa {n} pro Seite).",
+        "es": "Muchas fórmulas (unas {n} por página).",
+        "it": "Molte formule (circa {n} per pagina)."},
+    "Some sentences may be split over two paragraphs.": {
+        "nl": "Sommige zinnen zijn misschien over twee alinea's verdeeld.",
+        "fr": "Certaines phrases sont peut-être coupées en deux paragraphes.",
+        "de": "Manche Sätze sind vielleicht auf zwei Absätze verteilt.",
+        "es": "Algunas frases pueden estar partidas en dos párrafos.",
+        "it": "Alcune frasi potrebbero essere divise in due paragrafi."},
+    "Unusual layout: the reading order may be mixed.": {
+        "nl": "Ongewone opmaak: de leesvolgorde kan door elkaar staan.",
+        "fr": "Mise en page inhabituelle : l'ordre de lecture peut être mélangé.",
+        "de": "Ungewöhnliches Layout: Die Lesereihenfolge kann durcheinander sein.",
+        "es": "Diseño poco habitual: el orden de lectura puede estar mezclado.",
+        "it": "Impaginazione insolita: l'ordine di lettura potrebbe essere mescolato."},
+    "Some text could not be read and is shown as a picture.": {
+        "nl": "Sommige tekst kon niet gelezen worden en staat er als afbeelding.",
+        "fr": "Une partie du texte n'a pas pu être lue et est affichée comme image.",
+        "de": "Ein Teil des Textes war nicht lesbar und wird als Bild gezeigt.",
+        "es": "Parte del texto no se pudo leer y se muestra como imagen.",
+        "it": "Parte del testo non è leggibile ed è mostrata come immagine."},
+    "{n} page(s) read poorly: check them first.": {
+        "nl": "{n} pagina('s) slecht gelezen: kijk die eerst na.",
+        "fr": "{n} page(s) mal lue(s) : vérifiez-les d'abord.",
+        "de": "{n} Seite(n) schlecht gelesen: prüfen Sie diese zuerst.",
+        "es": "{n} página(s) mal leída(s): revíselas primero.",
+        "it": "{n} pagina/e letta/e male: controllale per prime."},
+    "The text comes straight from the PDF.": {
+        "nl": "De tekst komt rechtstreeks uit de pdf.",
+        "fr": "Le texte vient directement du PDF.",
+        "de": "Der Text stammt direkt aus dem PDF.",
+        "es": "El texto viene directamente del PDF.",
+        "it": "Il testo proviene direttamente dal PDF."},
+    "Unclear in the scan": {"nl": "Onduidelijk in de scan", "fr": "Peu lisible dans le scan",
+                            "de": "Im Scan undeutlich", "es": "Poco claro en el escaneo",
+                            "it": "Poco chiaro nella scansione"},
+    "Not in the dictionary": {"nl": "Niet in het woordenboek", "fr": "Absent du dictionnaire",
+                              "de": "Nicht im Wörterbuch", "es": "No está en el diccionario",
+                              "it": "Non è nel dizionario"},
+    "The sentence may go on in the next paragraph": {
+        "nl": "De zin gaat misschien verder in de volgende alinea",
+        "fr": "La phrase continue peut-être dans le paragraphe suivant",
+        "de": "Der Satz geht vielleicht im nächsten Absatz weiter",
+        "es": "La frase puede continuar en el párrafo siguiente",
+        "it": "La frase potrebbe continuare nel paragrafo successivo"},
+    "Click for the details.": {"nl": "Klik voor de details.", "fr": "Cliquez pour les détails.",
+                               "de": "Für Einzelheiten klicken.", "es": "Haga clic para ver los detalles.",
+                               "it": "Fai clic per i dettagli."},
+    "Pages to check:": {"nl": "Pagina's om na te kijken:", "fr": "Pages à vérifier :", "de": "Zu prüfende Seiten:",
+                        "es": "Páginas que revisar:", "it": "Pagine da controllare:"},
+    "page {n} ({level})": {"nl": "pagina {n} ({level})", "fr": "page {n} ({level})", "de": "Seite {n} ({level})",
+                           "es": "página {n} ({level})", "it": "pagina {n} ({level})"},
+    "An estimate from what the converter itself can tell: in focus mode, the label on each page shows the words it "
+    "is unsure about, so you can check and correct them.": {
+        "nl": "Een schatting op basis van wat het programma zelf kan zien: in de focusmodus toont het label op elke "
+              "pagina de woorden waarover het twijfelt, zodat je ze kunt nakijken en verbeteren.",
+        "fr": "Une estimation d'après ce que le convertisseur peut voir lui-même : en mode concentration, l'étiquette "
+              "de chaque page montre les mots dont il n'est pas sûr, pour que vous puissiez les vérifier et les "
+              "corriger.",
+        "de": "Eine Schätzung aus dem, was das Programm selbst erkennen kann: Im Fokusmodus zeigt das Etikett auf "
+              "jeder Seite die Wörter, bei denen es unsicher ist, damit Sie sie prüfen und korrigieren können.",
+        "es": "Una estimación según lo que el conversor puede ver por sí mismo: en el modo concentración, la etiqueta "
+              "de cada página muestra las palabras de las que no está seguro, para que pueda revisarlas y "
+              "corregirlas.",
+        "it": "Una stima basata su ciò che il convertitore riesce a vedere da solo: nella modalità concentrazione, "
+              "l'etichetta di ogni pagina mostra le parole su cui ha dubbi, così puoi controllarle e correggerle."},
+    "How far to trust this conversion": {
+        "nl": "Hoeveel je op deze omzetting kunt vertrouwen", "fr": "Quelle confiance accorder à cette conversion",
+        "de": "Wie sehr Sie dieser Umwandlung vertrauen können", "es": "Cuánto fiarse de esta conversión",
+        "it": "Quanto fidarsi di questa conversione"},
+    "Check in focus mode": {"nl": "Nakijken in focusmodus", "fr": "Vérifier en mode concentration",
+                            "de": "Im Fokusmodus prüfen", "es": "Revisar en el modo concentración",
+                            "it": "Controlla in modalità concentrazione"},
+    "Quality estimate for this page: {level}.": {"nl": "Geschatte kwaliteit van deze pagina: {level}.",
+                                                 "fr": "Qualité estimée de cette page : {level}.",
+                                                 "de": "Geschätzte Qualität dieser Seite: {level}.",
+                                                 "es": "Calidad estimada de esta página: {level}.",
+                                                 "it": "Qualità stimata di questa pagina: {level}."},
+    "Click to see the {n} word(s) to check.": {
+        "nl": "Klik om de {n} woord(en) te zien om na te kijken.",
+        "fr": "Cliquez pour voir le(s) {n} mot(s) à vérifier.",
+        "de": "Klicken, um die {n} zu prüfenden Wörter zu sehen.",
+        "es": "Haga clic para ver las {n} palabra(s) que revisar.",
+        "it": "Fai clic per vedere le {n} parole da controllare."},
+    "Nothing to check on this page.": {"nl": "Niets na te kijken op deze pagina.",
+                                       "fr": "Rien à vérifier sur cette page.",
+                                       "de": "Auf dieser Seite gibt es nichts zu prüfen.",
+                                       "es": "Nada que revisar en esta página.",
+                                       "it": "Niente da controllare in questa pagina."},
+    "Word {k} of {n} to check": {"nl": "Woord {k} van {n} om na te kijken", "fr": "Mot {k} sur {n} à vérifier",
+                                 "de": "Wort {k} von {n} zum Prüfen", "es": "Palabra {k} de {n} que revisar",
+                                 "it": "Parola {k} di {n} da controllare"},
+    "Previous word to check": {"nl": "Vorig woord om na te kijken", "fr": "Mot précédent à vérifier",
+                               "de": "Vorheriges zu prüfendes Wort", "es": "Palabra anterior que revisar",
+                               "it": "Parola precedente da controllare"},
+    "Next word to check": {"nl": "Volgend woord om na te kijken", "fr": "Mot suivant à vérifier",
+                           "de": "Nächstes zu prüfendes Wort", "es": "Palabra siguiente que revisar",
+                           "it": "Parola successiva da controllare"},
 }
 
 # messages from the processing core, matched in i18n.MESSAGE_PATTERNS; {0}, {1}... are the parts found

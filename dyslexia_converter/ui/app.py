@@ -26,6 +26,7 @@ from ..extract.ocr import default_engine, find_tesseract
 from ..extract import web
 from ..extract.structured import ProtectedFile
 from ..fonts import FONT_CHOICES, get_family
+from ..quality import Quality
 from ..render import preview
 from ..settings import PRESET_DISCLAIMER, PRESETS, FormatSettings, SettingsStore
 from ..transform.spelling import CustomWords
@@ -101,6 +102,7 @@ class ConverterApp:
         self.session: Optional[pipeline.Session] = None
         self.source_path: Optional[str] = None
         self.converted_pdf: Optional[bytes] = None
+        self.quality: Optional[Quality] = None  # how far to trust the conversion, and the words to check
         self.orig_page = 0
         self.conv_page = 0
         self.orig_count = 0
@@ -243,6 +245,14 @@ class ConverterApp:
 
         self.status = self.text(t("Open a PDF to start. Your original file is never changed."), 14,
                                 max_lines=1, overflow=ft.TextOverflow.ELLIPSIS)
+        # how far to trust the conversion: a small coloured notice beside the status (click for the reasons)
+        self.quality_icon = ft.Icon(ft.Icons.CHECK_CIRCLE_OUTLINE, size=self.fs(16))
+        self.quality_text = self.text("", 13)
+        self.quality_chip = ft.Container(
+            ft.Row([self.quality_icon, self.quality_text], spacing=5, tight=True,
+                   vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            padding=ft.Padding.symmetric(horizontal=10, vertical=2), border_radius=12, visible=False,
+            on_click=self.on_quality, ink=True)
         self.progress = ft.ProgressBar(value=0, visible=False)
         # longer messages (warnings, decisions waiting) go here: wrapped, scrollable, dismissable
         self.notice_list = ft.Column(spacing=4, scroll=ft.ScrollMode.AUTO)
@@ -297,7 +307,9 @@ class ConverterApp:
                 ft.TabBar(tabs=[ft.Tab(label=label, icon=i) for label, i, _ in tabs], scrollable=True),
                 ft.TabBarView(controls=[c for _, _, c in tabs], expand=True),
             ], expand=True, spacing=0))
-        body = ft.Column([header, ft.Container(ft.Column([self.status, self.progress, self.notices], spacing=4),
+        status_row = ft.Row([ft.Container(self.status, expand=True), self.quality_chip], spacing=8,
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER)
+        body = ft.Column([header, ft.Container(ft.Column([status_row, self.progress, self.notices], spacing=4),
                                                padding=ft.Padding.symmetric(horizontal=16)),
                           self.tabs], expand=True, spacing=4)
         self._update_read_buttons()  # greyed out until a document is open
@@ -364,6 +376,7 @@ class ConverterApp:
             self.tabs.selected_index = tab
         if self.session:
             self.status.value = self.doc_status()
+            self._show_quality()
             self._update_doc_language_option()
             self.refresh_review()
             self.refresh_map()
@@ -1967,10 +1980,109 @@ class ConverterApp:
         finally:
             self.busy(False)
         self.refresh_map()
+        await self.refresh_quality()
         if self.focus.active:
             await self.focus.refresh()
             return
         await self.show_pages()
+
+    # ---------------------------------------------------------------- how far to trust the conversion
+    QUALITY_STYLE = {5: ("#1E7B34", ft.Icons.VERIFIED_OUTLINED), 4: ("#4C9A2A", ft.Icons.CHECK_CIRCLE_OUTLINE),
+                     3: ("#B07D00", ft.Icons.INFO_OUTLINE), 2: ("#D2601A", ft.Icons.WARNING_AMBER_ROUNDED),
+                     1: ("#C62828", ft.Icons.ERROR_OUTLINE)}
+
+    def level_name(self, level: int) -> str:
+        """A quality level in the app's language."""
+        t = self.t
+        return {5: t("Excellent"), 4: t("High"), 3: t("Medium"), 2: t("Low"), 1: t("Very low")}[level]
+
+    def quality_reasons(self, rating) -> list[str]:
+        """Why a page or the document got its rating, in plain words."""
+        t = self.t
+        out = []
+        for code, n in rating.reasons:
+            if code == "ocr":
+                out.append(t("Scanned: the text was read by text recognition."))
+            elif code == "unsure":
+                out.append(t("{n}% of the recognised words are uncertain.", n=int(n)) if n >= 1
+                           else t("A few recognised words are uncertain."))
+            elif code == "formulas":
+                out.append(t("Many formulas (about {n} a page).", n=int(n)))
+            elif code == "split":
+                out.append(t("Some sentences may be split over two paragraphs."))
+            elif code == "layout":
+                out.append(t("Unusual layout: the reading order may be mixed."))
+            elif code == "pictured":
+                out.append(t("Some text could not be read and is shown as a picture."))
+            elif code == "weak_pages":
+                out.append(t("{n} page(s) read poorly: check them first.", n=int(n)))
+        return out or [t("The text comes straight from the PDF.")]
+
+    def check_reason(self, why: str) -> str:
+        """Why a word is to check (focus mode)."""
+        t = self.t
+        return {"unclear": t("Unclear in the scan"), "unknown": t("Not in the dictionary"),
+                "split": t("The sentence may go on in the next paragraph")}.get(why, "")
+
+    async def refresh_quality(self) -> None:
+        """Rate the conversion again (after converting or correcting words) and show the notice."""
+        self.quality = await self.in_thread(self.session.quality) if self.session else None
+        self._show_quality()
+
+    def _show_quality(self) -> None:
+        """The quality notice beside the status: icon, colour and level, with the reasons as its tooltip."""
+        if self.quality is None:
+            self.quality_chip.visible = False
+            return
+        r = self.quality.document
+        colour, icon = self.QUALITY_STYLE[r.level]
+        self.quality_icon.icon, self.quality_icon.color = icon, colour
+        self.quality_text.value = self.t("Quality estimate: {level}", level=self.level_name(r.level))
+        self.quality_chip.bgcolor = "#26" + colour[1:]
+        self.quality_chip.border = ft.Border.all(1, colour)
+        self.quality_chip.tooltip = "\n".join(self.quality_reasons(r) + [self.t("Click for the details.")])
+        self.quality_chip.visible = True
+
+    def _pages_to_check(self) -> list[tuple[int, object]]:
+        """(page of the original, rating) of the pages rated Medium or lower, in page order."""
+        if self.quality is None:
+            return []
+        return sorted((p, r) for p, r in self.quality.by_source.items() if r.level <= 3)
+
+    async def on_quality(self, e=None) -> None:
+        """The quality notice was clicked: the rating, its reasons, the pages to check and a way to check them."""
+        if self.quality is None:
+            return
+        t = self.t
+        r = self.quality.document
+        colour, icon = self.QUALITY_STYLE[r.level]
+        rows: list[ft.Control] = [
+            ft.Row([ft.Icon(icon, color=colour, size=self.fs(28)),
+                    self.text(t("Quality estimate: {level}", level=self.level_name(r.level)), 18,
+                              weight=ft.FontWeight.BOLD)], spacing=10),
+            *[self.text("\u2022 " + line, 14) for line in self.quality_reasons(r)]]
+        pages = self._pages_to_check()
+        if pages:
+            rows.append(self.text(t("Pages to check:"), 14, weight=ft.FontWeight.BOLD))
+            rows.append(self.text(", ".join(t("page {n} ({level})", n=p + 1, level=self.level_name(pr.level))
+                                            for p, pr in pages[:12]) + (" ..." if len(pages) > 12 else ""), 14))
+        rows.append(self.text(t("An estimate from what the converter itself can tell: in focus mode, the label on "
+                                "each page shows the words it is unsure about, so you can check and correct them."),
+                              13, color=self.pal["muted"]))
+
+        def close(_=None):
+            self.page.pop_dialog()
+
+        async def check(_):
+            close()
+            await self.focus.open_checking(pages[0][0] if pages else None)
+
+        self.page.show_dialog(ft.AlertDialog(
+            title=self.text(t("How far to trust this conversion"), 18, weight=ft.FontWeight.BOLD),
+            content=ft.Column(rows, tight=True, spacing=8, width=480),
+            actions=[ft.TextButton(t("Close"), on_click=close),
+                     ft.FilledButton(t("Check in focus mode"), icon=ft.Icons.FACT_CHECK_OUTLINED, on_click=check,
+                                     visible=bool(self.quality.unsure) or bool(pages))]))
 
     # ---------------------------------------------------------------- read aloud
     def build_read_bar(self) -> ft.Control:
