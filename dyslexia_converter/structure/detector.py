@@ -267,9 +267,12 @@ class StructureDetector:
     @staticmethod
     def _page_number_lines(page: RawPage, known: set[int]) -> set[int]:
         """A page number printed a little inside the margin (book scans often have wide margins): a bare number
-        that is the first or last thing on the page, well apart from the text, in the outer fifth of the page."""
+        that is the first or last thing on the page, well apart from the text, in the outer fifth of the page; or
+        a bare number that is the only text on the page (the rest is pictures, such as a table set sideways)."""
         h = page.info.height
         lines = [l for l in page.lines if id(l) not in known]
+        if len(lines) == 1 and re.fullmatch(r"[-–]?\s*\d{1,4}\s*[-–]?", lines[0].text.strip()):
+            return {id(lines[0])}  # the only text on a page of pictures (a table set sideways): the page number
         if len(lines) < 3:
             return set()
         out = set()
