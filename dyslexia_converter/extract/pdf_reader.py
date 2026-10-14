@@ -472,6 +472,9 @@ def _join_drop_caps(spans: list[_Span]) -> list[_Span]:
         if not (1 <= len(digits) <= 2 and digits.isdigit()) or not 1.3 * body <= num.size <= 3 * body:
             continue
         top, height = num.bbox[1], num.bbox[3] - num.bbox[1]
+        if any(sp is not num and sp.text.strip() and sp.x1 <= num.x0 + 1 and num.x0 - sp.x1 < 0.6 * num.size
+               and sp.bbox[1] < num.bbox[3] and sp.bbox[3] > num.bbox[1] for sp in out):
+            continue  # text just left of it: a number within a line ("at 10 A·m⁻²"), not one starting a point
         beside = [sp for sp in out if sp is not num and sp.text.strip() and sp.size < num.size / 1.3
                   and -1 <= sp.x0 - num.x1 < 3 * sp.size and top - 0.3 * height <= sp.bbox[1] <= top + 0.3 * height]
         if not beside:
@@ -1108,8 +1111,9 @@ def _text_lines(page: pymupdf.Page, pno: int, known_word: Optional[Callable[[str
     return _merge_same_baseline(lines)
 
 
-# bullet points (dashes and asterisks are left out: on their own they are also text)
-BULLETS = "\u2022\u2023\u25e6\u2043\u2219\u25aa\u25cf\u25cb\u25a0\u25ba\u27a2\uf0b7\uf0a7\uf0d8\uf076\u00b7"
+# bullet points (dashes, asterisks and middle dots are left out: on their own they are also text, units and maths,
+# as in "A·m⁻²")
+BULLETS = "\u2022\u2023\u25e6\u2043\u25aa\u25cf\u25cb\u25a0\u25ba\u27a2\uf0b7\uf0a7\uf0d8\uf076"
 
 
 def _lone_bullet(ln: RawLine) -> bool:
@@ -1267,6 +1271,13 @@ def _figures(page: pymupdf.Page, doc: pymupdf.Document, lines: list[RawLine],
                 break
     merge_overlapping(0)  # labels taken in may make two regions overlap: one picture, not the same part twice
 
+    # publisher badges ("CrossMark: click for updates", the journal's logo) link to the publisher or CrossMark
+    badges = []
+    if page.number == 0:
+        try:
+            badges = [tuple(l["from"]) for l in page.get_links() if BADGE_LINK_RE.search(l.get("uri") or "")]
+        except Exception:
+            badges = []
     figures: list[RawFigure] = []
     for rect, xref in regions:
         has_text = any(overlap_ratio(l.bbox, rect) > 0.5 for l in lines)
@@ -1284,10 +1295,15 @@ def _figures(page: pymupdf.Page, doc: pymupdf.Document, lines: list[RawLine],
         small = (rect[2] - rect[0]) < 40 and (rect[3] - rect[1]) < 40
         # journal logos / "check for updates" badges near the top of the first page
         logo = (page.number == 0 and rect[3] < prect[3] * 0.3 and _area(rect) < 0.05 * parea
-                and not has_text)
+                and not has_text) or (any(_area(_intersect(rect, b)) > 0 for b in badges) and _area(rect) <
+                                      (0.1 if rect[3] < prect[3] * 0.25 else 0.05) * parea)  # (a masthead box)
         img.kind = "decorative" if (small or logo) else "figure"
         figures.append(RawFigure(rect, img))
     return figures
+
+
+BADGE_LINK_RE = re.compile(r"crossmark|crossref\.org/dialog|elsevier\.com/locate|sciencedirect\.com/science/journal"
+                           r"|tandfonline\.com/?$", re.I)
 
 
 # --------------------------------------------------------------------------- equations

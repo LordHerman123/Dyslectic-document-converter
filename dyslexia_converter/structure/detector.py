@@ -41,6 +41,10 @@ FIGURE_DOI_RE = re.compile(r"^(?:doi:\s?|https?://(?:dx\.)?doi\.org/)10\.\S+\.[g
 MASTHEAD_RE = re.compile(r"^(?:contents lists available at\b|journal homepage:|available online at\b|"
                          r"www\.sciencedirect\.com$|sciencedirect$)", re.I)
 JOURNAL_LINE_RE = re.compile(r"^[A-Z][\w&.,:'’ -]{2,80}\s\d{1,4}\s\((?:19|20)\d{2}\)\s[A-Za-z]?\d+(?:\s?[–-]\s?\d+)?$")
+# the kind of article, printed above the title
+ARTICLE_LABEL_RE = re.compile(r"^(?:(?:original|research|review|short|brief|invited|regular|full[- ]length|special|open "
+                              r"access)\s+)*(?:article|paper|communication|comment(?:ary)?|editorial|perspective|letter|"
+                              r"report|review|essay|news(?: feature)?|feature|opinion|note)s?$", re.I)
 SPECIAL_HEADINGS = re.compile(
     r"^\s*(abstract|samenvatting|summary|keywords|key words|trefwoorden|introduction|inleiding|"
     r"conclusions?|conclusie|discussion|discussie|methods?|methode|results|resultaten|"
@@ -214,6 +218,7 @@ class StructureDetector:
         heights = {p.info.number: p.info.height for p in raw.pages}
         self._detect_title_authors(blocks, max(body["text"], body["ocr"]) if not text_lines else body["text"],
                                    heights)
+        self._article_labels(blocks, max(body["text"], body["ocr"]) if not text_lines else body["text"])
         self._detect_quotes(blocks, body)
         self._mark_references(blocks)
         self._split_references(blocks)
@@ -483,8 +488,9 @@ class StructureDetector:
                 return False  # first-line indent of a new paragraph
             if indent < -0.8 * size and abs(p.x0 - body_x) < 2 and body_x > first_x + 0.5 * size:
                 return False  # new hanging-indent entry (references)
-            if indent < -0.8 * size and abs(first_x - body_x) < 2:
-                return False
+            if indent < -0.8 * size and abs(first_x - body_x) < 2 and not (
+                    c.text[:1].islower() and not p.text.rstrip().endswith(TERMINAL)):
+                return False  # (but a sentence going on below a drop cap, back at the margin, is the same paragraph)
         # previous line ends a sentence clearly short of the column edge
         if p.text.rstrip().endswith((".", "!", "?", ":")):
             right = max(max(l.x1 for l in para.lines), c.x1)
@@ -790,11 +796,28 @@ class StructureDetector:
                 best.level = max(1, min(6, level))
 
     # -------------------------------------------------------- title / authors
+    @staticmethod
+    def _article_labels(blocks: list[Block], body_size: float) -> None:
+        """The kind of article printed at the top of the first page, above the title ("Original Research Article",
+        "ARTICLE", "COMMENT"), is no heading (and no entry in the contents): it is shown as small print, like the
+        journal's line."""
+        page0 = min((b.page for b in blocks), default=0)
+        for b in blocks:
+            if b.page != page0 or b.kind == BlockKind.TITLE:
+                break
+            if b.kind != BlockKind.HEADING:
+                continue
+            if not ARTICLE_LABEL_RE.match(b.text.strip()):
+                break  # the first real heading: what follows is the article
+            b.kind, b.level = BlockKind.PARAGRAPH, 0
+            b.font_size = min(b.font_size, body_size * 0.8)
+
     def _detect_title_authors(self, blocks: list[Block], body_size: float, heights: dict[int, float]) -> None:
         """Find the document title (the largest text high on the first page) and the author line under it."""
         page0 = min((b.page for b in blocks), default=0)
         # book scans: the title page is often the right-hand page of the first spread
-        first_page = [b for b in blocks if b.page in (page0, page0 + 1) and b.kind in (BlockKind.HEADING, BlockKind.PARAGRAPH)]
+        first_page = [b for b in blocks if b.page in (page0, page0 + 1) and b.kind in (BlockKind.HEADING, BlockKind.PARAGRAPH)
+                      and not ARTICLE_LABEL_RE.match(b.text.strip())]  # "COMMENT" above the title is no title
         if not first_page:
             return
         biggest = max(first_page, key=lambda b: b.font_size)
