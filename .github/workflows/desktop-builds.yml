@@ -5,7 +5,7 @@ name: Linux and macOS builds
 # The results are a .tar.gz (Linux) and a .zip with the .app (macOS) under the workflow run's artifacts, with a
 # screenshot of each app opened with a sample paper.
 # See docs/BUILDING.md for what each platform needs.
-# Runs for a release (a tag such as v1.18.0, like the Windows release) and can be started by hand from the Actions tab.
+# Runs for a release (a tag such as v1.19.0, like the Windows release) and can be started by hand from the Actions tab.
 on:
   push:
     tags: ["v*", "Version-*"]

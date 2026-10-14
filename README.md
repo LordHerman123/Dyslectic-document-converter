@@ -13,11 +13,25 @@ At start a short notice says what to expect: the converter changes how a documen
 Everything works **locally and without AI**. AI is an optional extra that you turn on with your own
 API key. When it's on, it only sees small snippets that the local rules couldn't decide.
 
-## Download for Windows (version 1.18)
+## Download for Windows (version 1.19)
 
-Get `DyslexiaConverter-1.18.0-setup.exe` (installer) or `DyslexiaConverter-1.18.0-windows.zip` (unzip and
+Get `DyslexiaConverter-1.19.0-setup.exe` (installer) or `DyslexiaConverter-1.19.0-windows.zip` (unzip and
 double-click `DyslexiaConverter.exe`) from the repository's **Releases** page. Text recognition (Tesseract)
 is included; nothing else needs to be installed. How the Windows build is made: [windows/README.md](windows/README.md).
+
+## What's new in 1.19
+
+* **Quality estimate:** a small coloured notice says how far to trust the conversion (*Excellent*, *High*, *Medium*,
+  *Low* or *Very low*) and why. In focus mode each page has its own small label; click it to step through the words
+  the converter is unsure about and correct them.
+* **Picture size:** a figure came out too small? Click it in focus mode and make it larger (up to the full text
+  width) or smaller. The size is remembered and every export uses it.
+* **Typing a formula:** when you correct a formula, switch on *Maths (LaTeX)* and type it in LaTeX, with a live
+  preview.
+* **Scans** are read about twice as fast, pages scanned sideways are turned upright, and headings no longer run into
+  the text after them.
+* **Formulas** keep their structure in their text: fractions, powers and indices, limits, roots and matrices.
+* The **Mac and Linux apps** open a document they are started with (Open with, or a PDF dropped on the icon).
 
 ## macOS and Linux
 
