@@ -1091,10 +1091,23 @@ def _text_lines(page: pymupdf.Page, pno: int, known_word: Optional[Callable[[str
     return _merge_same_baseline(lines)
 
 
+# bullet points (dashes and asterisks are left out: on their own they are also text)
+BULLETS = "\u2022\u2023\u25e6\u2043\u2219\u25aa\u25cf\u25cb\u25a0\u25ba\u27a2\uf0b7\uf0a7\uf0d8\uf076\u00b7"
+
+
+def _lone_bullet(ln: RawLine) -> bool:
+    """Whether a line is only a bullet point (drawn in a font of its own, so read apart from its text)."""
+    t = ln.text.strip()
+    return len(t) == 1 and t in BULLETS
+
+
 def _continues_line(prev: RawLine, ln: RawLine) -> bool:
     """Whether line ``ln`` is the continuation of ``prev`` on the same visual line (split by fonts or formulas)."""
     gap = ln.x0 - prev.x1
     size = max(prev.size, ln.size)
+    if _lone_bullet(prev) and not _lone_bullet(ln) and -1 <= gap < 2.5 * ln.size \
+            and ln.y0 - 1 <= (prev.y0 + prev.y1) / 2 <= ln.y1 + 1:
+        return True  # a bullet point beside the first line of its item (often smaller, and a little lower)
     has_math = any(st.math for st in prev.styles + ln.styles)
     if has_math and prev.baseline and ln.baseline and abs(prev.baseline - ln.baseline) < 0.25 * size \
             and abs(prev.size - ln.size) < 1.5 and -1 <= gap < 1.6 * size:
@@ -1123,6 +1136,9 @@ def _merge_same_baseline(lines: list[RawLine]) -> list[RawLine]:
             out.append(ln)
             continue
         prev = target
+        if _lone_bullet(prev) and not _lone_bullet(ln):  # the item's line takes its text's size and font
+            prev.size, prev.font, prev.bold, prev.italic = ln.size, ln.font, ln.bold, ln.italic
+            prev.baseline, prev.block_no = ln.baseline, ln.block_no
         sep = "" if ln.x0 - prev.x1 < prev.size * 0.15 else " "
         base = len(prev.text) + len(sep)
         prev.text += sep + ln.text
@@ -1804,6 +1820,56 @@ def _close_number_gap(pix: pymupdf.Pixmap, body: float) -> tuple[bytes, int, int
 
 # --------------------------------------------------------------------------- tables
 
+def _spaced_cells(page: pymupdf.Page, tab) -> list[list[Optional[str]]]:
+    """A found table's cell texts (as ``tab.extract()`` gives them) with the word breaks of the page's words: when a
+    PDF places every word apart without a space character, the table finder runs a cell's words together
+    ("RelevantRIdimensions"). A cell's words are used only when their letters are exactly the cell's, so nothing
+    but the spaces can change."""
+    rows = tab.extract()
+    try:
+        words = page.get_text("words")
+        boxes = [r.cells for r in tab.rows]
+    except Exception:
+        return rows
+    out = []
+    for texts, cells in zip(rows, boxes):
+        row = []
+        for text, box in zip(texts, cells):
+            if not text or box is None or " " in text.strip():
+                row.append(text)
+                continue
+            x0, y0, x1, y1 = box
+            inside = [w for w in words if x0 <= (w[0] + w[2]) / 2 <= x1 and y0 <= (w[1] + w[3]) / 2 <= y1]
+            inside.sort(key=lambda w: (round((w[1] + w[3]) / 2 / 3), w[0]))  # line by line, left to right
+            row.append(_with_breaks(text, [w[4] for w in inside]) if len(inside) > 1 else text)
+        out.append(row)
+    return out
+
+
+def _with_breaks(text: str, words: list[str]) -> str:
+    """``text`` with a space wherever one of ``words`` ends, if the words hold exactly its letters (ligatures such
+    as "ﬁ" count as the letters they stand for); otherwise ``text`` as it is."""
+    def letters(t: str) -> str:
+        return re.sub(r"\s+", "", unicodedata.normalize("NFKC", t))
+
+    if letters("".join(words)) != letters(text):
+        return text
+    ends, n = set(), 0
+    for w in words[:-1]:
+        n += len(letters(w))
+        ends.add(n)
+    out, n = [], 0
+    for ch in text:
+        if ch.isspace():
+            out.append(ch)
+            continue
+        if n in ends and out and not out[-1].isspace():
+            out.append(" ")
+        out.append(ch)
+        n += len(letters(ch))
+    return "".join(out)
+
+
 def _tables(page: pymupdf.Page) -> list[RawTable]:
     """The tables PyMuPDF finds on a page, checked against the page's ruling lines and turned into TableData."""
     out: list[RawTable] = []
@@ -1817,7 +1883,7 @@ def _tables(page: pymupdf.Page) -> list[RawTable]:
         drawings = []
     for tab in found.tables:
         try:
-            rows = tab.extract()
+            rows = _spaced_cells(page, tab)
         except Exception:
             rows = []
         rect = tuple(tab.bbox)
@@ -2100,7 +2166,7 @@ def _caption_tables(page: pymupdf.Page, lines: list[RawLine], existing: list[Raw
         except Exception:
             continue
         for tab in found.tables:
-            rows = [[(c or "").replace("\n", " ").strip() for c in r] for r in tab.extract()]
+            rows = [[(c or "").replace("\n", " ").strip() for c in r] for r in _spaced_cells(page, tab)]
             rows = [r for r in rows if any(r)]
             while rows and sum(1 for c in rows[-1] if c) <= 1 and len(rows) > 2:
                 rows.pop()  # table notes such as "Source: ..." stay as normal text
