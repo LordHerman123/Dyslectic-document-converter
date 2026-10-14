@@ -444,7 +444,8 @@ def _join_drop_caps(spans: list[_Span]) -> list[_Span]:
     """A drop cap (one large capital at the start of an article, several lines tall) is put back in front of
     the rest of its word ("M" + "ichael"), instead of being read as a line of its own that swallows the text
     beside it. Only a single letter at least 2.5 times the text size counts, with lower-case text starting just
-    right of its top."""
+    right of its top. A drop number (a large numeral, two or more lines tall, before a numbered point) is put in
+    front of the point's first line the same way."""
     sizes = Counter()
     for sp in spans:
         sizes[round(sp.size)] += len(sp.text.strip())
@@ -464,6 +465,22 @@ def _join_drop_caps(spans: list[_Span]) -> list[_Span]:
         first = min(beside, key=lambda sp: (sp.bbox[1], sp.x0))
         out[out.index(first)] = replace(first, text=letter + first.text)
         out.remove(cap)
+    for num in spans:
+        # a drop number: a large numeral beside the first lines of a numbered point ("1" before "Quantitative
+        # evaluation should sup- / port qualitative ...") goes in front of the first line, not into the second
+        digits = num.text.strip()
+        if not (1 <= len(digits) <= 2 and digits.isdigit()) or not 1.3 * body <= num.size <= 3 * body:
+            continue
+        top, height = num.bbox[1], num.bbox[3] - num.bbox[1]
+        beside = [sp for sp in out if sp is not num and sp.text.strip() and sp.size < num.size / 1.3
+                  and -1 <= sp.x0 - num.x1 < 3 * sp.size and top - 0.3 * height <= sp.bbox[1] <= top + 0.3 * height]
+        if not beside:
+            continue
+        first = min(beside, key=lambda sp: (sp.bbox[1], sp.x0))
+        if num.bbox[3] < first.bbox[3] + 0.5 * first.size:
+            continue  # no taller than the line beside it: an ordinary large number
+        out[out.index(first)] = replace(first, text=digits + " " + first.text)
+        out.remove(num)
     return out
 
 
@@ -2183,6 +2200,88 @@ def _caption_tables(page: pymupdf.Page, lines: list[RawLine], existing: list[Raw
     return out
 
 
+def _gap_tables(page: pymupdf.Page, lines: list[RawLine], existing: list[RawTable]) -> list[RawTable]:
+    """Borderless tables: rows of short cells kept apart only by white space, with neither rules nor a caption
+    ("Name  Role  Office" / "Anna  Editor  2.14"), which would otherwise be read as one run-on sentence. Three or more
+    rows in a row, each with a gap of about three word spaces or more, and white space running down through all of
+    them at the same places, so that there are at least three columns; cells of a few words, no formulas."""
+    try:
+        words = page.get_text("words")
+    except Exception:
+        return []
+
+    def row_words(l: RawLine) -> list:
+        return sorted((w for w in words if l.x0 - 1 <= (w[0] + w[2]) / 2 <= l.x1 + 1
+                       and l.y0 - 1 <= (w[1] + w[3]) / 2 <= l.y1 + 1), key=lambda w: w[0])
+
+    def wide_gaps(ws: list, size: float) -> list[tuple[float, float]]:
+        return [(a[2], b[0]) for a, b in zip(ws, ws[1:]) if b[0] - a[2] >= 0.9 * size]
+
+    def beside(a: RawLine, b: RawLine) -> bool:
+        return a.x0 <= b.x1 and b.x0 <= a.x1
+
+    taken = [t.bbox for t in existing]
+    open_runs: list[list[tuple[RawLine, list]]] = []
+    runs: list[list[tuple[RawLine, list]]] = []
+    for l in sorted(lines, key=lambda l: (l.y0, l.x0)):
+        ws = row_words(l)
+        row_like = (l.text.strip() and not any(st.math for st in l.styles) and 2 <= len(ws) <= 12
+                    and len(l.text) <= 80 and not l.text.rstrip().endswith("-") and wide_gaps(ws, l.size)
+                    and not any(overlap_ratio(l.bbox, t) > 0.3 for t in taken))
+        run = next((r for r in open_runs if beside(r[-1][0], l)), None)
+        if run is not None and (not row_like or l.y0 - run[-1][0].y1 > 1.2 * l.size
+                                or abs(l.size - run[-1][0].size) > 1):
+            open_runs.remove(run)  # this line ends the run beside it
+            runs.append(run)
+            run = None
+        if row_like:
+            if run is None:
+                open_runs.append([(l, ws)])
+            else:
+                run.append((l, ws))
+    runs += open_runs
+    out: list[RawTable] = []
+    for run in runs:
+        if len(run) < 3:
+            continue
+        size = max(l.size for l, _ in run)
+        x0, x1 = min(l.x0 for l, _ in run), max(l.x1 for l, _ in run)
+        gx0 = int(x0) - 1
+        covered = [False] * (int(x1) + 2 - gx0)
+        for _, ws in run:
+            for w in ws:
+                for x in range(max(0, int(w[0]) - gx0), min(len(covered), int(w[2]) + 1 - gx0)):
+                    covered[x] = True
+        cuts, start = [], None
+        for i, c in enumerate(covered):
+            if not c:
+                start = i if start is None else start
+            else:
+                if start is not None and start > 0 and i - start >= 0.9 * size:
+                    cuts.append(gx0 + (start + i) / 2)
+                start = None
+        if len(cuts) < 2:
+            continue
+        rows, good = [], True
+        for l, ws in run:
+            if any(not any(a < c < b for c in cuts) for a, b in wide_gaps(ws, l.size)):
+                good = False  # a wide gap that is no column border: not a table
+                break
+            cells = [""] * (len(cuts) + 1)
+            for w in ws:
+                ci = sum(1 for c in cuts if (w[0] + w[2]) / 2 > c)
+                cells[ci] = (cells[ci] + " " + w[4]).strip()
+            if sum(1 for c in cells if c) < 2 or any(len(c.split()) > 6 for c in cells):
+                good = False
+                break
+            rows.append(cells)
+        if not good:
+            continue
+        rect = (x0, min(l.y0 for l, _ in run), x1, max(l.y1 for l, _ in run))
+        out.append(RawTable(rect, TableData(rows, render_clip(page, _expand(rect, 3)), True)))
+    return out
+
+
 # --------------------------------------------------------------------------- OCR pages
 
 OCR_GAP_MIN_WORDS = 2  # words needed on each side of a gutter
@@ -2942,6 +3041,10 @@ def read_pdf(path: str, ocr_engine: Optional[OcrEngine] = None, languages: Optio
                 rp.figures += _rotated_blocks(page, [f.bbox for f in rp.figures] + table_rects)
                 fig_rects = [f.bbox for f in rp.figures]
                 lines = [l for l in lines if not any(overlap_ratio(l.bbox, f) > 0.6 for f in fig_rects)]
+                borderless = _gap_tables(page, lines, rp.tables)
+                if borderless:
+                    rp.tables += borderless
+                    lines = [l for l in lines if not any(overlap_ratio(l.bbox, t.bbox) > 0.6 for t in borderless)]
                 equations, rp.lines = _equations(page, lines)
                 rp.figures += equations
             pages.append(rp)

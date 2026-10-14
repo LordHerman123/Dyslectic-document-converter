@@ -615,7 +615,10 @@ class StructureDetector:
                 sep = " "
                 left = re.search(r"([A-Za-z]+)-$", last_para.text)
                 right = re.match(r"([a-z]+)", b.text)
-                if left and right and self.dehyphenate(left.group(1), right.group(1)):
+                if last_para.text.endswith("\u00ad") and b.text[:1].isalpha():
+                    last_para.text = last_para.text[:-1]  # a soft hyphen only ever breaks a word
+                    sep = ""
+                elif left and right and self.dehyphenate(left.group(1), right.group(1)):
                     last_para.text = last_para.text[:-1]  # word hyphenated across a page break
                     sep = ""
                 elif b.source == "ocr" and self._lost_hyphen(last_para.text, b.text) is not None:
