@@ -324,8 +324,9 @@ class StructureDetector:
             """Whether no normal-size text follows further down in the same column."""
             return not any(n.y0 > l.y0 + 1 and min(n.x1, l.x1) - max(n.x0, l.x0) > 5 for n in normal)
 
-        # (notes lie within the text block: a speck or number in the page margin is not one)
-        left, right = min(n.x0 for n in normal), max(n.x1 for n in normal)
+        # (notes lie within the text block, all the page's lines of text: a speck in the page margin is not one)
+        text = [l for l in lines if len(l.text.strip()) > 3] or lines
+        left, right = min(l.x0 for l in text), max(l.x1 for l in text)
         zone = [l for l in lines if l.size < body_size * 0.92 and l.y0 > h * 0.55 and below_body(l)
                 and l.x1 > left - 5 and l.x0 < right + 5]
         if not zone:
