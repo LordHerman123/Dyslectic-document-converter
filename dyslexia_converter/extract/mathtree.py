@@ -441,10 +441,22 @@ class _Builder:
         ops = [a for a in self.atoms if (a.text in BIG_OPS and a.kind == "big") or
                (a.kind == "word" and a.text.lower() in LIMIT_WORDS and a.size >= 0.85 * self.body)]
         # (a small 'max' is itself a script, as in D^max_TV: what is under it is not its limit)
+        # the limits under every operator are taken first: in a derivation whose rows each start with a ∑, what is
+        # under one row's ∑ is also over the next row's
+        unders: dict[int, list[Atom]] = {}
         for op in ops:
+            if op in self.atoms:
+                unders[id(op)] = self._stack(op, below=True)
+                self.take(unders[id(op)])
+        for op in ops:  # an operator within another's limits (a small ⋀ joining two lines of them): its own are too
+            if op not in self.atoms and unders.get(id(op)):
+                outer = next((o for o in ops if o is not op and any(a is op for a in unders.get(id(o), []))), None)
+                (unders[id(outer)] if outer is not None else self.atoms).extend(unders.pop(id(op)))
+        for op in ops:
+            under = unders.get(id(op), [])
             if op not in self.atoms:
                 continue
-            under, over = self._stack(op, below=True), self._stack(op, below=False)
+            over = self._stack(op, below=False)
             if not under and not over:
                 continue
             text = op.text
@@ -473,8 +485,10 @@ class _Builder:
 
         seeds = [a for a in self.atoms if a is not op and min(a.x1, op.x1) - max(a.x0, op.x0) > 0.2 * (a.x1 - a.x0)
                  and placed(a) and near(a) and a.size <= 0.9 * max(op.size, self.body)]
+        # neighbouring operators on the same line (the ∑ of the next row of a derivation is not a neighbour)
         others = [o for o in self.atoms if o is not op and ((o.text in BIG_OPS and o.kind == "big") or
-                                                          (o.kind == "word" and o.text.lower() in LIMIT_WORDS))]
+                                                          (o.kind == "word" and o.text.lower() in LIMIT_WORDS))
+                  and abs(o.cy - op.cy) < 0.8 * self.body]
 
         def own(a: Atom) -> bool:
             """Not under (over) a neighbouring operator."""
@@ -630,8 +644,11 @@ class _Builder:
                 main = first.base
             on_line = [a for a in atoms if on_main(a) or (a.kind not in built and abs(a.base - main) <= 0.12 * top)]
             scripts = [a for a in atoms if a not in on_line]
+        # in a row that is itself a script, a smaller symbol off its baseline is a script of a script: TeX shrinks the
+        # second level less than the first (5 pt under 6 pt in a 9 pt text)
+        second = top < 0.8 * self.body
         for a in scripts:
-            if a.size >= 0.8 * top and a.kind not in built and not deep:
+            if a.size >= 0.8 * top and a.kind not in built and not deep and not (second and a.size < top - 0.5):
                 raise Unsure(f"full-size symbol off the baseline: {a.text!r} {a.kind} base {a.base:.1f} "
                              f"main {main:.1f} size {a.size:.1f}/{top:.1f}")
         level: list[Atom] = []
@@ -659,6 +676,14 @@ class _Builder:
                 raise Unsure("small symbol on the baseline")
             if s.kind in built and s.size >= 0.88 * top:
                 raise Unsure("built piece off the baseline")
+            if owner.kind == "node" and owner.text[:1] in "([{" and s.cx < owner.x1 - 0.3 * top:
+                raise Unsure("script over the middle of a bracket")  # a note over part of what it holds
+            if owner.kind == "op" and s.text not in PRIMES:
+                raise Unsure("script on an operator with limits")  # a part of its limits that was not placed
+            k = next(i for i, b in enumerate(on_line) if b is owner)
+            nxt = on_line[k + 1] if k + 1 < len(on_line) else None
+            if nxt is not None and min(s.x1, nxt.x1) - max(s.x0, nxt.x0) > 0.5 * (s.x1 - s.x0):
+                raise Unsure("script under the next symbol")  # a limit set under it (E with a wide limit)
             attach[id(owner)][0 if lowered else 1].append(s)
         if level:  # small type on the line: place it with the line and attach the scripts again
             return self.row([a for a in atoms if a not in level] + [

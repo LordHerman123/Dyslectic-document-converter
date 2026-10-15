@@ -41,6 +41,10 @@ FIGURE_DOI_RE = re.compile(r"^(?:doi:\s?|https?://(?:dx\.)?doi\.org/)10\.\S+\.[g
 MASTHEAD_RE = re.compile(r"^(?:contents lists available at\b|journal homepage:|available online at\b|"
                          r"www\.sciencedirect\.com$|sciencedirect$)", re.I)
 JOURNAL_LINE_RE = re.compile(r"^[A-Z][\w&.,:'’ -]{2,80}\s\d{1,4}\s\((?:19|20)\d{2}\)\s[A-Za-z]?\d+(?:\s?[–-]\s?\d+)?$")
+# the kind of article, printed above the title
+ARTICLE_LABEL_RE = re.compile(r"^(?:(?:original|research|review|short|brief|invited|regular|full[- ]length|special|open "
+                              r"access)\s+)*(?:article|paper|communication|comment(?:ary)?|editorial|perspective|letter|"
+                              r"report|review|essay|news(?: feature)?|feature|opinion|note)s?$", re.I)
 SPECIAL_HEADINGS = re.compile(
     r"^\s*(abstract|samenvatting|summary|keywords|key words|trefwoorden|introduction|inleiding|"
     r"conclusions?|conclusie|discussion|discussie|methods?|methode|results|resultaten|"
@@ -214,6 +218,7 @@ class StructureDetector:
         heights = {p.info.number: p.info.height for p in raw.pages}
         self._detect_title_authors(blocks, max(body["text"], body["ocr"]) if not text_lines else body["text"],
                                    heights)
+        self._article_labels(blocks, max(body["text"], body["ocr"]) if not text_lines else body["text"])
         self._detect_quotes(blocks, body)
         self._mark_references(blocks)
         self._split_references(blocks)
@@ -267,9 +272,12 @@ class StructureDetector:
     @staticmethod
     def _page_number_lines(page: RawPage, known: set[int]) -> set[int]:
         """A page number printed a little inside the margin (book scans often have wide margins): a bare number
-        that is the first or last thing on the page, well apart from the text, in the outer fifth of the page."""
+        that is the first or last thing on the page, well apart from the text, in the outer fifth of the page; or
+        a bare number that is the only text on the page (the rest is pictures, such as a table set sideways)."""
         h = page.info.height
         lines = [l for l in page.lines if id(l) not in known]
+        if len(lines) == 1 and re.fullmatch(r"[-–]?\s*\d{1,4}\s*[-–]?", lines[0].text.strip()):
+            return {id(lines[0])}  # the only text on a page of pictures (a table set sideways): the page number
         if len(lines) < 3:
             return set()
         out = set()
@@ -316,13 +324,26 @@ class StructureDetector:
             """Whether no normal-size text follows further down in the same column."""
             return not any(n.y0 > l.y0 + 1 and min(n.x1, l.x1) - max(n.x0, l.x0) > 5 for n in normal)
 
-        zone = [l for l in lines if l.size < body_size * 0.92 and l.y0 > h * 0.55 and below_body(l)]
+        # (notes lie within the text block, all the page's lines of text: a speck in the page margin is not one)
+        text = [l for l in lines if len(l.text.strip()) > 3] or lines
+        left, right = min(l.x0 for l in text), max(l.x1 for l in text)
+        zone = [l for l in lines if l.size < body_size * 0.92 and l.y0 > h * 0.55 and below_body(l)
+                and l.x1 > left - 5 and l.x0 < right + 5]
         if not zone:
             return []
         ref_heads = [r for r in lines if REFERENCE_HEADINGS.match(r.text)]
-        # reference lists (below a References heading in the same column) are not notes
-        zone = [l for l in zone if not any(r.y1 <= l.y0 and min(r.x1 + 200, l.x1) - max(r.x0, l.x0) > 0
-                                           for r in ref_heads)]
+        # reference lists (below a References heading in the same column) are not notes, nor the last line of a
+        # reference that runs on from them (shorter than the heading is wide, it may end before a centred heading)
+        refs = [l for l in zone if any(r.y1 <= l.y0 and min(r.x1 + 200, l.x1) - max(r.x0, l.x0) > 0
+                                       for r in ref_heads)]
+        grown = bool(refs)
+        while grown:
+            more = [l for l in zone if l not in refs and any(
+                -0.2 * l.height <= l.y0 - r.y1 < 0.5 * l.height and min(r.x1, l.x1) - max(r.x0, l.x0) > 0
+                for r in refs)]
+            refs += more
+            grown = bool(more)
+        zone = [l for l in zone if l not in refs]
         if not zone:
             return []
         # keep only the block of small lines at the very bottom of the page
@@ -480,8 +501,9 @@ class StructureDetector:
                 return False  # first-line indent of a new paragraph
             if indent < -0.8 * size and abs(p.x0 - body_x) < 2 and body_x > first_x + 0.5 * size:
                 return False  # new hanging-indent entry (references)
-            if indent < -0.8 * size and abs(first_x - body_x) < 2:
-                return False
+            if indent < -0.8 * size and abs(first_x - body_x) < 2 and not (
+                    c.text[:1].islower() and not p.text.rstrip().endswith(TERMINAL)):
+                return False  # (but a sentence going on below a drop cap, back at the margin, is the same paragraph)
         # previous line ends a sentence clearly short of the column edge
         if p.text.rstrip().endswith((".", "!", "?", ":")):
             right = max(max(l.x1 for l in para.lines), c.x1)
@@ -615,7 +637,10 @@ class StructureDetector:
                 sep = " "
                 left = re.search(r"([A-Za-z]+)-$", last_para.text)
                 right = re.match(r"([a-z]+)", b.text)
-                if left and right and self.dehyphenate(left.group(1), right.group(1)):
+                if last_para.text.endswith("\u00ad") and b.text[:1].isalpha():
+                    last_para.text = last_para.text[:-1]  # a soft hyphen only ever breaks a word
+                    sep = ""
+                elif left and right and self.dehyphenate(left.group(1), right.group(1)):
                     last_para.text = last_para.text[:-1]  # word hyphenated across a page break
                     sep = ""
                 elif b.source == "ocr" and self._lost_hyphen(last_para.text, b.text) is not None:
@@ -646,8 +671,9 @@ class StructureDetector:
 
     def _join_markers(self, blocks: list[Block]) -> list[Block]:
         """Put a lone superscript marker back in front of its line: the "b" of an affiliation "b University
-        of…", printed a little higher and smaller, is read as a line of its own. Figure DOIs printed under a
-        caption ("doi:10.1371/journal.pone.0127502.g001") join the caption."""
+        of…", printed a little higher and smaller, is read as a line of its own; so is a note's number set in the
+        margin beside the note. Figure DOIs printed under a caption ("doi:10.1371/journal.pone.0127502.g001") join
+        the caption."""
         out: list[Block] = []
         for i, b in enumerate(blocks):
             prev = out[-1] if out else None
@@ -657,14 +683,19 @@ class StructureDetector:
                 if cap is not None and cap.kind == BlockKind.CAPTION and cap.page == b.page:
                     cap.text = cap.text.rstrip() + " " + b.text.strip()
                     continue
-            if prev is not None and prev.kind == BlockKind.PARAGRAPH and MARKER_RE.fullmatch(prev.text.strip()) \
-                    and b.kind == BlockKind.PARAGRAPH and b.page == prev.page and prev.font_size < b.font_size \
-                    and 0 <= b.bbox[0] - prev.bbox[2] < 2 * b.font_size \
-                    and abs(b.bbox[1] - prev.bbox[1]) < max(b.font_size, 4.0):
+            beside = prev is not None and prev.kind == BlockKind.PARAGRAPH and b.kind == BlockKind.PARAGRAPH \
+                and b.page == prev.page and 0 <= b.bbox[0] - prev.bbox[2] < 2 * b.font_size \
+                and abs(b.bbox[1] - prev.bbox[1]) < max(b.font_size, 4.0)
+            raised = beside and MARKER_RE.fullmatch(prev.text.strip()) and prev.font_size < b.font_size
+            # a note's number in the margin, as large as the note (a scanned list of notes reads it apart)
+            number = beside and re.fullmatch(r"\d{1,3}\.?", prev.text.strip()) and \
+                abs(prev.font_size - b.font_size) <= 1.0 and not re.match(r"\d", b.text)
+            if raised or number:
                 mark = prev.text.strip()
                 shift = len(mark) + 1
                 b.text = mark + " " + b.text
-                b.styles = [StyleRange(0, len(mark), superscript=True)] + [st.moved(shift) for st in b.styles]
+                b.styles = [StyleRange(0, len(mark), superscript=True)] * bool(raised) + \
+                    [st.moved(shift) for st in b.styles]
                 b.ocr_confidence = [OcrWordConfidence(c.start + shift, c.end + shift, c.confidence)
                                     for c in b.ocr_confidence]
                 b.bbox = (prev.bbox[0], min(prev.bbox[1], b.bbox[1]), b.bbox[2], max(prev.bbox[3], b.bbox[3]))
@@ -778,11 +809,28 @@ class StructureDetector:
                 best.level = max(1, min(6, level))
 
     # -------------------------------------------------------- title / authors
+    @staticmethod
+    def _article_labels(blocks: list[Block], body_size: float) -> None:
+        """The kind of article printed at the top of the first page, above the title ("Original Research Article",
+        "ARTICLE", "COMMENT"), is no heading (and no entry in the contents): it is shown as small print, like the
+        journal's line."""
+        page0 = min((b.page for b in blocks), default=0)
+        for b in blocks:
+            if b.page != page0 or b.kind == BlockKind.TITLE:
+                break
+            if b.kind != BlockKind.HEADING:
+                continue
+            if not ARTICLE_LABEL_RE.match(b.text.strip()):
+                break  # the first real heading: what follows is the article
+            b.kind, b.level = BlockKind.PARAGRAPH, 0
+            b.font_size = min(b.font_size, body_size * 0.8)
+
     def _detect_title_authors(self, blocks: list[Block], body_size: float, heights: dict[int, float]) -> None:
         """Find the document title (the largest text high on the first page) and the author line under it."""
         page0 = min((b.page for b in blocks), default=0)
         # book scans: the title page is often the right-hand page of the first spread
-        first_page = [b for b in blocks if b.page in (page0, page0 + 1) and b.kind in (BlockKind.HEADING, BlockKind.PARAGRAPH)]
+        first_page = [b for b in blocks if b.page in (page0, page0 + 1) and b.kind in (BlockKind.HEADING, BlockKind.PARAGRAPH)
+                      and not ARTICLE_LABEL_RE.match(b.text.strip())]  # "COMMENT" above the title is no title
         if not first_page:
             return
         biggest = max(first_page, key=lambda b: b.font_size)

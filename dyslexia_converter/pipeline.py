@@ -61,6 +61,9 @@ class Session:
     # in the converted PDF (preview): (page, x0, y0, x1, y1, picture key, share of the column), top-left origin
     picture_sizes: dict[str, float] = field(default_factory=dict)
     picture_marks: list[tuple[int, float, float, float, float, str, float]] = field(default_factory=list)
+    # where the formula pictures are in the converted PDF, with their text (read aloud as maths): (page, x0, y0, x1, y1,
+    # text, the text keeps the formula's structure, display formula), top-left origin
+    formula_marks: list[tuple] = field(default_factory=list)
     layout_orders: dict[int, list[int]] = field(default_factory=dict)  # page -> reading order from the AI
     # the whole-document AI check: what it found (fixed or not), and how many parts it could not check
     check_findings: list[check.Finding] = field(default_factory=list)
@@ -603,6 +606,7 @@ class Session:
                 self.page_map = pdf_writer.last_page_map()  # for the side-by-side preview
                 self.unsure_marks = pdf_writer.last_unsure_marks()  # for checking words in focus mode
                 self.picture_marks = pdf_writer.last_picture_marks()  # for resizing pictures in focus mode
+                self.formula_marks = pdf_writer.last_formula_marks()  # for reading formulas aloud
             return data
         if fmt == "docx":
             return docx_writer.build_docx(result, settings, doc.title or _first_title(result), doc.author)

@@ -435,6 +435,7 @@ class RichParagraph(Flowable):
                             pdf_tags.begin_actual_text(c, spoken)
                         c.drawImage(ImageReader(io.BytesIO(p.image.data)), px, baseline + p.rise, p.width, p.height,
                                     mask="auto")
+                        _note_formula(c, px, baseline + p.rise, p.width, p.height, p.image, False)
                         if spoken:
                             pdf_tags.end_artifact(c)
                         px += p.width
@@ -621,6 +622,8 @@ class _Doc(BaseDocTemplate):
         self.canv._unsure = self.unsure_marks
         self.picture_marks: list[tuple] = []
         self.canv._pictures = self.picture_marks
+        self.formula_marks: list[tuple] = []
+        self.canv._formulas = self.formula_marks
         self._source: Optional[int] = None
         self.tagger.reset()
         self.canv._tagger = self.tagger
@@ -704,6 +707,33 @@ def _styles(s: FormatSettings, printable: bool) -> dict[str, PStyle]:
     return styles
 
 
+def _note_formula(c, x: float, y: float, width: float, height: float, img: ImageData, display: bool) -> None:
+    """Note where a formula picture was drawn (``x``, ``y``: its lower left corner on the canvas) and its text, so
+    reading aloud can say it: page, x0, y0, x1, y1 from the top-left corner, the text, whether that text keeps the
+    formula's structure (else it is only its symbols), and whether it is a display formula."""
+    sink = getattr(c, "_formulas", None)
+    if sink is None:
+        return
+    a, _, _, d, e, f = c._currentMatrix
+    x0, y0 = e + a * x, f + d * y
+    page_h = c._pagesize[1]
+    sink.append((c.getPageNumber() - 1, round(x0, 2), round(page_h - y0 - d * height, 2), round(x0 + a * width, 2),
+                 round(page_h - y0, 2), img.alt, bool(getattr(img, "built", False)), display))
+
+
+class _Equation(Image):
+    """A display formula's picture that notes where it was drawn (see :func:`_note_formula`)."""
+
+    def __init__(self, img: ImageData, width: float, height: float):
+        super().__init__(io.BytesIO(img.data), width=width, height=height, hAlign="CENTER")
+        self._formula = img
+
+    def draw(self):
+        super().draw()
+        _note_formula(self.canv, getattr(self, "_offs_x", 0), getattr(self, "_offs_y", 0), self.drawWidth,
+                      self.drawHeight, self._formula, True)
+
+
 PICTURE_SHARES = (0.2, 1.0)  # the smallest and largest width a reader can give a picture (share of the column)
 PICTURE_ROOM = 0.9  # a picture the reader sized may be this high (share of the page's text area)
 
@@ -760,7 +790,7 @@ def _equation_flowable(item: RItem, s: FormatSettings, col_w: float) -> Optional
     w = (item.natural_width or img.width * 72 / 300) * scale
     w = min(w, col_w)
     h = w * img.height / max(1, img.width)
-    fl = Image(io.BytesIO(img.data), width=w, height=h, hAlign="CENTER")
+    fl = _Equation(img, w, h)
     fl._alt = img.alt  # type: ignore[attr-defined]
     return fl
 
@@ -1014,6 +1044,7 @@ def build_pdf(result: ComposeResult, s: FormatSettings, title: str = "", author:
     _render_state.page_map = {page: sorted(src) for page, src in doc.page_map.items()}
     _render_state.unsure = list(doc.unsure_marks)
     _render_state.pictures = list(doc.picture_marks)
+    _render_state.formulas = list(doc.formula_marks)
     return pdf_tags.add_structure(buf.getvalue(), tagger, result.language)
 
 
@@ -1026,6 +1057,12 @@ def last_picture_marks() -> list[tuple]:
     """For the PDF just built on this thread: where the figures and table pictures are, as (page, x0, y0, x1, y1,
     picture key, width as a share of the column)."""
     return list(getattr(_render_state, "pictures", []) or [])
+
+
+def last_formula_marks() -> list[tuple]:
+    """For the PDF just built on this thread: where the formula pictures are, as (page, x0, y0, x1, y1, text, text keeps
+    the structure, display formula)."""
+    return list(getattr(_render_state, "formulas", []) or [])
 
 
 def last_page_map() -> dict[int, list[int]]:

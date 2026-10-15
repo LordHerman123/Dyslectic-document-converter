@@ -7,6 +7,7 @@ from __future__ import annotations
 import concurrent.futures
 import io
 import itertools
+import logging
 import os
 import re
 import statistics
@@ -444,7 +445,8 @@ def _join_drop_caps(spans: list[_Span]) -> list[_Span]:
     """A drop cap (one large capital at the start of an article, several lines tall) is put back in front of
     the rest of its word ("M" + "ichael"), instead of being read as a line of its own that swallows the text
     beside it. Only a single letter at least 2.5 times the text size counts, with lower-case text starting just
-    right of its top."""
+    right of its top. A drop number (a large numeral, two or more lines tall, before a numbered point) is put in
+    front of the point's first line the same way."""
     sizes = Counter()
     for sp in spans:
         sizes[round(sp.size)] += len(sp.text.strip())
@@ -464,6 +466,25 @@ def _join_drop_caps(spans: list[_Span]) -> list[_Span]:
         first = min(beside, key=lambda sp: (sp.bbox[1], sp.x0))
         out[out.index(first)] = replace(first, text=letter + first.text)
         out.remove(cap)
+    for num in spans:
+        # a drop number: a large numeral beside the first lines of a numbered point ("1" before "Quantitative
+        # evaluation should sup- / port qualitative ...") goes in front of the first line, not into the second
+        digits = num.text.strip()
+        if not (1 <= len(digits) <= 2 and digits.isdigit()) or not 1.3 * body <= num.size <= 3 * body:
+            continue
+        top, height = num.bbox[1], num.bbox[3] - num.bbox[1]
+        if any(sp is not num and sp.text.strip() and sp.x1 <= num.x0 + 1 and num.x0 - sp.x1 < 0.6 * num.size
+               and sp.bbox[1] < num.bbox[3] and sp.bbox[3] > num.bbox[1] for sp in out):
+            continue  # text just left of it: a number within a line ("at 10 A·m⁻²"), not one starting a point
+        beside = [sp for sp in out if sp is not num and sp.text.strip() and sp.size < num.size / 1.3
+                  and -1 <= sp.x0 - num.x1 < 3 * sp.size and top - 0.3 * height <= sp.bbox[1] <= top + 0.3 * height]
+        if not beside:
+            continue
+        first = min(beside, key=lambda sp: (sp.bbox[1], sp.x0))
+        if num.bbox[3] < first.bbox[3] + 0.5 * first.size:
+            continue  # no taller than the line beside it: an ordinary large number
+        out[out.index(first)] = replace(first, text=digits + " " + first.text)
+        out.remove(num)
     return out
 
 
@@ -994,6 +1015,7 @@ def _text_lines(page: pymupdf.Page, pno: int, known_word: Optional[Callable[[str
                 inline_images[ph] = ImageData(pix.tobytes("png"), "png", pix.width, pix.height, kind="inline-math",
                                               alt=alt, text_size=float(max_size), descent=clip.y1 - baseline,
                                               width_pt=clip.width)
+                inline_images[ph].built = bool(alt)  # a stack read symbol by symbol ("(a)/(b)")
                 if text and not text[-1].isspace() and rect[0] - right_edge > max_size * 0.15:
                     text += " "
                 styles.append(StyleRange(len(text), len(text) + 1, math=True))
@@ -1091,10 +1113,24 @@ def _text_lines(page: pymupdf.Page, pno: int, known_word: Optional[Callable[[str
     return _merge_same_baseline(lines)
 
 
+# bullet points (dashes, asterisks and middle dots are left out: on their own they are also text, units and maths,
+# as in "A·m⁻²")
+BULLETS = "\u2022\u2023\u25e6\u2043\u25aa\u25cf\u25cb\u25a0\u25ba\u27a2\uf0b7\uf0a7\uf0d8\uf076"
+
+
+def _lone_bullet(ln: RawLine) -> bool:
+    """Whether a line is only a bullet point (drawn in a font of its own, so read apart from its text)."""
+    t = ln.text.strip()
+    return len(t) == 1 and t in BULLETS
+
+
 def _continues_line(prev: RawLine, ln: RawLine) -> bool:
     """Whether line ``ln`` is the continuation of ``prev`` on the same visual line (split by fonts or formulas)."""
     gap = ln.x0 - prev.x1
     size = max(prev.size, ln.size)
+    if _lone_bullet(prev) and not _lone_bullet(ln) and -1 <= gap < 2.5 * ln.size \
+            and ln.y0 - 1 <= (prev.y0 + prev.y1) / 2 <= ln.y1 + 1:
+        return True  # a bullet point beside the first line of its item (often smaller, and a little lower)
     has_math = any(st.math for st in prev.styles + ln.styles)
     if has_math and prev.baseline and ln.baseline and abs(prev.baseline - ln.baseline) < 0.25 * size \
             and abs(prev.size - ln.size) < 1.5 and -1 <= gap < 1.6 * size:
@@ -1123,6 +1159,9 @@ def _merge_same_baseline(lines: list[RawLine]) -> list[RawLine]:
             out.append(ln)
             continue
         prev = target
+        if _lone_bullet(prev) and not _lone_bullet(ln):  # the item's line takes its text's size and font
+            prev.size, prev.font, prev.bold, prev.italic = ln.size, ln.font, ln.bold, ln.italic
+            prev.baseline, prev.block_no = ln.baseline, ln.block_no
         sep = "" if ln.x0 - prev.x1 < prev.size * 0.15 else " "
         base = len(prev.text) + len(sep)
         prev.text += sep + ln.text
@@ -1234,6 +1273,13 @@ def _figures(page: pymupdf.Page, doc: pymupdf.Document, lines: list[RawLine],
                 break
     merge_overlapping(0)  # labels taken in may make two regions overlap: one picture, not the same part twice
 
+    # publisher badges ("CrossMark: click for updates", the journal's logo) link to the publisher or CrossMark
+    badges = []
+    if page.number == 0:
+        try:
+            badges = [tuple(l["from"]) for l in page.get_links() if BADGE_LINK_RE.search(l.get("uri") or "")]
+        except Exception:
+            badges = []
     figures: list[RawFigure] = []
     for rect, xref in regions:
         has_text = any(overlap_ratio(l.bbox, rect) > 0.5 for l in lines)
@@ -1251,10 +1297,15 @@ def _figures(page: pymupdf.Page, doc: pymupdf.Document, lines: list[RawLine],
         small = (rect[2] - rect[0]) < 40 and (rect[3] - rect[1]) < 40
         # journal logos / "check for updates" badges near the top of the first page
         logo = (page.number == 0 and rect[3] < prect[3] * 0.3 and _area(rect) < 0.05 * parea
-                and not has_text)
+                and not has_text) or (any(_area(_intersect(rect, b)) > 0 for b in badges) and _area(rect) <
+                                      (0.1 if rect[3] < prect[3] * 0.25 else 0.05) * parea)  # (a masthead box)
         img.kind = "decorative" if (small or logo) else "figure"
         figures.append(RawFigure(rect, img))
     return figures
+
+
+BADGE_LINK_RE = re.compile(r"crossmark|crossref\.org/dialog|elsevier\.com/locate|sciencedirect\.com/science/journal"
+                           r"|tandfonline\.com/?$", re.I)
 
 
 # --------------------------------------------------------------------------- equations
@@ -1650,6 +1701,7 @@ def _equations(page: pymupdf.Page, lines: list[RawLine]) -> tuple[list[RawFigure
                             text_size=float(body))
             img.glyph_text = formula.glyphs if formula else alt  # the printed symbols it was built from
             img.eq_number = formula.number if formula else ""
+            img.built = formula is not None  # its text keeps the structure (it can be said as maths)
             figures.append(RawFigure(box, img))
     rest = [l for l in lines if id(l) not in used]
     return figures, rest
@@ -1804,6 +1856,56 @@ def _close_number_gap(pix: pymupdf.Pixmap, body: float) -> tuple[bytes, int, int
 
 # --------------------------------------------------------------------------- tables
 
+def _spaced_cells(page: pymupdf.Page, tab) -> list[list[Optional[str]]]:
+    """A found table's cell texts (as ``tab.extract()`` gives them) with the word breaks of the page's words: when a
+    PDF places every word apart without a space character, the table finder runs a cell's words together
+    ("RelevantRIdimensions"). A cell's words are used only when their letters are exactly the cell's, so nothing
+    but the spaces can change."""
+    rows = tab.extract()
+    try:
+        words = page.get_text("words")
+        boxes = [r.cells for r in tab.rows]
+    except Exception:
+        return rows
+    out = []
+    for texts, cells in zip(rows, boxes):
+        row = []
+        for text, box in zip(texts, cells):
+            if not text or box is None or " " in text.strip():
+                row.append(text)
+                continue
+            x0, y0, x1, y1 = box
+            inside = [w for w in words if x0 <= (w[0] + w[2]) / 2 <= x1 and y0 <= (w[1] + w[3]) / 2 <= y1]
+            inside.sort(key=lambda w: (round((w[1] + w[3]) / 2 / 3), w[0]))  # line by line, left to right
+            row.append(_with_breaks(text, [w[4] for w in inside]) if len(inside) > 1 else text)
+        out.append(row)
+    return out
+
+
+def _with_breaks(text: str, words: list[str]) -> str:
+    """``text`` with a space wherever one of ``words`` ends, if the words hold exactly its letters (ligatures such
+    as "ﬁ" count as the letters they stand for); otherwise ``text`` as it is."""
+    def letters(t: str) -> str:
+        return re.sub(r"\s+", "", unicodedata.normalize("NFKC", t))
+
+    if letters("".join(words)) != letters(text):
+        return text
+    ends, n = set(), 0
+    for w in words[:-1]:
+        n += len(letters(w))
+        ends.add(n)
+    out, n = [], 0
+    for ch in text:
+        if ch.isspace():
+            out.append(ch)
+            continue
+        if n in ends and out and not out[-1].isspace():
+            out.append(" ")
+        out.append(ch)
+        n += len(letters(ch))
+    return "".join(out)
+
+
 def _tables(page: pymupdf.Page) -> list[RawTable]:
     """The tables PyMuPDF finds on a page, checked against the page's ruling lines and turned into TableData."""
     out: list[RawTable] = []
@@ -1817,7 +1919,7 @@ def _tables(page: pymupdf.Page) -> list[RawTable]:
         drawings = []
     for tab in found.tables:
         try:
-            rows = tab.extract()
+            rows = _spaced_cells(page, tab)
         except Exception:
             rows = []
         rect = tuple(tab.bbox)
@@ -2100,7 +2202,7 @@ def _caption_tables(page: pymupdf.Page, lines: list[RawLine], existing: list[Raw
         except Exception:
             continue
         for tab in found.tables:
-            rows = [[(c or "").replace("\n", " ").strip() for c in r] for r in tab.extract()]
+            rows = [[(c or "").replace("\n", " ").strip() for c in r] for r in _spaced_cells(page, tab)]
             rows = [r for r in rows if any(r)]
             while rows and sum(1 for c in rows[-1] if c) <= 1 and len(rows) > 2:
                 rows.pop()  # table notes such as "Source: ..." stay as normal text
@@ -2115,6 +2217,110 @@ def _caption_tables(page: pymupdf.Page, lines: list[RawLine], existing: list[Raw
             out.append(RawTable(rect, TableData(rows, render_clip(page, _expand(rect, 3)), n_cols <= 10)))
             break
     return out
+
+
+def _gap_tables(page: pymupdf.Page, lines: list[RawLine], existing: list[RawTable]) -> list[RawTable]:
+    """Borderless tables: rows of short cells kept apart only by white space, with neither rules nor a caption
+    ("Name  Role  Office" / "Anna  Editor  2.14"), which would otherwise be read as one run-on sentence. Three or more
+    rows in a row, each with a gap of about three word spaces or more, and white space running down through all of
+    them at the same places, so that there are at least three columns; cells of a few words, no formulas."""
+    try:
+        words = page.get_text("words")
+    except Exception:
+        return []
+
+    def row_words(l: RawLine) -> list:
+        return sorted((w for w in words if l.x0 - 1 <= (w[0] + w[2]) / 2 <= l.x1 + 1
+                       and l.y0 - 1 <= (w[1] + w[3]) / 2 <= l.y1 + 1), key=lambda w: w[0])
+
+    def wide_gaps(ws: list, size: float) -> list[tuple[float, float]]:
+        return [(a[2], b[0]) for a, b in zip(ws, ws[1:]) if b[0] - a[2] >= 0.9 * size]
+
+    def beside(a: RawLine, b: RawLine) -> bool:
+        return a.x0 <= b.x1 and b.x0 <= a.x1
+
+    taken = [t.bbox for t in existing]
+    open_runs: list[list[tuple[RawLine, list]]] = []
+    runs: list[list[tuple[RawLine, list]]] = []
+    for l in sorted(lines, key=lambda l: (l.y0, l.x0)):
+        ws = row_words(l)
+        row_like = (l.text.strip() and not any(st.math for st in l.styles) and 2 <= len(ws) <= 12
+                    and len(l.text) <= 80 and not l.text.rstrip().endswith("-") and wide_gaps(ws, l.size)
+                    and not any(overlap_ratio(l.bbox, t) > 0.3 for t in taken))
+        run = next((r for r in open_runs if beside(r[-1][0], l)), None)
+        if run is not None and (not row_like or l.y0 - run[-1][0].y1 > 1.2 * l.size
+                                or abs(l.size - run[-1][0].size) > 1):
+            open_runs.remove(run)  # this line ends the run beside it
+            runs.append(run)
+            run = None
+        if row_like:
+            if run is None:
+                open_runs.append([(l, ws)])
+            else:
+                run.append((l, ws))
+    runs += open_runs
+    out: list[RawTable] = []
+    for run in runs:
+        found = _aligned_table([(l.size, ws) for l, ws in run])
+        if found is not None:
+            rect, rows = found
+            out.append(RawTable(rect, TableData(rows, render_clip(page, _expand(rect, 3)), True)))
+    return out
+
+
+def _aligned_table(run: list[tuple[float, list]]) -> Optional[tuple[Rect, list[list[str]]]]:
+    """The table that rows of words make, if they make one (see :func:`_gap_tables`): (box, rows of cells), or
+    None. ``run``: per row its text size and its words, as (x0, y0, x1, y1, text, ...) from left to right."""
+    if len(run) < 3:
+        return None
+    size = max(sz for sz, _ in run)
+    x0 = min(w[0] for _, ws in run for w in ws)
+    x1 = max(w[2] for _, ws in run for w in ws)
+    gx0 = int(x0) - 1
+    covered = [False] * (int(x1) + 2 - gx0)
+    for _, ws in run:
+        for w in ws:
+            for x in range(max(0, int(w[0]) - gx0), min(len(covered), int(w[2]) + 1 - gx0)):
+                covered[x] = True
+    cuts, start = [], None
+    for i, c in enumerate(covered):
+        if not c:
+            start = i if start is None else start
+        else:
+            if start is not None and start > 0 and i - start >= 0.9 * size:
+                cuts.append(gx0 + (start + i) / 2)
+            start = None
+    if len(cuts) < 2:
+        return None
+    rows = []
+    for sz, ws in run:
+        gaps = [(a[2], b[0]) for a, b in zip(ws, ws[1:]) if b[0] - a[2] >= 0.9 * sz]
+        if any(not any(a < c < b for c in cuts) for a, b in gaps):
+            return None  # a wide gap that is no column border: not a table
+        cells = [""] * (len(cuts) + 1)
+        for w in ws:
+            ci = sum(1 for c in cuts if (w[0] + w[2]) / 2 > c)
+            cells[ci] = (cells[ci] + " " + w[4]).strip()
+        if sum(1 for c in cells if c) < 2 or any(len(c.split()) > 6 for c in cells):
+            return None
+        rows.append(cells)
+    if sum(1 for r in rows for c in r if c) < 0.6 * len(rows) * len(rows[0]):
+        return None  # mostly empty cells: a formula or a scatter of labels, not a table
+    lengths = sorted(len(c.split()) for r in rows for c in r if c)
+    if lengths[len(lengths) // 2] > 3:
+        return None  # cells of several words on one line each: columns of running text side by side
+    # a row whose first cell is empty goes on with the row above (a cell wrapped onto a second line), unless it is
+    # numbers (a row of values without a label)
+    merged: list[list[str]] = []
+    for r in rows:
+        if len(merged) > 1 and not r[0] and not any(re.fullmatch(r"[-–+]?[\d.,±%]+", c) for c in r if c):
+            merged[-1] = [(a + " " + b).strip() for a, b in zip(merged[-1], r)]
+        else:
+            merged.append(r)
+    rows = merged
+    y0 = min(w[1] for _, ws in run for w in ws)
+    y1 = max(w[3] for _, ws in run for w in ws)
+    return (x0, y0, x1, y1), rows
 
 
 # --------------------------------------------------------------------------- OCR pages
@@ -2170,13 +2376,21 @@ def _split_wide_gaps(groups: dict) -> dict:
 
 
 def _ocr_image(png: bytes, dpi: int, width_pt: float, height_pt: float, pno: int, engine: OcrEngine,
-               languages: list[str], crop: Callable[[Rect], ImageData]) -> tuple[list[RawLine], list[RawFigure]]:
-    """OCR one image and return lines/figures in points relative to that image."""
+               languages: list[str], crop: Callable[[Rect], ImageData]
+               ) -> tuple[list[RawLine], list[RawFigure], list[RawTable]]:
+    """OCR one image and return lines, figures and tables in points relative to that image."""
     from PIL import Image
 
     gray = np.asarray(Image.open(io.BytesIO(png)).convert("L"))  # decoded once for all the steps below
     res = engine.recognize(_without_leaders(png, gray), languages)
     scale = 72.0 / dpi
+    # the lines of a table stay until the page's way up is settled (see _settle_tables): which way reads best is
+    # judged on all the words
+    try:
+        tables, _ = _ocr_tables(res.words, scale, crop)
+    except Exception:  # tables are a help: a page is always read, with or without them
+        logging.getLogger(__name__).exception("table detection failed on a scanned page")
+        tables = []
     groups: dict[tuple[int, int, int], list] = {}
     for w in res.words:
         groups.setdefault((w.block, w.paragraph, w.line), []).append(w)
@@ -2208,7 +2422,236 @@ def _ocr_image(png: bytes, dpi: int, width_pt: float, height_pt: float, pno: int
     fig_rects = [f.bbox for f in figures]
     lines = [l for l in lines if not any(overlap_ratio(l.bbox, f) > 0.6 for f in fig_rects)]
     formulas, lines = _scan_formulas(lines, width_pt, crop)
-    return lines, figures + formulas
+    tables = [t for t in tables if not any(overlap_ratio(t.bbox, f) > 0.5 for f in fig_rects)]
+    return lines, figures + formulas, tables
+
+
+def _settle_tables(page: RawPage) -> RawPage:
+    """A scanned page with its tables in place of the lines (and formula crops) they were read from."""
+    if page.tables:
+        rects = [t.bbox for t in page.tables]
+        page.lines = [l for l in page.lines if not any(overlap_ratio(l.bbox, r) > 0.5 for r in rects)]
+        page.figures = [f for f in page.figures if not any(overlap_ratio(f.bbox, r) > 0.6 for r in rects)]
+    return page
+
+
+def _ocr_tables(words: list, scale: float, crop: Callable[[Rect], ImageData]) -> tuple[list[RawTable], set[int]]:
+    """Tables on a scanned page: rows of short cells whose columns line up (see :func:`_aligned_table`). OCR often
+    reads each cell of a row as a line of its own, or a row as one line with wide gaps, so the words are first put
+    back into the rows they are printed on. Returns the tables and the ids of the words in them."""
+    found = [w for w in words if w.text.strip()]
+    if len(found) < 6:
+        return [], set()
+    heights = sorted(w.bbox[3] - w.bbox[1] for w in found)
+    h = heights[len(heights) // 2]
+    rows: list[list] = []
+    for w in sorted(found, key=lambda w: (w.bbox[1] + w.bbox[3]) / 2):
+        cy = (w.bbox[1] + w.bbox[3]) / 2
+        if rows and abs(cy - rows[-1][0]) < 0.5 * h:
+            rows[-1][1].append(w)
+        else:
+            rows.append([cy, [w]])
+    size = h * scale / 0.72  # the ink of a line of letters is about 0.72 of the type size
+
+    def as_words(ws):
+        return [(w.bbox[0] * scale, w.bbox[1] * scale, w.bbox[2] * scale, w.bbox[3] * scale, w.text, w)
+                for w in sorted(ws, key=lambda w: w.bbox[0])]
+
+    def row_like(ws) -> bool:
+        return 2 <= len(ws) <= 12 and any(b[0] - a[2] >= 0.9 * size for a, b in zip(ws, ws[1:]))
+
+    tables: list[RawTable] = []
+    used: set[int] = set()
+    run: list = []
+    for k in range(len(rows) + 1):
+        ws = as_words(rows[k][1]) if k < len(rows) else []
+        ok = k < len(rows) and row_like(ws)
+        if ok and run and min(w[1] for w in ws) - max(w[3] for w in run[-1][1]) <= 1.2 * size:
+            run.append((size, ws))
+            continue
+        confident = len(run) >= 3 and statistics.mean(
+            w[5].confidence for _, rws in run for w in rws) >= 60  # not text read the wrong way up
+        if confident:
+            got = _aligned_table(run)
+            if got is not None:
+                rect, cells = got
+                tables.append(RawTable(rect, TableData(cells, crop(_expand(rect, 3)), True)))
+                used |= {id(w[5]) for _, rws in run for w in rws}
+        run = [(size, ws)] if ok else []
+    # tables whose cells wrap over several lines: a header of short labels in three or more columns, then lines that
+    # keep its columns apart; OCR reads such lines straight across the columns
+    def kept(ws) -> list:
+        """A line's words without the table's rules, which OCR reads as "|" and other low specks."""
+        return as_words([w for w in ws if id(w) not in used and w.confidence >= 30 and w.text.strip() not in ("|", "!", "l")])
+
+    narrow = 0.6  # columns of such tables are often set close together; the line wraps keep them apart
+
+    def sure(ws) -> list:
+        """The words OCR is fairly sure of: a doubtful one may run over a column border (two words read as one)."""
+        return [w for w in ws if w[5].confidence >= 60]
+    def heading(ws: list, least: int, mostly: bool = False) -> bool:
+        """A line of column headings: ``least`` or more short labels, two or more of them words (not numbers: "1 2 3"
+        is a matrix), most starting with a capital and not ending a sentence ("program?", "hard." are line ends).
+        ``mostly``: words in at least half the columns (a further line of headings, not a row of values)."""
+        cells = _split_at(ws, _channels([ws], size, narrow))
+        if len(cells) < least or any(len(c) > 4 for c in cells):
+            return False
+        labels = sum(1 for c in cells if any(sum(ch.isalpha() for ch in w[4]) >= 2 for w in c))
+        capitals = sum(1 for c in cells if c[0][4][:1].isupper() or c[0][4][:1].isdigit())
+        endings = sum(1 for c in cells if c[-1][4].rstrip()[-1:] in ".?!;,")
+        return labels >= 2 and (not mostly or labels * 2 >= len(cells)) and capitals * 2 >= len(cells) and endings <= 1
+
+    k = 0
+    while k < len(rows):
+        head = kept(rows[k][1])
+        above = kept(rows[k - 1][1]) if k else []
+        # not a line in the middle of a column of text
+        in_text = bool(head) and bool(above) and min(w[1] for w in head) - max(w[3] for w in above) < 0.6 * size \
+            and any(w[0] < max(x[2] for x in head) and w[2] > min(x[0] for x in head) for w in above)
+        if not head or in_text or not heading(head, 3):
+            k += 1
+            continue
+        # headings over two or three lines (a label over a group of columns, the labels of the columns under it, a
+        # label set midway between the two) lie close together; the first row of the table is further down
+        heads, j = [head], k + 1
+        while j < len(rows) and len(heads) < 3:
+            ws = kept(rows[j][1])
+            if not ws or min(w[1] for w in ws) - max(w[3] for w in heads[-1]) > 0.6 * size or \
+                    not heading(ws, 2, mostly=True):
+                break
+            heads.append(ws)
+            j += 1
+        top = [w for ws in heads for w in ws]
+        head_cuts = _channels([top], size, narrow)
+        hx0, hx1 = min(w[0] for w in top), max(w[2] for w in top)
+        hy0, hy1 = min(w[1] for w in top), max(w[3] for w in top)
+        # a column of running text beside the table (a two-column page) has lines level with the headings; its words
+        # are left out of the table's lines (a column of row labels under no heading has nothing level with them)
+        level = [w for r in rows[max(0, k - 3):j] for w in kept(r[1]) if w[3] > hy0 - 0.6 * size and w[1] < hy1]
+        left = max((w[2] for w in level if w[2] < hx0 - 0.9 * size), default=None)
+        right = min((w[0] for w in level if w[0] > hx1 + 0.9 * size), default=None)
+
+        def own(ws: list) -> Optional[list]:
+            """The words of a line that can be the table's (a ragged line of the text beside it may end a little
+            further on); None when one runs from that text into the table's room."""
+            out = []
+            for w in ws:
+                if left is not None and w[0] < left + 0.9 * size:
+                    if w[2] > hx0 - 0.9 * size:
+                        return None
+                elif right is not None and w[2] > right - 0.9 * size:
+                    if w[0] < hx1 + 0.9 * size:
+                        return None
+                else:
+                    out.append(w)
+            return out
+        block, edge = list(heads), hx0
+        while j < len(rows):
+            line = kept(rows[j][1])
+            ws = own(line) if line else []
+            if line and ws == []:
+                j += 1  # a line of the text beside the table only
+                continue
+            if not ws or min(w[1] for w in ws) - max(w[3] for w in block[-1]) > 2.5 * size:
+                break
+            if len(block) > len(heads) and min(w[0] for w in ws) < edge - 1.5 * size:
+                break  # a line that starts well left of the table's first column: text after the table
+            cuts = _channels([sure(x) for x in block + [ws]], size, narrow)
+            if not all(any(a < c < b for c in cuts) for a, b in _gaps_between(top, head_cuts)):
+                break  # a line across the columns: the table has ended
+            block.append(ws)
+            edge = min(edge, min(w[0] for w in ws))
+            j += 1
+        body = block[len(heads):]
+        confident = body and statistics.mean(w[5].confidence for ws in block for w in ws) >= 60
+        # the columns are those of the body: a heading over a group of columns covers the border between them
+        cuts = _channels([sure(x) for x in body], size, narrow)
+
+        def grouped(w: tuple, i: int) -> bool:
+            """A heading over a group of columns: both columns beside border ``i`` have headings of their own on a
+            lower line."""
+            lo = cuts[i - 1] if i else -1e9
+            hi = cuts[i + 1] if i + 1 < len(cuts) else 1e9
+            under = [(v[0] + v[2]) / 2 for v in top if v[1] > w[3] - 0.1 * size]
+            return any(lo < x < cuts[i] for x in under) and any(cuts[i] < x < hi for x in under)
+        cuts = [c for i, c in enumerate(cuts) if all(grouped(w, i) for w in top if w[0] < c < w[2])]
+
+        def apart(lines: list) -> int:
+            """The lines of text among ``lines``: a line a skewed scan split into rows a little apart counts once,
+            and labels scattered over a drawing are not lines below each other."""
+            n, last = 0, None
+            for ws in lines:
+                cy = statistics.median((w[1] + w[3]) / 2 for w in ws)
+                if last is None or cy - last >= 0.75 * size:
+                    n, last = n + 1, cy
+            return n
+        if apart(body) >= 3 and confident and sum(1 for ws in body if len(_split_at(ws, cuts)) >= 2) >= 2:
+            def column(w: tuple) -> int:
+                """The column of a word; a heading over a group of columns goes in the first one."""
+                x = w[0] if any(w[0] < c < w[2] for c in cuts) else (w[0] + w[2]) / 2
+                return sum(1 for c in cuts if x > c)
+
+            def first(ws) -> bool:
+                return any(column(w) == 0 for w in ws)
+            # a row of the table starts where the first column has words again (after lines where it had none),
+            # or after more room than between the lines of a cell; when every line has words in the first column,
+            # each line is a row
+            gaps = [min(w[1] for w in b) - max(w[3] for w in a) for a, b in zip(body, body[1:])]
+            usual = sorted(gaps)[len(gaps) // 2] if gaps else 0
+            every = all(first(ws) for ws in body)
+            groups = [[body[0]]]
+            for g, prev, ws in zip(gaps, body, body[1:]):
+                if first(ws) and (every or not first(prev) or g > usual + 0.4 * size):
+                    groups.append([ws])
+                else:
+                    groups[-1].append(ws)
+            n = len(cuts) + 1
+            # lines of headings that fill different columns are one row (a label set midway between two lines)
+            head_rows: list[list[str]] = []
+            for ws in reversed(heads):
+                r = [" ".join(w[4] for w in ws if column(w) == ci) for ci in range(n)]
+                if head_rows and all(not a or not b for a, b in zip(r, head_rows[0])):
+                    head_rows[0] = [a or b for a, b in zip(r, head_rows[0])]
+                else:
+                    head_rows.insert(0, r)
+            table_rows = head_rows + [[" ".join(w[4] for ws in g for w in ws if column(w) == ci) for ci in range(n)]
+                                      for g in groups]
+            all_words = [w for ws in block for w in ws]
+            rect = (min(w[0] for w in all_words), min(w[1] for w in all_words), max(w[2] for w in all_words),
+                    max(w[3] for w in all_words))
+            tables.append(RawTable(rect, TableData(table_rows, crop(_expand(rect, 3)), True)))
+            used |= {id(w[5]) for w in all_words}
+            k = j
+        else:
+            k += 1
+    return tables, used
+
+
+def _channels(rows: list[list], size: float, width: float = 0.9) -> list[float]:
+    """The middles of the white channels (at least ``width`` times the type size wide) that run down through all
+    ``rows`` of words, (x0, y0, x1, y1, ...), between their leftmost and rightmost word."""
+    spans = sorted((w[0], w[2]) for ws in rows for w in ws)
+    cuts, right = [], None
+    for a, b in spans:
+        if right is not None and a - right >= width * size:
+            cuts.append((right + a) / 2)
+        right = b if right is None else max(right, b)
+    return cuts
+
+
+def _split_at(ws: list, cuts: list[float]) -> list[list]:
+    """A row of words (left to right) split at the column borders ``cuts`` (empty columns left out)."""
+    cells: list[list] = [[] for _ in range(len(cuts) + 1)]
+    for w in ws:
+        cells[sum(1 for c in cuts if (w[0] + w[2]) / 2 > c)].append(w)
+    return [c for c in cells if c]
+
+
+def _gaps_between(ws: list, cuts: list[float]) -> list[tuple[float, float]]:
+    """The white space around each column border of a row: from the end of one column's words to the start of the
+    next one's."""
+    cells = _split_at(ws, cuts)
+    return [(max(w[2] for w in a), min(w[0] for w in b)) for a, b in zip(cells, cells[1:])]
 
 
 def _leader_spans(ink: np.ndarray) -> list[tuple[int, int, int, int]]:
@@ -2479,7 +2922,8 @@ def _figures_from_regions(regions: list[Rect], lines: list[RawLine], page_area: 
     return figures
 
 
-def _ocr_page(page: pymupdf.Page, pno: int, engine: OcrEngine, languages: list[str]) -> tuple[list[RawLine], list[RawFigure]]:
+def _ocr_page(page: pymupdf.Page, pno: int, engine: OcrEngine, languages: list[str]
+              ) -> tuple[list[RawLine], list[RawFigure], list[RawTable]]:
     """OCR a page as it is (used for mixed pages that are not full scans)."""
     pix = page.get_pixmap(dpi=OCR_DPI, alpha=False)
     return _ocr_image(pix.tobytes("png"), OCR_DPI, page.rect.width, page.rect.height, pno, engine, languages,
@@ -2515,7 +2959,7 @@ def _scan_pages(rendered, source_page: int, engine: OcrEngine, languages: list[s
     """
     out, halves = _scan_image_pages(rendered, source_page, engine, languages, split_spreads)
     if not hasattr(engine, "orientation"):
-        return out
+        return [_settle_tables(p) for p in out]
     if _looks_sideways(out):
         # sideways or upside-down scan: ask the OCR engine which way is up and try again
         buf = io.BytesIO()
@@ -2533,7 +2977,7 @@ def _scan_pages(rendered, source_page: int, engine: OcrEngine, languages: list[s
         out = [_upright_half(sp, page, source_page, engine, languages)
                if _runs_down([page]) or (_poor_ocr([page]) and _word_count([page]) >= 15) else page
                for sp, page in zip(halves, out)]
-    return out
+    return [_settle_tables(p) for p in out]
 
 
 def _turns(turn: int) -> list[int]:
@@ -2573,9 +3017,9 @@ def _ocr_scan_page(sp, source_page: int, engine: OcrEngine, languages: list[str]
     """OCR one cleaned book page, with its figures."""
     info = PageInfo(-1, sp.width_pt, sp.height_pt, "scanned", ocr_used=True, source_page=source_page,
                     side=side or sp.side, skew=sp.skew)
-    lines, figures = _ocr_image(sp.png(), SCAN_DPI, sp.width_pt, sp.height_pt, -1, engine, languages,
-                                _photo_crop(lambda page=sp: page.photo, SCAN_DPI))
-    return RawPage(info, lines, figures)
+    lines, figures, tables = _ocr_image(sp.png(), SCAN_DPI, sp.width_pt, sp.height_pt, -1, engine, languages,
+                                        _photo_crop(lambda page=sp: page.photo, SCAN_DPI))
+    return RawPage(info, lines, figures, tables)
 
 
 def _ocr_quality(pages: list[RawPage]) -> float:
@@ -2858,12 +3302,14 @@ def read_pdf(path: str, ocr_engine: Optional[OcrEngine] = None, languages: Optio
                 else:
                     if progress:
                         progress(f"Running OCR on page {pno + 1} of {n}", pno / max(1, n))
-                    lines, figs = _ocr_page(page, vno, ocr_engine, ocr_langs)
+                    lines, figs, tabs = _ocr_page(page, vno, ocr_engine, ocr_langs)
                     if kind == "mixed":
                         text_lines = _text_lines(page, vno, known_word)
                         lines = text_lines + [l for l in lines
                                               if not any(overlap_ratio(l.bbox, t.bbox) > 0.3 for t in text_lines)]
-                    rp.lines, rp.figures = lines, figs
+                        tabs = [t for t in tabs if not any(overlap_ratio(l.bbox, t.bbox) > 0.3 for l in text_lines)]
+                    rp.lines, rp.figures, rp.tables = lines, figs, tabs
+                    _settle_tables(rp)
                     info.ocr_used = True
             else:
                 all_lines = _text_lines(page, vno, known_word)
@@ -2876,6 +3322,10 @@ def read_pdf(path: str, ocr_engine: Optional[OcrEngine] = None, languages: Optio
                 rp.figures += _rotated_blocks(page, [f.bbox for f in rp.figures] + table_rects)
                 fig_rects = [f.bbox for f in rp.figures]
                 lines = [l for l in lines if not any(overlap_ratio(l.bbox, f) > 0.6 for f in fig_rects)]
+                borderless = _gap_tables(page, lines, rp.tables)
+                if borderless:
+                    rp.tables += borderless
+                    lines = [l for l in lines if not any(overlap_ratio(l.bbox, t.bbox) > 0.6 for t in borderless)]
                 equations, rp.lines = _equations(page, lines)
                 rp.figures += equations
             pages.append(rp)

@@ -2359,8 +2359,11 @@ class ConverterApp:
         """The converted document as sentences with their places on the pages (worked out once per conversion)."""
         if self._read_units is None:
             skip = self._contents_pages()
-            self._read_units = await self.in_thread(lambda: speech.reading_units(self.converted_pdf,
-                                                                                 skip_pages=skip))
+            session = self.session
+            formulas = list(session.formula_marks) if session else []
+            language = session.document.language if session else "en"
+            self._read_units = await self.in_thread(lambda: speech.reading_units(
+                self.converted_pdf, skip_pages=skip, formulas=formulas, language=language))
         return self._read_units
 
     async def popups(self):

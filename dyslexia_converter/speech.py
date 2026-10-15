@@ -14,7 +14,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Callable, Iterable, Optional
+from typing import Callable, Iterable, Optional, Sequence
 
 import pymupdf
 
@@ -55,13 +55,16 @@ class Sentence:
     def word_at(self, location: int) -> int:
         """Index of the word a speech engine reports by character position.
 
-        Engines count from 0 (Windows) or from 1 (eSpeak): the first word starting at or after
-        ``location - 1`` is the one, which is right for both.
+        Engines count from 0 (Windows) or from 1 (eSpeak): the last word starting at or before ``location`` is the
+        one, which is right for both, and for a word of several spoken words (a formula said in words) whichever of
+        them is being said.
         """
+        found = 0
         for i, w in enumerate(self.words):
-            if w.start >= location - 1:
-                return i
-        return len(self.words) - 1
+            if w.start > location:
+                break
+            found = i
+        return found
 
 
 def _is_page_number(word: str, y0: float, page_h: float) -> bool:
@@ -81,9 +84,12 @@ def _ends_sentence(word: str, nxt: Optional[str]) -> bool:
     return nxt is None or not nxt[:1].islower()
 
 
-def reading_units(pdf: bytes | str, max_words: int = MAX_WORDS, skip_pages: frozenset = frozenset()) -> list[Sentence]:
+def reading_units(pdf: bytes | str, max_words: int = MAX_WORDS, skip_pages: frozenset = frozenset(),
+                  formulas: Sequence[tuple] = (), language: str = "en") -> list[Sentence]:
     """The converted document as sentences of words with their places on the pages (``skip_pages``: pages
-    not to read, such as the table of contents)."""
+    not to read, such as the table of contents). ``formulas``: where the formula pictures are, with their text (see
+    :func:`render.pdf_writer.last_formula_marks`): they are said as maths in ``language``, a display formula as a
+    sentence of its own."""
     doc = pymupdf.open(stream=bytes(pdf), filetype="pdf") if isinstance(pdf, (bytes, bytearray)) \
         else pymupdf.open(pdf)
     raw: list[tuple[str, int, Rect, tuple[int, int]]] = []
@@ -99,6 +105,8 @@ def reading_units(pdf: bytes | str, max_words: int = MAX_WORDS, skip_pages: froz
                 raw.append((text, pno, (x0, y0, x1, y1), (pno, block)))
     finally:
         doc.close()
+    if formulas:
+        raw = _with_formulas(raw, [f for f in formulas if f[0] not in skip_pages], language)
     words: list[tuple[Word, tuple[int, int]]] = []
     i = 0
     while i < len(raw):
@@ -127,6 +135,39 @@ def reading_units(pdf: bytes | str, max_words: int = MAX_WORDS, skip_pages: froz
             w.start = pos
             pos += len(w.text) + 1
     return sentences
+
+
+def _with_formulas(raw: list[tuple], formulas: Sequence[tuple], language: str) -> list[tuple]:
+    """The words of the pages with each formula picture said in words at its place in the reading order. Words drawn
+    over an inline formula (its text for screen readers) give way to it."""
+    from .mathspeech import speak
+    from .render.labels import label
+
+    pages: dict[int, list[tuple]] = {}
+    for e in raw:
+        pages.setdefault(e[1], []).append(e)
+    for k, (page, x0, y0, x1, y1, text, built, display) in enumerate(formulas):
+        said = (speak(text, language) if built and text else "") or label(language, "formula")
+
+        def inside(r: Rect) -> bool:
+            cx, cy = (r[0] + r[2]) / 2, (r[1] + r[3]) / 2
+            return x0 <= cx <= x1 and y0 <= cy <= y1
+
+        def after(r: Rect) -> bool:
+            """Whether a word comes after the formula in reading order (a picture is drawn with a little room around
+            it: the next word may start just inside it)."""
+            level = min(r[3], y1) - max(r[1], y0) > 0.3 * min(r[3] - r[1], y1 - y0)
+            return r[1] >= y1 - 1 if display or not level else r[0] + r[2] >= x0 + x1
+        words = [e for e in pages.get(page, []) if display or not inside(e[2])]
+        at = next((n for n, e in enumerate(words) if after(e[2])), len(words))
+        if display:
+            block = (page, -1 - k)  # a sentence of its own
+        else:  # part of the sentence it stands in
+            near = words[at - 1] if at else (words[at] if words else None)
+            block = near[3] if near is not None else (page, -1 - k)
+        words.insert(at, (said, page, (x0, y0, x1, y1), block))
+        pages[page] = words
+    return [e for page in sorted(pages) for e in pages[page]]
 
 
 def prepare_reading(sentences: list[Sentence], skip_citations: bool = False,

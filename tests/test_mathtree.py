@@ -150,3 +150,15 @@ def test_limits_stay_out_of_the_text_around():
     text = " ".join(b.text for b in doc.blocks if b.image is None and b.text)
     assert "lines of text around it:" in text and "Letting the transformed values" in text
     assert "∞" not in text and "l=0" not in text
+
+
+def test_a_script_of_a_script_in_a_small_text():
+    """In 9 pt text a subscript row is 6 pt and its own script 5 pt: TeX shrinks the second level less, so the 5 pt
+    symbol is nearly as large as the row it belongs to (lim_(ε→0^+) in a 9 pt paper)."""
+    def draw(page):
+        page.insert_text((100, 100), "x", fontname="helv", fontsize=9)
+        page.insert_text((105.2, 102.2), "t0", fontname="helv", fontsize=6)
+        page.insert_text((110.6, 99.9), "+", fontname="helv", fontsize=5)
+        page.insert_text((116, 100), "= y", fontname="helv", fontsize=9)
+    f = mathtree.linear(_page(draw), (95, 88, 140, 106), [], 9.0)
+    assert f is not None and f.text == "x_(t0^+) = y"
