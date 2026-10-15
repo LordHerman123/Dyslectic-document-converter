@@ -281,3 +281,15 @@ def test_labels_scattered_over_a_scanned_drawing_are_no_table():
     words = [OcrWord(t, (x0 * k, (cy - 3) * k, x1 * k, (cy + 3) * k), conf, 0, 1, n)
              for n, (cy, line) in enumerate(printed) for t, x0, x1, conf in line]
     assert _ocr_tables(words, 1 / k, lambda r: None)[0] == []
+
+
+def test_the_last_line_of_a_reference_at_the_foot_of_the_page_is_no_note(isolated_home, tmp_path):
+    """A reference list under a centred heading, in small type, runs to the foot of the page; its last line is
+    shorter than the heading is wide and ends before the heading starts. It stays in the reference list."""
+    refs = [(60, 600, "Barnes, M. 1999. Building a deliberative democracy: an evaluation of two juries.", 8),
+            (60, 612, "Berry, J. M., K. E. Portney and R. Mahoney. 1984. Public involvement in admin-", 8),
+            (72, 624, "istration: the structural determinants of citizen participation. Journal of", 8),
+            (72, 636, "Action Research 13:7-23.", 8)]
+    doc = load(tmp_path, [body_rows(80, 30) + [(270, 580, "References", 12)] + refs])
+    assert [b.text for b in doc.blocks if b.kind == BlockKind.FOOTNOTE] == []
+    assert find(doc.blocks, "Action Research 13:7-23").kind == BlockKind.REFERENCE

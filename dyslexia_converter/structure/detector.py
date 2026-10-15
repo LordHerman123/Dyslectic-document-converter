@@ -324,13 +324,25 @@ class StructureDetector:
             """Whether no normal-size text follows further down in the same column."""
             return not any(n.y0 > l.y0 + 1 and min(n.x1, l.x1) - max(n.x0, l.x0) > 5 for n in normal)
 
-        zone = [l for l in lines if l.size < body_size * 0.92 and l.y0 > h * 0.55 and below_body(l)]
+        # (notes lie within the text block: a speck or number in the page margin is not one)
+        left, right = min(n.x0 for n in normal), max(n.x1 for n in normal)
+        zone = [l for l in lines if l.size < body_size * 0.92 and l.y0 > h * 0.55 and below_body(l)
+                and l.x1 > left - 5 and l.x0 < right + 5]
         if not zone:
             return []
         ref_heads = [r for r in lines if REFERENCE_HEADINGS.match(r.text)]
-        # reference lists (below a References heading in the same column) are not notes
-        zone = [l for l in zone if not any(r.y1 <= l.y0 and min(r.x1 + 200, l.x1) - max(r.x0, l.x0) > 0
-                                           for r in ref_heads)]
+        # reference lists (below a References heading in the same column) are not notes, nor the last line of a
+        # reference that runs on from them (shorter than the heading is wide, it may end before a centred heading)
+        refs = [l for l in zone if any(r.y1 <= l.y0 and min(r.x1 + 200, l.x1) - max(r.x0, l.x0) > 0
+                                       for r in ref_heads)]
+        grown = bool(refs)
+        while grown:
+            more = [l for l in zone if l not in refs and any(
+                -0.2 * l.height <= l.y0 - r.y1 < 0.5 * l.height and min(r.x1, l.x1) - max(r.x0, l.x0) > 0
+                for r in refs)]
+            refs += more
+            grown = bool(more)
+        zone = [l for l in zone if l not in refs]
         if not zone:
             return []
         # keep only the block of small lines at the very bottom of the page
