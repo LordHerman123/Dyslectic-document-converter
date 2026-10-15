@@ -571,8 +571,19 @@ class ReflowMode:
     # ------------------------------------------------------------------ reading aloud
     def _sentences(self) -> None:
         """The text as sentences of words, each word knowing its item and place, for the speech engine."""
+        from ..mathspeech import speak
+        from ..render.labels import label
+
         units, spans = [], []
+        lang = getattr(self.app.session.document, "language", "en") if self.app.session else "en"
         for i, it in enumerate(self.items):
+            if it.kind == "equation" and it.image is not None:  # a display formula: said as maths, on its own
+                img = it.image
+                said = (speak(img.alt, lang) if getattr(img, "built", False) and img.alt else "") or \
+                    label(lang, "formula")
+                units.append(speech.Sentence([speech.Word(said, i, [], 0)]))
+                spans.append([(0, 0)])
+                continue
             if it.kind in ("image", "equation", "table") or it.kind == "about":
                 continue
             text = self.plain(it)

@@ -1015,6 +1015,7 @@ def _text_lines(page: pymupdf.Page, pno: int, known_word: Optional[Callable[[str
                 inline_images[ph] = ImageData(pix.tobytes("png"), "png", pix.width, pix.height, kind="inline-math",
                                               alt=alt, text_size=float(max_size), descent=clip.y1 - baseline,
                                               width_pt=clip.width)
+                inline_images[ph].built = bool(alt)  # a stack read symbol by symbol ("(a)/(b)")
                 if text and not text[-1].isspace() and rect[0] - right_edge > max_size * 0.15:
                     text += " "
                 styles.append(StyleRange(len(text), len(text) + 1, math=True))
@@ -1700,6 +1701,7 @@ def _equations(page: pymupdf.Page, lines: list[RawLine]) -> tuple[list[RawFigure
                             text_size=float(body))
             img.glyph_text = formula.glyphs if formula else alt  # the printed symbols it was built from
             img.eq_number = formula.number if formula else ""
+            img.built = formula is not None  # its text keeps the structure (it can be said as maths)
             figures.append(RawFigure(box, img))
     rest = [l for l in lines if id(l) not in used]
     return figures, rest
