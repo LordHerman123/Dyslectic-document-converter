@@ -13,25 +13,26 @@ At start a short notice says what to expect: the converter changes how a documen
 Everything works **locally and without AI**. AI is an optional extra that you turn on with your own
 API key. When it's on, it only sees small snippets that the local rules couldn't decide.
 
-## Download for Windows (version 1.19)
+## Download for Windows (version 1.20)
 
-Get `DyslexiaConverter-1.19.0-setup.exe` (installer) or `DyslexiaConverter-1.19.0-windows.zip` (unzip and
+Get `DyslexiaConverter-1.20.0-setup.exe` (installer) or `DyslexiaConverter-1.20.0-windows.zip` (unzip and
 double-click `DyslexiaConverter.exe`) from the repository's **Releases** page. Text recognition (Tesseract)
 is included; nothing else needs to be installed. How the Windows build is made: [windows/README.md](windows/README.md).
 
-## What's new in 1.19
+## What's new in 1.20
 
-* **Quality estimate:** a small coloured notice says how far to trust the conversion (*Excellent*, *High*, *Medium*,
-  *Low* or *Very low*) and why. In focus mode each page has its own small label; click it to step through the words
-  the converter is unsure about and correct them.
-* **Picture size:** a figure came out too small? Click it in focus mode and make it larger (up to the full text
-  width) or smaller. The size is remembered and every export uses it.
-* **Typing a formula:** when you correct a formula, switch on *Maths (LaTeX)* and type it in LaTeX, with a live
-  preview.
-* **Scans** are read about twice as fast, pages scanned sideways are turned upright, and headings no longer run into
-  the text after them.
-* **Formulas** keep their structure in their text: fractions, powers and indices, limits, roots and matrices.
-* The **Mac and Linux apps** open a document they are started with (Open with, or a PDF dropped on the icon).
+* **Formulas read aloud:** reading aloud now says formulas as maths, in the document's language (English, Dutch,
+  German, French, Spanish or Italian), each in its place and marked while it is said. A formula the converter could not
+  read symbol by symbol is announced as "Formula" instead of being skipped.
+* **Tables in scanned pages** become real tables: columns stay apart, also when cells wrap over several lines, headings
+  over a group of columns are kept, and the text beside a table on a two-column page stays text.
+* **Tables without lines** in PDFs are recognised, and table cells keep their word breaks.
+* **Whole sentences, less clutter:** a bullet drawn apart stays with its item, a large number at the start of a section
+  goes before it, words split by a soft hyphen are joined, and page numbers of picture pages, publisher badges and
+  labels such as "COMMENT" above the title no longer get in the way.
+* **Formulas** keep their structure in more cases (limits such as lim ε→0⁺ in papers set in small type, sums in
+  derivations), and the converter leaves a formula as its picture rather than guess where part of it belongs.
+* **Notes:** the last line of a reference at the foot of a page no longer ends up under Notes.
 
 ## macOS and Linux
 
