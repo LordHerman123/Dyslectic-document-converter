@@ -104,3 +104,49 @@ def test_read_along_says_display_formulas_too():
     view._sentences()
     assert [u.text for u in view._units] == ["x Quadrat gleich y", "Formel"]
     assert view._unit_spans == [[(0, 0)], [(0, 0)]]  # nothing to mark in the text: the picture is the formula
+
+
+def _paragraphs(tmp_path, *paragraphs):
+    """A converted PDF of paragraphs given as (text, [(start, end, style flags), ...]), and its session."""
+    from dyslexia_converter.model import StyleRange
+    blocks = [Block(f"p{k}", BlockKind.PARAGRAPH, text, page=0,
+                    styles=[StyleRange(a, b, **flags) for a, b, flags in styles])
+              for k, (text, styles) in enumerate(paragraphs)]
+    doc = Document("x.pdf", pages=[PageInfo(0, 595, 842, "text")], blocks=blocks, language="en")
+    session = pipeline.Session(doc, CustomWords(tmp_path / "words.txt"))
+    return session.export("pdf", FormatSettings()), session
+
+
+def test_maths_set_as_text_is_read_as_maths(tmp_path):
+    """x with an index i and a power 2, set as text in a sentence: said as maths, and the sentence still ends at its
+    full stop."""
+    text = "The value xi2 is small. Then a new sentence starts."
+    pdf, session = _paragraphs(tmp_path, (text, [(10, 11, {"math": True}), (11, 12, {"math": True, "subscript": True}),
+                                                 (12, 13, {"math": True, "superscript": True})]))
+    assert [m[5] for m in session.formula_marks] == ["x_i^2"]
+    said = [s.text for s in speech.reading_units(pdf, formulas=session.formula_marks)]
+    assert said[:2] == ["The value x sub i squared is small.", "Then a new sentence starts."]
+    assert [s.text for s in speech.reading_units(pdf)][0] == "The value xi2 is small."  # without: as before
+
+
+def test_maths_inside_a_longer_word_and_note_markers_stay_as_they_are(tmp_path):
+    text = "Along the x-axis the values∗ rise."
+    pdf, session = _paragraphs(tmp_path, (text, [(10, 11, {"math": True}), (27, 28, {"math": True,
+                                                                                     "superscript": True})]))
+    said = [s.text for s in speech.reading_units(pdf, formulas=session.formula_marks)]
+    assert said[0] == "Along the x-axis the values∗ rise."
+
+
+def test_read_along_says_maths_set_as_text():
+    from types import SimpleNamespace
+
+    from dyslexia_converter.render.compose import RItem, Run
+    from dyslexia_converter.ui.reflow import ReflowMode
+    view = object.__new__(ReflowMode)
+    view.app = SimpleNamespace(session=SimpleNamespace(document=SimpleNamespace(language="en")))
+    view.result = SimpleNamespace(inline_images={})
+    view.items = [RItem("paragraph", runs=[Run("The value "), Run("x", math=True), Run("i", math=True, subscript=True),
+                                           Run(" is small. "), Run("σ", math=True), Run(" is big on the x-axis.")])]
+    view._sentences()
+    assert [u.text for u in view._units] == ["The value x sub i is small.", "sigma is big on the x-axis."]
+    assert view._unit_spans[0][2] == (10, 12)  # the formula is marked where it is in the text

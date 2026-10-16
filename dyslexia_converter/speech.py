@@ -105,16 +105,18 @@ def reading_units(pdf: bytes | str, max_words: int = MAX_WORDS, skip_pages: froz
                 raw.append((text, pno, (x0, y0, x1, y1), (pno, block)))
     finally:
         doc.close()
+    said: set[int] = set()  # the formulas said as maths (by their place, a box of their own)
     if formulas:
         raw = _with_formulas(raw, [f for f in formulas if f[0] not in skip_pages], language)
+        said = {id(e[2]) for e in raw if len(e) > 4}
     words: list[tuple[Word, tuple[int, int]]] = []
     i = 0
     while i < len(raw):
-        text, pno, rect, blk = raw[i]
+        text, pno, rect, blk = raw[i][:4]
         rects = [rect]
         # "con-" at the end of a line + "tinues": one word
         while text.endswith(("-", "­")) and len(text) > 2 and i + 1 < len(raw) and raw[i + 1][0][:1].islower() \
-                and raw[i + 1][2][1] > rect[1] + 1:
+                and id(raw[i + 1][2]) not in said and raw[i + 1][2][1] > rect[1] + 1:
             i += 1
             text = text[:-1] + raw[i][0]
             rects.append(raw[i][2])
@@ -125,7 +127,9 @@ def reading_units(pdf: bytes | str, max_words: int = MAX_WORDS, skip_pages: froz
     for n, (w, blk) in enumerate(words):
         cur.words.append(w)
         nxt = words[n + 1] if n + 1 < len(words) else None
-        end = nxt is None or _ends_sentence(w.text, nxt[0].text) or nxt[1] != blk or len(cur.words) >= max_words
+        # a sentence may start with a formula ("⊙ is ..."), said in words that start in lower case
+        nxt_text = "X" if nxt is not None and id(nxt[0].rects[0]) in said else (nxt[0].text if nxt else None)
+        end = nxt is None or _ends_sentence(w.text, nxt_text) or nxt[1] != blk or len(cur.words) >= max_words
         if end:
             sentences.append(cur)
             cur = Sentence()
@@ -158,14 +162,39 @@ def _with_formulas(raw: list[tuple], formulas: Sequence[tuple], language: str) -
             it: the next word may start just inside it)."""
             level = min(r[3], y1) - max(r[1], y0) > 0.3 * min(r[3] - r[1], y1 - y0)
             return r[1] >= y1 - 1 if display or not level else r[0] + r[2] >= x0 + x1
-        words = [e for e in pages.get(page, []) if display or not inside(e[2])]
+        here = pages.get(page, [])
+        gone: list = []
+        if not display:
+            def level(r: Rect) -> bool:
+                return min(r[3], y1) - max(r[1], y0) > 0.3 * min(r[3] - r[1], y1 - y0)
+
+            def outside(e: tuple) -> tuple[str, str]:
+                """The characters of a word before and after the formula's box (estimated from its width)."""
+                t, r = e[0], e[2]
+                w = (r[2] - r[0]) / max(1, len(t))
+                n0 = min(len(t), round(max(0.0, x0 - r[0]) / w)) if w else 0
+                n1 = min(len(t) - n0, round(max(0.0, r[2] - x1) / w)) if w else 0
+                return t[:n0], t[len(t) - n1:] if n1 else ""
+            # (a word that only touches the edge of the box, a picture drawn with room around it, is not one of them)
+            touching = [e for e in here if level(e[2]) and min(e[2][2], x1) - max(e[2][0], x0)
+                        > 0.3 * min(e[2][2] - e[2][0], x1 - x0)]
+            # only words that are the formula (with brackets or punctuation around it) give way to it; maths that is
+            # part of a longer word ("x-axis", "aff(1,R)") leaves the words as they are
+            if not touching or any(not re.fullmatch(r"[(\[{]*", outside(e)[0]) or
+                                   not re.fullmatch(r"[.,;:!?)\]}]*", outside(e)[1]) for e in touching):
+                continue
+            gone = touching
+            said += outside(gone[-1])[1]  # punctuation after it ("x_i."): kept, so the sentence ends
+        words = [e for e in here if display or not any(e is g for g in gone)]
         at = next((n for n, e in enumerate(words) if after(e[2])), len(words))
         if display:
             block = (page, -1 - k)  # a sentence of its own
+        elif not display and gone:  # in the place (and text block) of the words it replaces
+            block = gone[0][3]
         else:  # part of the sentence it stands in
             near = words[at - 1] if at else (words[at] if words else None)
             block = near[3] if near is not None else (page, -1 - k)
-        words.insert(at, (said, page, (x0, y0, x1, y1), block))
+        words.insert(at, (said, page, (x0, y0, x1, y1), block, "formula"))
         pages[page] = words
     return [e for page in sorted(pages) for e in pages[page]]
 

@@ -118,6 +118,7 @@ class _Piece:
     image: Optional[ImageData] = None  # a small formula picture instead of text
     height: float = 0.0
     unsure: str = ""  # a word the converter is unsure about: why (see Run.unsure)
+    math: bool = False  # part of a formula set as text (read aloud as maths)
 
 
 class RichParagraph(Flowable):
@@ -229,6 +230,7 @@ class RichParagraph(Flowable):
                 pieces = self._pieces_for(token, r.bold, r.italic, r.superscript, r.subscript, r.math)
                 for p in pieces:
                     p.unsure = r.unsure
+                    p.math = r.math
                 cur += pieces
         if cur:
             words.append(cur)
@@ -306,7 +308,7 @@ class RichParagraph(Flowable):
                     cur[-1].text += ch
                     cur[-1].width += w
                 else:
-                    cur.append(_Piece(ch, p.font, p.size, p.rise, w, unsure=p.unsure))
+                    cur.append(_Piece(ch, p.font, p.size, p.rise, w, unsure=p.unsure, math=p.math))
                 cur_w += w
         if cur:
             chunks.append(cur)
@@ -426,9 +428,11 @@ class RichParagraph(Flowable):
             x = text_x
             if s.align == "center":
                 x = text_x + max(0.0, (width - natural) / 2)
+            maths = _TextMaths(c, baseline)
             for wi, word in enumerate(line):
                 px = x
                 for pi, p in enumerate(word):
+                    maths.add(p, px, first=pi == 0)
                     if p.image is not None:
                         spoken = p.image.alt if getattr(c, "_tagger", None) is not None else ""
                         if spoken:  # read aloud as its text instead of being skipped
@@ -453,6 +457,7 @@ class RichParagraph(Flowable):
                         _note_unsure(c, px - p.back, baseline + p.rise, p)
                     px += p.width
                 x += sum(p.width for p in word) + gap
+            maths.close()
         if s.rule_below is not None and self._last:
             c.setStrokeColor(s.rule_below)
             c.setLineWidth(0.8)
@@ -505,6 +510,61 @@ def _note_unsure(c, x: float, y: float, p: _Piece) -> None:
 
 
 _render_state = _RenderState()
+
+
+class _TextMaths:
+    """Notes the formulas set as text on one line (maths pieces with their indices, over word breaks) where they are
+    drawn, with their text in the converter's notation (``x_i^2``), so reading aloud can say them as maths (see
+    :func:`_note_formula`; formula pictures are noted on their own)."""
+
+    def __init__(self, c, baseline: float):
+        self.c, self.baseline = c, baseline
+        self.parts: list[tuple[str, str]] = []  # (base / sup / sub / space, text)
+        self.box: Optional[list[float]] = None  # x0, x1, lowest rise, highest top of ink, largest size
+
+    def add(self, p: _Piece, px: float, first: bool) -> None:
+        """A piece drawn at ``px``; ``first``: it starts a word."""
+        script = p.rise != 0 and p.image is None
+        if p.image is not None or not (p.math or (script and self.parts)):
+            self.close()
+            return
+        if first and self.parts:
+            self.parts.append(("space", " "))
+        kind = "sup" if p.rise > 0 and script else "sub" if script else "base"
+        if self.parts and self.parts[-1][0] == kind:
+            self.parts[-1] = (kind, self.parts[-1][1] + p.text)
+        else:
+            self.parts.append((kind, p.text))
+        here = [px - p.back, px + p.width, p.rise, p.rise + 0.8 * p.size, p.size]
+        self.box = here if self.box is None else [min(self.box[0], here[0]), max(self.box[1], here[1]),
+                                                  min(self.box[2], here[2]), max(self.box[3], here[3]),
+                                                  max(self.box[4], here[4])]
+
+    def close(self) -> None:
+        """The formula so far is complete: note it (when it has something of maths in it)."""
+        parts, box = self.parts, self.box
+        self.parts, self.box = [], None
+        if not parts or box is None:
+            return
+        text = ""
+        for kind, t in parts:
+            t = t.strip() if kind != "space" else t
+            if kind in ("sup", "sub"):
+                text += ("^" if kind == "sup" else "_") + (t if len(t) == 1 else f"({t})")
+            else:
+                text += t
+        text = text.strip().strip(",;").strip()  # (a comma between formulas belongs to the sentence)
+        if not text.strip("∗*†‡§¶ "):
+            return  # a note marker, not maths
+        sink = getattr(self.c, "_formulas", None)
+        if sink is None:
+            return
+        a, _, _, d, e, f = self.c._currentMatrix
+        page_h = self.c._pagesize[1]
+        x0, x1 = e + a * box[0], e + a * box[1]
+        top, bottom = f + d * (self.baseline + box[3]), f + d * (self.baseline + box[2] - 0.25 * box[4])
+        sink.append((self.c.getPageNumber() - 1, round(x0, 2), round(page_h - top, 2), round(x1, 2),
+                     round(page_h - bottom, 2), text, True, False))
 
 
 def _stack_indices(word: list[_Piece]) -> None:
