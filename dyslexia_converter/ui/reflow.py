@@ -381,14 +381,16 @@ class ReflowMode:
         if self._reading and self._read_pos is not None:
             self._mark_reading(self._read_pos, 0)
 
-    def _runs(self, it: RItem) -> list[Run]:
-        """The item's runs, with small formula pictures written as their text (a picture cannot sit in a line)."""
+    def _runs(self, it: RItem, pictures_as_maths: bool = True) -> list[Run]:
+        """The item's runs, with small formula pictures written as their text (a picture cannot sit in a line);
+        ``pictures_as_maths``: that text is marked as maths (else it is a formula of its own, not part of the maths
+        set as text around it)."""
         pics = self.result.inline_images if self.result else {}
         out = []
         for r in it.runs:
             if any(ch in pics for ch in r.text):
                 text = "".join((" " + (pics[ch].alt or "▢") + " ") if ch in pics else ch for ch in r.text)
-                out.append(Run(text, bold=r.bold, italic=r.italic, math=True))
+                out.append(Run(text, bold=r.bold, italic=r.italic, math=pictures_as_maths))
             else:
                 out.append(r)
         return out
@@ -588,7 +590,7 @@ class ReflowMode:
                 continue
             text = self.plain(it)
             words = [(m.start(), m.end(), m.group()) for m in re.finditer(r"\S+", text)]
-            words, said = _with_text_formulas(text, words, formulas_in_runs(self._runs(it)), lang)
+            words, said = _with_text_formulas(text, words, formulas_in_runs(self._runs(it, False)), lang)
             cur, cur_spans = [], []
             for k, (a, b, w) in enumerate(words):
                 start = sum(len(x.text) + 1 for x in cur)
@@ -807,9 +809,10 @@ class ReflowMode:
 
 def _with_text_formulas(text: str, words: list, formulas: list, language: str) -> tuple[list, set]:
     """``words`` (start, end, word) of ``text`` with each formula set as text said as maths in one word over its
-    place; returns them and the numbers of those words. A formula that is part of a longer word ("x-axis") leaves the
-    words as they are; punctuation after it stays."""
-    from ..mathspeech import speak
+    place; returns them and the numbers of those words. A formula that is part of a longer word ("x-axis") or cannot
+    be said for sure (see :func:`mathspeech.speak_text_formula`) leaves the words as they are; punctuation after it
+    stays."""
+    from ..mathspeech import speak_text_formula
 
     out = [(a, b, w, False) for a, b, w in words]
     for s0, s1, formula in reversed(formulas):
@@ -820,9 +823,13 @@ def _with_text_formulas(text: str, words: list, formulas: list, language: str) -
         if not re.fullmatch(r"[(\[{]*", text[a:s0] if a < s0 else "") or \
                 not re.fullmatch(r"[.,;:!?)\]}]*", text[s1:b] if b > s1 else ""):
             continue
-        spoken = speak(formula, language)
+        spoken = speak_text_formula(formula, language)
         if spoken:
-            out[k[0]:k[-1] + 1] = [(a, b, spoken + (text[s1:b] if b > s1 else ""), True)]
+            # (brackets around it and punctuation after it are kept, also punctuation set with the formula: "γ,")
+            before, after = (text[a:s0] if a < s0 else ""), (text[s1:b] if b > s1 else "")
+            stop = re.search(r"[.,;:!?]*$", text[a:b]).group()
+            spoken = before + spoken.rstrip(" .,;:!?") + re.sub(r"[.,;:!?]", "", after) + stop
+            out[k[0]:k[-1] + 1] = [(a, b, spoken, True)]
     return [(a, b, w) for a, b, w, _ in out], {n for n, e in enumerate(out) if e[3]}
 
 
