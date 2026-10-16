@@ -3032,7 +3032,9 @@ def _scan_formulas(lines: list[RawLine], width: float, crop: Callable[[Rect], Im
     for l in sorted(flagged, key=lambda l: l.y0):
         for reg in regions:
             r = reg[0]
-            if l.y0 - r[3] < 1.5 * l.size and min(r[2], l.x1) - max(r[0], l.x0) > -0.1 * text_w and \
+            # (a line of small marks under a formula reaches as far as the formula's own lines)
+            reach = 1.5 * max([l.size] + [m.size for m in reg[1]])
+            if l.y0 - r[3] < reach and min(r[2], l.x1) - max(r[0], l.x0) > -0.1 * text_w and \
                     not text_between(r, l):
                 reg[0] = _union(r, l.bbox)
                 reg[1].append(l)
