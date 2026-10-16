@@ -3138,8 +3138,9 @@ def _replace_garbled_halves(page: pymupdf.Page, lines: list[RawLine], figures: l
 
 
 def _estimate_font_size(text: str, height: float) -> float:
-    """Estimate the font size of an OCR line from its ink height."""
-    has_asc = bool(re.search(r"[A-Zbdfhklt0-9(\[{|/]", text))
+    """Estimate the font size of an OCR line from its ink height (the dots of i and j reach about as high as
+    ascenders)."""
+    has_asc = bool(re.search(r"[A-Zbdfhijklt0-9(\[{|/]", text))
     has_desc = bool(re.search(r"[gjpqy,;(\[{|]", text))
     em = (0.72 if has_asc else 0.5) + (0.22 if has_desc else 0.0)
     return round(height / em * 2) / 2
