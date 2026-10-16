@@ -897,7 +897,8 @@ def _table_flowable(item: RItem, s: FormatSettings, col_w: float, max_h: float, 
 
     if not usable:
         return picture("Table shown as an image of the original.")
-    header_rows = max(1, min(tab.header_rows, len(rows) - 1)) if len(rows) > 1 else 1
+    # (a table without headings: a page of a table continued, whose headings are on a page not converted)
+    header_rows = min(tab.header_rows, len(rows) - 1) if len(rows) > 1 else min(tab.header_rows, 1)
     bold_cells = tab.bold_cells or set()
     pad = 10  # cell padding left + right
 
@@ -944,7 +945,7 @@ def _table_flowable(item: RItem, s: FormatSettings, col_w: float, max_h: float, 
              ("VALIGN", (0, 0), (-1, -1), "TOP"),
              ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
              ("LEFTPADDING", (0, 0), (-1, -1), 5), ("RIGHTPADDING", (0, 0), (-1, -1), 5)]
-    if not ink:
+    if not ink and header_rows:
         style.append(("BACKGROUND", (0, 0), (-1, header_rows - 1), TABLE_HEAD))
     t.setStyle(TableStyle(style))
     return t, ""
