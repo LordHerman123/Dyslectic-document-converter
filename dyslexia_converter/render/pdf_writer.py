@@ -855,6 +855,27 @@ def _equation_flowable(item: RItem, s: FormatSettings, col_w: float) -> Optional
     return fl
 
 
+class _CheckedCell(Paragraph):
+    """A table cell the reader should check (see ``TableData.unsure_cells``): drawn as any cell, and its box noted
+    as for a word to check (see :func:`_note_unsure`), so focus mode marks the words in it."""
+
+    def __init__(self, text: str, style: ParagraphStyle, why: str):
+        super().__init__(text, style)
+        self._why = why
+
+    def draw(self):
+        """Draw the cell's text and note its box: page, x0, y0, x1, y1 in points from the top-left corner, why."""
+        super().draw()
+        c = self.canv
+        sink = getattr(c, "_unsure", None)
+        if sink is None:
+            return
+        a, _, _, d, e, f = c._currentMatrix
+        page_h = c._pagesize[1]
+        sink.append((c.getPageNumber() - 1, round(e, 2), round(page_h - f - d * self.height, 2),
+                     round(e + a * self.width, 2), round(page_h - f, 2), self._why))
+
+
 def _table_flowable(item: RItem, s: FormatSettings, col_w: float, max_h: float, printable: bool,
                     room: float = 0.0) -> tuple[Flowable, str]:
     """A table in the column, or its picture from the original when the table could not be read reliably (or the user
@@ -911,8 +932,13 @@ def _table_flowable(item: RItem, s: FormatSettings, col_w: float, max_h: float, 
         """Escape text for ReportLab's markup."""
         return t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-    data = [[Paragraph(esc(r[i]) if i < len(r) else "", strong if is_bold(ri, i) else cell) for i in range(n_cols)]
-            for ri, r in enumerate(rows)]
+    def paragraph(ri: int, ci: int) -> Paragraph:
+        """The text of a cell; a cell to check notes where it is drawn."""
+        text, style = esc(rows[ri][ci]) if ci < len(rows[ri]) else "", strong if is_bold(ri, ci) else cell
+        why = tab.unsure_cells.get((ri, ci)) if tab.unsure_cells and text.strip() else None
+        return _CheckedCell(text, style, why) if why else Paragraph(text, style)
+
+    data = [[paragraph(ri, i) for i in range(n_cols)] for ri in range(len(rows))]
     t = Table(data, colWidths=widths, repeatRows=header_rows, hAlign="LEFT")
     style = [("GRID", (0, 0), (-1, -1), 0.5, TABLE_GRID if not ink else colors.grey),
              ("VALIGN", (0, 0), (-1, -1), "TOP"),

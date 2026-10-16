@@ -18,7 +18,8 @@ import re
 from dataclasses import dataclass, field, replace
 from typing import Optional
 
-from ..model import Block, BlockKind, Document, ImageData, StyleRange, TableData, map_styles
+from ..model import (Block, BlockKind, Document, ImageData, StyleRange, TableData, apply_corrections, map_styles,
+                     table_rows, table_text)
 from ..settings import FormatSettings
 from ..transform.bionic import bold_ranges
 from ..transform.citations import Citation, find_citations, match_reference
@@ -237,7 +238,8 @@ def compose(doc: Document, settings: FormatSettings, ai_citation_decisions: Opti
                     items.append(RItem("small", [Run(doc_label(lang, "unreadable"))]))
             continue
         if b.kind == BlockKind.TABLE:
-            items.append(RItem("table", table=b.table, block_id=b.id, natural_width=b.bbox[2] - b.bbox[0],
+            items.append(RItem("table", table=_corrected_table(doc, b), block_id=b.id,
+                               natural_width=b.bbox[2] - b.bbox[0],
                                size=_size_of(b.table.fallback_image if b.table else None, picture_sizes)))
             continue
         if b.kind == BlockKind.FOOTNOTE and settings.move_footnotes:
@@ -394,6 +396,18 @@ def _typed_formulas(doc: Document, b: Block) -> list[StyleRange]:
     replace, moved with the other styles to where the formula text is)."""
     return [StyleRange(c.start, c.end, math=True) for c in doc.corrections_for(b.id)
             if c.latex and c.applied and b.text[c.start:c.end] == c.original]
+
+
+def _corrected_table(doc: Document, b: Block) -> Optional[TableData]:
+    """A table with the corrections the reader made in its cells put in; a corrected cell no longer asks to be
+    checked."""
+    t = b.table
+    corrections = doc.corrections_for(b.id)
+    if t is None or not corrections or b.text:
+        return t
+    rows = table_rows(apply_corrections(table_text(t.rows), corrections), t.rows)
+    changed = {(ri, ci) for ri, r in enumerate(rows) for ci, c in enumerate(r) if c != t.rows[ri][ci]}
+    return replace(t, rows=rows, unsure_cells={k: v for k, v in t.unsure_cells.items() if k not in changed})
 
 
 def _size_of(image: Optional[ImageData], picture_sizes: Optional[dict[str, float]]) -> float:
