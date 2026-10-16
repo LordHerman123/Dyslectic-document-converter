@@ -162,3 +162,13 @@ def test_a_script_of_a_script_in_a_small_text():
         page.insert_text((116, 100), "= y", fontname="helv", fontsize=9)
     f = mathtree.linear(_page(draw), (95, 88, 140, 106), [], 9.0)
     assert f is not None and f.text == "x_(t0^+) = y"
+
+
+def test_small_capitals_starting_a_formula_are_part_of_its_line():
+    """KL or ELBO set in small capitals at the start of a formula (smaller type on the baseline itself) is the
+    formula's first word, not a script before any symbol."""
+    def draw(page):
+        page.insert_text((100, 100), "ELBO", fontname="helv", fontsize=7)
+        page.insert_text((118, 100), "(q) = y", fontname="helv", fontsize=10)
+    f = mathtree.linear(_page(draw), (95, 88, 160, 104), [], 10.0)
+    assert f is not None and f.text.replace(" ", "") == "ELBO(q)=y"
