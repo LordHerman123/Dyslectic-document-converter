@@ -186,3 +186,20 @@ def test_big_delimiters_are_read_by_the_glyph_names_of_the_font():
     page = SimpleNamespace(parent=parent, get_fonts=lambda: fonts)
     read = [mathtree._named_delimiter(page, "MathDesign-CH-Regular-Ex", c) for c in (150, 153, 160, 200)]
     assert read == ["[", "]", "", ""]
+
+
+def test_a_fraction_under_a_root_is_built_inside_it():
+    """√(d[σ²(t)]/dt): the root's line and the fraction's line are both under the sign; the fraction is built
+    first, with the line under the sign, and the root takes its baseline (not its denominator's)."""
+    A = mathtree.Atom
+    root = A("√", 100, 88, 110, 118, 104, 10, kind="big", top=88)
+    rules = [A("", 110, 88.5, 140, 88.5, 88.5, 0.0, kind="rule", glyphs=0),   # the line over the root
+             A("", 112, 103, 138, 103, 103, 0.0, kind="rule", glyphs=0)]      # the fraction's line
+    num, den = A("a", 120, 92, 126, 101, 100, 10), A("b", 120, 106, 126, 115, 114, 10)
+    b = mathtree._Builder([A("x", 80, 99, 86, 107, 106, 10), A("=", 90, 101, 96, 105, 106, 10), root, num, den],
+                          list(rules), 10.0)
+    b.radicals()
+    b.fractions()
+    assert b.rules == []
+    [node] = [a for a in b.atoms if a.kind == "node"]
+    assert node.text == "√(a/b)" and abs(node.base - (103 + 0.25 * 10)) < 0.01

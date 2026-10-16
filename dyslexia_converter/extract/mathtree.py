@@ -435,14 +435,28 @@ class _Builder:
             if not inside:
                 raise Unsure("empty radical")
             self.rules.remove(rule)
-            body = self.row(inside)
+            # a fraction (or another root) under the sign is built first, with the lines under the sign
+            inner = [r for r in self.rules if rule.x0 - 0.5 <= (r.x0 + r.x1) / 2 <= rule.x1 + 0.5
+                     and rule.base + 0.5 < r.base <= root.y1 + 0.5]
+            if inner:
+                sub = _Builder(list(inside), list(inner), self.body)
+                sub.radicals()
+                sub.fractions()
+                if sub.rules:
+                    raise Unsure("a line that is not part of the formula's structure")
+                self.rules = [r for r in self.rules if all(r is not i for i in inner)]
+                body = sub.row(sub.atoms)
+                built = sub.atoms
+            else:
+                body = self.row(inside)
+                built = inside
             single = len(inside) == 1 and inside[0].single
             text = "√" + (f"[{self.row(index)}]" if index else "") + _group(body, single)
             members = inside + index + [root]
             self.take(members)
             size = max(a.size for a in inside)
-            # the radicand's own line (its scripts sit lower or higher)
-            line = [a for a in inside if a.kind != "rule" and a.size >= 0.8 * size]
+            # the radicand's own line (its scripts sit lower or higher; a fraction's is its bar's)
+            line = [a for a in built if a.kind != "rule" and a.size >= 0.8 * size]
             self.atoms.append(_node(text, members, max(a.base for a in line), size, single=False))
 
     def fractions(self) -> None:
