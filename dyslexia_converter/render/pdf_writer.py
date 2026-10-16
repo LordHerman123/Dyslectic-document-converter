@@ -515,7 +515,8 @@ _render_state = _RenderState()
 class _TextMaths:
     """Notes the formulas set as text on one line (maths pieces with their indices, over word breaks) where they are
     drawn, with their text in the converter's notation (``x_i^2``), so reading aloud can say them as maths (see
-    :func:`_note_formula`; formula pictures are noted on their own)."""
+    :func:`_note_formula`, with "text" and the characters as drawn, ``xi2``, added; formula pictures are noted on
+    their own)."""
 
     def __init__(self, c, baseline: float):
         self.c, self.baseline = c, baseline
@@ -556,6 +557,7 @@ class _TextMaths:
         text = text.strip().strip(",;").strip()  # (a comma between formulas belongs to the sentence)
         if not text.strip("∗*†‡§¶ "):
             return  # a note marker, not maths
+        drawn = "".join(t for _, t in parts).strip().strip(",;").strip()
         sink = getattr(self.c, "_formulas", None)
         if sink is None:
             return
@@ -564,7 +566,7 @@ class _TextMaths:
         x0, x1 = e + a * box[0], e + a * box[1]
         top, bottom = f + d * (self.baseline + box[3]), f + d * (self.baseline + box[2] - 0.25 * box[4])
         sink.append((self.c.getPageNumber() - 1, round(x0, 2), round(page_h - top, 2), round(x1, 2),
-                     round(page_h - bottom, 2), text, True, False))
+                     round(page_h - bottom, 2), text, True, False, "text", drawn))
 
 
 def _stack_indices(word: list[_Piece]) -> None:

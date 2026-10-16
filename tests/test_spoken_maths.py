@@ -150,3 +150,66 @@ def test_read_along_says_maths_set_as_text():
     view._sentences()
     assert [u.text for u in view._units] == ["The value x sub i is small.", "sigma is big on the x-axis."]
     assert view._unit_spans[0][2] == (10, 12)  # the formula is marked where it is in the text
+
+
+def test_formula_pictures_in_a_sentence_with_maths_set_as_text_are_still_said(tmp_path):
+    """A small formula picture in a sentence (a fraction) is said at its place, also next to maths set as text (they
+    went silent there once), and the sentence keeps its words."""
+    from dyslexia_converter.model import StyleRange
+    half = _equation("(1)/(2)", True)
+    half.kind, half.width_pt = "inline-math", 12.0
+    ph = chr(0xF0000)
+    text = f"A small fraction {ph} and σ sit inside the text."
+    block = Block("p0", BlockKind.PARAGRAPH, text, page=0,
+                  styles=[StyleRange(17, 18, math=True), StyleRange(23, 24, math=True)])
+    doc = Document("x.pdf", pages=[PageInfo(0, 595, 842, "text")], blocks=[block], language="en",
+                   inline_images={ph: half})
+    session = pipeline.Session(doc, CustomWords(tmp_path / "words.txt"))
+    pdf = session.export("pdf", FormatSettings())
+    said = [s.text for s in speech.reading_units(pdf, formulas=session.formula_marks)]
+    assert said[0] == "A small fraction 1 over 2 and sigma sit inside the text."
+
+
+def test_maths_set_as_text_that_text_cannot_tell_is_read_as_it_is_written(tmp_path):
+    """Where the text of a formula set as text cannot tell how it is built, it is not said as maths (rather as it is
+    written than as other maths): a root (how far it reaches), a power with an index of its own flattened into it
+    (e^(−x2)), a power before anything it belongs to, and maths that is only part of a word ("f" of "f(x)")."""
+    from dyslexia_converter.mathspeech import speak_text_formula
+    assert speak_text_formula("√^3x^3") == speak_text_formula("e^(−x2) dx") == speak_text_formula("^s ds") == ""
+    assert speak_text_formula("a_(i1i2)") == speak_text_formula("∥_2") == speak_text_formula("e^−") == ""
+    assert speak_text_formula("D_(KL)(q||p)") == speak_text_formula("q(_(t,i) k") == ""
+    assert speak_text_formula("m_(max_new)") == speak_text_formula("a_(chunk)^") == speak_text_formula("2,000") == ""
+    assert speak_text_formula("x_0 ∈ ℝ^n") == "x sub 0 is in the real numbers to the power n"
+    text = "The transform ∫ℝ f(x) dx, with α, β, γ, and δ."
+    pdf, session = _paragraphs(tmp_path, (text, [(14, 15, {"math": True}), (15, 16, {"math": True, "subscript": True}),
+                                                 (17, 18, {"math": True}), (31, 38, {"math": True}),
+                                                 (44, 45, {"math": True})]))
+    said = [s.text for s in speech.reading_units(pdf, formulas=session.formula_marks)]
+    assert said[0] == "The transform ∫ℝ f(x) dx, with alpha, beta, gamma, and delta."
+
+
+def test_bars_that_carry_a_power_or_index_are_said_as_absolute_value_and_norm():
+    assert speak("|x|^2") == "the absolute value of x end absolute value squared"
+    assert speak("‖x − y‖_2^2 ≤ 1") == ("the norm of x minus y end norm sub 2 squared, is less than or equal to 1")
+    assert speak("P(A|B)") == "P of A given B"
+    # a number is a power, and so is what is raised on e, a number or a set of numbers; a letter on a letter may be a
+    # label (W^Q): "superscript"; an ordinal is neither
+    assert speak("x^2") == "x squared" and speak("x^(−1)") == "x to the power minus 1"
+    assert speak("e^(iπ)") == "e to the power i pi" and speak("2^n") == "2 to the power n"
+    assert speak("ℝ^n") == "the real numbers to the power n"
+    assert speak("W_i^Q") == "W sub i superscript Q" and speak("l^(th)") == "l th"
+    # a stroke through a sign, set before it as a PDF may give it, is "not"
+    assert speak("d_(attn)\u0338 = d_(model)") == "d sub attn is not equal to d sub model"
+
+
+def test_brackets_and_punctuation_around_maths_set_as_text_stay(tmp_path):
+    """The brackets around a formula and the full stop after it stay, also where they were set with the formula (in
+    maths type): the sentence ends where it did."""
+    text = "The batch is xi. Then (yj). And 2^19 (219). The end."
+    pdf, session = _paragraphs(tmp_path, (text, [(13, 14, {"math": True}), (14, 15, {"math": True, "subscript": True}),
+                                                 (15, 16, {"math": True}), (23, 24, {"math": True}),
+                                                 (24, 25, {"math": True, "subscript": True}),
+                                                 (38, 39, {"math": True}),
+                                                 (39, 41, {"math": True, "superscript": True})]))
+    said = [s.text for s in speech.reading_units(pdf, formulas=session.formula_marks)]
+    assert said[:4] == ["The batch is x sub i.", "Then (y sub j).", "And 2^19 (2 to the power 19).", "The end."]
