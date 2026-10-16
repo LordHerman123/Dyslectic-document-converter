@@ -2268,9 +2268,12 @@ def _gap_tables(page: pymupdf.Page, lines: list[RawLine], existing: list[RawTabl
     return out
 
 
-def _aligned_table(run: list[tuple[float, list]]) -> Optional[tuple[Rect, list[list[str]]]]:
+def _aligned_table(run: list[tuple[float, list]], confidences: Optional[dict] = None
+                   ) -> Optional[tuple[Rect, list[list[str]]]]:
     """The table that rows of words make, if they make one (see :func:`_gap_tables`): (box, rows of cells), or
-    None. ``run``: per row its text size and its words, as (x0, y0, x1, y1, text, ...) from left to right."""
+    None. ``run``: per row its text size and its words, as (x0, y0, x1, y1, text, ...) from left to right.
+    ``confidences``: words read by text recognition (the sixth item has their confidence); filled with the lowest
+    confidence of the words of each cell, {(row, column): confidence}."""
     if len(run) < 3:
         return None
     size = max(sz for sz, _ in run)
@@ -2292,18 +2295,22 @@ def _aligned_table(run: list[tuple[float, list]]) -> Optional[tuple[Rect, list[l
             start = None
     if len(cuts) < 2:
         return None
-    rows = []
+    rows, lows = [], []
     for sz, ws in run:
         gaps = [(a[2], b[0]) for a, b in zip(ws, ws[1:]) if b[0] - a[2] >= 0.9 * sz]
         if any(not any(a < c < b for c in cuts) for a, b in gaps):
             return None  # a wide gap that is no column border: not a table
         cells = [""] * (len(cuts) + 1)
+        low: dict[int, float] = {}
         for w in ws:
             ci = sum(1 for c in cuts if (w[0] + w[2]) / 2 > c)
             cells[ci] = (cells[ci] + " " + w[4]).strip()
+            if confidences is not None:
+                low[ci] = min(low.get(ci, 100.0), w[5].confidence)
         if sum(1 for c in cells if c) < 2 or any(len(c.split()) > 6 for c in cells):
             return None
         rows.append(cells)
+        lows.append(low)
     if sum(1 for r in rows for c in r if c) < 0.6 * len(rows) * len(rows[0]):
         return None  # mostly empty cells: a formula or a scatter of labels, not a table
     lengths = sorted(len(c.split()) for r in rows for c in r if c)
@@ -2312,12 +2319,18 @@ def _aligned_table(run: list[tuple[float, list]]) -> Optional[tuple[Rect, list[l
     # a row whose first cell is empty goes on with the row above (a cell wrapped onto a second line), unless it is
     # numbers (a row of values without a label)
     merged: list[list[str]] = []
-    for r in rows:
+    merged_lows: list[dict[int, float]] = []
+    for r, low in zip(rows, lows):
         if len(merged) > 1 and not r[0] and not any(re.fullmatch(r"[-–+]?[\d.,±%]+", c) for c in r if c):
             merged[-1] = [(a + " " + b).strip() for a, b in zip(merged[-1], r)]
+            merged_lows[-1] = {ci: min(merged_lows[-1].get(ci, 100.0), low.get(ci, 100.0))
+                               for ci in set(merged_lows[-1]) | set(low)}
         else:
             merged.append(r)
+            merged_lows.append(low)
     rows = merged
+    if confidences is not None:
+        confidences.update({(ri, ci): v for ri, low in enumerate(merged_lows) for ci, v in low.items()})
     y0 = min(w[1] for _, ws in run for w in ws)
     y1 = max(w[3] for _, ws in run for w in ws)
     return (x0, y0, x1, y1), rows
@@ -2472,10 +2485,12 @@ def _ocr_tables(words: list, scale: float, crop: Callable[[Rect], ImageData]) ->
         confident = len(run) >= 3 and statistics.mean(
             w[5].confidence for _, rws in run for w in rws) >= 60  # not text read the wrong way up
         if confident:
-            got = _aligned_table(run)
+            conf: dict = {}
+            got = _aligned_table(run, conf)
             if got is not None:
                 rect, cells = got
-                tables.append(RawTable(rect, TableData(cells, crop(_expand(rect, 3)), True)))
+                tables.append(RawTable(rect, TableData(cells, crop(_expand(rect, 3)), True,
+                                                       unsure_cells=_doubtful_cells(cells, 1, conf))))
                 used |= {id(w[5]) for _, rws in run for w in rws}
         run = [(size, ws)] if ok else []
     # tables whose cells wrap over several lines: a header of short labels in three or more columns, then lines that
@@ -2606,25 +2621,77 @@ def _ocr_tables(words: list, scale: float, crop: Callable[[Rect], ImageData]) ->
                 else:
                     groups[-1].append(ws)
             n = len(cuts) + 1
+            def lowest(lines: list) -> dict[int, float]:
+                """The lowest confidence of the words in each column."""
+                low: dict[int, float] = {}
+                for w in (w for ws in lines for w in ws):
+                    low[column(w)] = min(low.get(column(w), 100.0), w[5].confidence)
+                return low
             # lines of headings that fill different columns are one row (a label set midway between two lines)
             head_rows: list[list[str]] = []
+            head_lows: list[dict[int, float]] = []
             for ws in reversed(heads):
                 r = [" ".join(w[4] for w in ws if column(w) == ci) for ci in range(n)]
                 if head_rows and all(not a or not b for a, b in zip(r, head_rows[0])):
                     head_rows[0] = [a or b for a, b in zip(r, head_rows[0])]
+                    head_lows[0] = {**head_lows[0], **lowest([ws])}  # (the two lines fill different columns)
                 else:
                     head_rows.insert(0, r)
+                    head_lows.insert(0, lowest([ws]))
             table_rows = head_rows + [[" ".join(w[4] for ws in g for w in ws if column(w) == ci) for ci in range(n)]
                                       for g in groups]
+            conf = {(ri, ci): v for ri, low in enumerate(head_lows + [lowest(g) for g in groups])
+                    for ci, v in low.items()}
             all_words = [w for ws in block for w in ws]
             rect = (min(w[0] for w in all_words), min(w[1] for w in all_words), max(w[2] for w in all_words),
                     max(w[3] for w in all_words))
-            tables.append(RawTable(rect, TableData(table_rows, crop(_expand(rect, 3)), True)))
+            tables.append(RawTable(rect, TableData(table_rows, crop(_expand(rect, 3)), True,
+                                                   unsure_cells=_doubtful_cells(table_rows, len(head_rows), conf))))
             used |= {id(w[5]) for w in all_words}
             k = j
         else:
             k += 1
     return tables, used
+
+
+CELL_UNCLEAR_CONF = 50  # a cell with a word text recognition read below this confidence is to check (as for text)
+_NUMBER = re.compile(r"[-−–+]?\d+(?:[.,]\d+)?%?")
+_DIGITS_OR_LIKE = re.compile(r"[-−–+]?[\dOoIl|.,]+%?")  # digits, or letters text recognition reads for them
+_POINT = re.compile(r"[.,]")
+
+
+def _doubtful_cells(rows: list[list[str]], header_rows: int, confidences: dict) -> dict:
+    """The cells of a scanned table to check, {(row, column): why}: "unclear" where text recognition was unsure of
+    a word (``confidences``: the lowest confidence of each cell's words), and "number" for a number unlike the
+    others in its column of numbers: letters among digits ("Ol" for 0.1), or a whole number among numbers with a
+    decimal point that has more digits than the decimals ("291" among 29.1 and 15.8: the point may have been
+    missed), unless the other numbers of its row are whole numbers too. Only flagged for the reader to check
+    against the original; the text is never changed."""
+    out = {k: "unclear" for k, v in confidences.items()
+           if 0 <= v < CELL_UNCLEAR_CONF and k[0] < len(rows) and k[1] < len(rows[k[0]]) and rows[k[0]][k[1]].strip()}
+    for ci in range(max((len(r) for r in rows), default=0)):
+        cells = [(ri, r[ci].strip()) for ri, r in enumerate(rows)
+                 if ri >= header_rows and ci < len(r) and r[ci].strip()]
+        numbers = [(ri, c) for ri, c in cells if _NUMBER.fullmatch(c)]
+        if len(numbers) < 3 or len(numbers) * 2 < len(cells):
+            continue  # not a column of numbers
+        for ri, c in cells:
+            if not _NUMBER.fullmatch(c) and _DIGITS_OR_LIKE.fullmatch(c) and re.search(r"[OoIl|]", c):
+                out.setdefault((ri, ci), "number")
+        places = Counter(len(_POINT.split(c.rstrip("%"))[1]) for _, c in numbers if _POINT.search(c))
+        if not places:
+            continue
+        decimals = places.most_common(1)[0][0]
+        for ri, c in numbers:
+            digits = re.sub(r"\D", "", c)
+            if _POINT.search(c) or len(digits) <= decimals or digits == "0":
+                continue
+            # a row of whole numbers (a table of settings, one quantity per row) is no slip of a decimal point
+            others = [o.strip() for k, o in enumerate(rows[ri]) if k != ci and _NUMBER.fullmatch(o.strip())]
+            if others and not any(_POINT.search(o) for o in others):
+                continue
+            out.setdefault((ri, ci), "number")
+    return out
 
 
 def _channels(rows: list[list], size: float, width: float = 0.9) -> list[float]:

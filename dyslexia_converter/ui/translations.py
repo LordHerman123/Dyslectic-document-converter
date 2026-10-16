@@ -2121,6 +2121,12 @@ T: dict[str, dict[str, str]] = {
     "Unclear in the scan": {"nl": "Onduidelijk in de scan", "fr": "Peu lisible dans le scan",
                             "de": "Im Scan undeutlich", "es": "Poco claro en el escaneo",
                             "it": "Poco chiaro nella scansione"},
+    "A number unlike the others in its column: compare it with the original": {
+        "nl": "Een getal dat afwijkt van de andere in zijn kolom: vergelijk het met het origineel",
+        "fr": "Un nombre différent des autres de sa colonne : comparez-le à l'original",
+        "de": "Eine Zahl, die anders ist als die übrigen in ihrer Spalte: mit dem Original vergleichen",
+        "es": "Un número distinto de los demás de su columna: compárelo con el original",
+        "it": "Un numero diverso dagli altri della sua colonna: confrontalo con l'originale"},
     "Not in the dictionary": {"nl": "Niet in het woordenboek", "fr": "Absent du dictionnaire",
                               "de": "Nicht im Wörterbuch", "es": "No está en el diccionario",
                               "it": "Non è nel dizionario"},

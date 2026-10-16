@@ -46,6 +46,13 @@ def _sentence_ends(text: str, start: int = 0, end: Optional[int] = None):
 ProgressFn = Callable[[str, float], None]
 
 
+def _cells(b) -> Optional[str]:
+    """A table's cells as one text, in which words in its cells are corrected (see :func:`model.table_text`); None
+    for a block of text."""
+    table = getattr(b, "table", None)
+    return b.editable_text if table is not None and not b.text else None
+
+
 @dataclass
 class Session:
     """A loaded document plus the user's reversible decisions about it."""
@@ -312,8 +319,15 @@ class Session:
                                                          if u.source in ("user", "check") and u.applied)
 
     def sentence_span(self, c: Correction) -> tuple[int, int]:
-        """Start and end (in the block's original text) of the sentence around a correction."""
+        """Start and end (in the block's original text) of the sentence around a correction; in a table, of its
+        cell."""
         b = self.document.block(c.block_id)
+        cells = _cells(b)
+        if cells is not None:
+            text = cells
+            start = max(text.rfind("\t", 0, c.start), text.rfind("\n", 0, c.start)) + 1
+            ends = [k for k in (text.find("\t", c.end), text.find("\n", c.end)) if k >= 0]
+            return start, min(ends, default=len(text))
         text = b.text if b else ""
         start = 0
         for m in _sentence_ends(text, 0, c.start):
@@ -330,7 +344,7 @@ class Session:
         if b is None:
             return c.original
         start, end = self.sentence_span(c)
-        text = b.text[start:end]
+        text = (_cells(b) or b.text)[start:end]
         for u in sorted((u for u in self.document.corrections
                          if u.source == "user" and u.block_id == c.block_id and start <= u.start and u.end <= end),
                         key=lambda u: u.start, reverse=True):
@@ -347,8 +361,9 @@ class Session:
         if b is None:
             return None
         start, end = self.sentence_span(c)
-        old = b.text[start:end]
-        new = new_text.strip()
+        cells = _cells(b)
+        old = (cells or b.text)[start:end]
+        new = new_text.strip() if cells is None else " ".join(new_text.split())  # (one table cell)
         if not new or new == old:
             return None
         # keep only the part that differs, widened to whole words
@@ -397,17 +412,18 @@ class Session:
         out: list[str] = []
         origin: list[tuple[int, int]] = []
         pos = 0
+        text = b.editable_text  # (a table's cells too)
         for c in sorted((c for c in effective_corrections(self.document.corrections_for(b.id))
-                         if b.text[c.start:c.end] == c.original), key=lambda c: c.start):
+                         if text[c.start:c.end] == c.original), key=lambda c: c.start):
             if c.start < pos:
                 continue  # overlaps one already put in
-            out.append(b.text[pos:c.start])
+            out.append(text[pos:c.start])
             origin += [(k, k + 1) for k in range(pos, c.start)]
             out.append(c.replacement)
             origin += [(c.start, c.end)] * len(c.replacement)
             pos = c.end
-        out.append(b.text[pos:])
-        origin += [(k, k + 1) for k in range(pos, len(b.text))]
+        out.append(text[pos:])
+        origin += [(k, k + 1) for k in range(pos, len(text))]
         return "".join(out), origin
 
     def passage_as_shown(self, block_id: str, start: int, end: int) -> str:
@@ -428,7 +444,9 @@ class Session:
         if b is None or not new or (new == " ".join(self.passage_as_shown(block_id, start, end).split())
                                     and latex == self.passage_latex(block_id, start, end)):
             return None
-        old = b.text[start:end]
+        old = b.editable_text[start:end]
+        if not b.text and b.table is not None and ("\t" in old or "\n" in old):
+            return None  # words of two table cells: each is corrected on its own
         edit = Correction(id=f"user-{uuid.uuid4().hex[:10]}", block_id=block_id, start=start, end=end,
                           original=old, replacement=new, confidence=1.0, status="accepted", source="user",
                           latex=latex.strip())
@@ -457,7 +475,8 @@ class Session:
         if b is None:
             return "", c.original, ""
         start, end = self.sentence_span(c)
-        before, after = b.text[start:c.start], b.text[c.end:end]
+        text = _cells(b) or b.text
+        before, after = text[start:c.start], text[c.end:end]
         if len(before) > limit:
             cut = before.find(" ", len(before) - limit)
             before = "…" + before[cut + 1 if cut >= 0 else len(before) - limit:]
