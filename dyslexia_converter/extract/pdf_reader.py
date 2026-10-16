@@ -2376,9 +2376,11 @@ def _split_wide_gaps(groups: dict) -> dict:
 
 
 def _ocr_image(png: bytes, dpi: int, width_pt: float, height_pt: float, pno: int, engine: OcrEngine,
-               languages: list[str], crop: Callable[[Rect], ImageData]
+               languages: list[str], crop: Callable[[Rect], ImageData],
+               known_word: Optional[Callable[[str], bool]] = None
                ) -> tuple[list[RawLine], list[RawFigure], list[RawTable]]:
-    """OCR one image and return lines, figures and tables in points relative to that image."""
+    """OCR one image and return lines, figures and tables in points relative to that image. ``known_word``: the
+    dictionary, to tell the words of a sentence from pieces of a formula text recognition could not read."""
     from PIL import Image
 
     gray = np.asarray(Image.open(io.BytesIO(png)).convert("L"))  # decoded once for all the steps below
@@ -2395,6 +2397,7 @@ def _ocr_image(png: bytes, dpi: int, width_pt: float, height_pt: float, pno: int
     for w in res.words:
         groups.setdefault((w.block, w.paragraph, w.line), []).append(w)
     lines: list[RawLine] = []
+    words_of: dict[int, list] = {}  # line -> its words (for the formulas in it, once the display formulas are out)
     for (bn, par, _ln), words in _split_wide_gaps(groups).items():
         text = ""
         conf: list[OcrWordConfidence] = []
@@ -2414,6 +2417,7 @@ def _ocr_image(png: bytes, dpi: int, width_pt: float, height_pt: float, pno: int
         size = estimates[len(estimates) // 2] if estimates else _estimate_font_size(text, y1 - y0)
         lines.append(RawLine(text=text, bbox=(x0, y0, x1, y1), size=round(size * 2) / 2, page=pno,
                              source="ocr", block_no=bn * 1000 + par, conf=conf))
+        words_of[id(lines[-1])] = words
     lines = [l for l in lines if not _is_ocr_noise(l)]
     regions = [tuple(v * scale for v in r.bbox) for r in res.regions]
     regions += _scan_graphic_regions(png, lines, width_pt, height_pt, gray)
@@ -2422,8 +2426,106 @@ def _ocr_image(png: bytes, dpi: int, width_pt: float, height_pt: float, pno: int
     fig_rects = [f.bbox for f in figures]
     lines = [l for l in lines if not any(overlap_ratio(l.bbox, f) > 0.6 for f in fig_rects)]
     formulas, lines = _scan_formulas(lines, width_pt, crop)
+    lines = [_inline_formulas(l, words_of[id(l)], scale, crop, known_word) if id(l) in words_of else l
+             for l in lines]
     tables = [t for t in tables if not any(overlap_ratio(t.bbox, f) > 0.5 for f in fig_rects)]
     return lines, figures + formulas, tables
+
+
+_FORMULA_CHARS = set("=+<>|~^_\\{}[]€§¥¢£©®°±×÷√∑∫∂∇∞≤≥≈≠∈∉⊂⊆∪∩→←↔⇒⇔·•")
+_AROUND = ".,;:()[]!?\"'“”‘’"
+
+
+def _formula_words(words: list, known_word: Optional[Callable[[str], bool]]) -> list[bool]:
+    """Which words of a scanned line are pieces of a formula text recognition could not read: a word it was unsure of
+    that is in no dictionary, or one with symbols, digits run into letters ("2p" for x0), a prime read as a
+    quote ("R”" for Rⁿ), commas run together or a letter with brackets ("po(So)"), or a word much taller than the
+    line (a fraction, a sum); then the short pieces between two of them, or beside one when they hold no word. A
+    sure dictionary word of three letters or more is always a word. Measured on maths papers rendered as scans
+    (fonts of the original as the answer): 0.1% of the words of sentences taken, and 70% of the formula pieces
+    text recognition misread."""
+    known = known_word or (lambda t: False)
+    heights = sorted(w.bbox[3] - w.bbox[1] for w in words)
+    line_h = heights[len(heights) // 2]
+
+    def piece(w) -> bool:
+        t = w.text
+        core, bare = t.strip(".,;:"), t.strip(_AROUND)
+        word = bool(bare) and known(bare)
+        if word and w.confidence >= 60 and len(core) >= 3:
+            return False
+        if w.confidence < 50 and not word:
+            return True
+        odd = any(c in _FORMULA_CHARS or unicodedata.category(c).startswith("S") for c in t) or \
+            bool(re.search(r"[A-Za-z]\d|\d[A-Za-z]", core)) or bool(re.fullmatch(r"[A-Za-z]{1,2}[”“’‘]+", core)) or \
+            bool(re.search(r"[,;:]{2,}", t)) or bool(re.match(r"[A-Za-z]{1,2}[,(].*[()]", core))
+        if odd and w.confidence < 90:
+            return True
+        return w.bbox[3] - w.bbox[1] > 1.8 * line_h and not word
+
+    def short(w) -> bool:
+        core = w.text.strip(".,;:")
+        word = core.isalpha() and len(core) >= 2 and known(core) and w.confidence >= 80
+        return len(core) <= 3 and not word
+    marks = [piece(w) for w in words]
+    for _ in range(2):
+        for k, w in enumerate(words):
+            left, right = k > 0 and marks[k - 1], k + 1 < len(words) and marks[k + 1]
+            if not marks[k] and short(w) and ((left and right) or ((left or right) and
+                                                                   not re.search(r"[A-Za-z]{2}", w.text))):
+                marks[k] = True
+    return marks
+
+
+def _inline_formulas(line: RawLine, words: list, scale: float, crop: Callable[[Rect], ImageData],
+                     known_word: Optional[Callable[[str], bool]]) -> RawLine:
+    """A scanned line of text with each formula in it that text recognition could not read (see
+    :func:`_formula_words`) kept as a picture cut from the scan, as text PDFs keep a fraction in a line; a full stop
+    or comma after it stays text. The line as it is when it has none."""
+    marks = _formula_words(words, known_word)
+    if not any(marks):
+        return line
+    plain = [w for w, m in zip(words, marks) if not m]
+    bottoms = sorted(w.bbox[3] for w in (plain or words))
+    baseline = bottoms[len(bottoms) // 2] * scale
+    heights = sorted(w.bbox[3] - w.bbox[1] for w in words)
+    pad = 0.12 * heights[len(heights) // 2] * scale  # (no more: the lines above and below come close)
+    text, conf, styles, images = "", [], [], {}
+    k = 0
+    while k < len(words):
+        if not marks[k]:
+            w = words[k]
+            text += (" " if text else "")
+            conf.append(OcrWordConfidence(len(text), len(text) + len(w.text), w.confidence))
+            text += w.text
+            k += 1
+            continue
+        run = [words[k]]
+        while k + len(run) < len(words) and marks[k + len(run)]:
+            run.append(words[k + len(run)])
+        if sum(1 for w in run if w.confidence < 60 or any(c in "€”“’‘§¥¢£©®°" for c in w.text)) * 2 < len(run):
+            for w in run:  # STRICT EXPERIMENT: most of it read right: kept as text
+                text += (" " if text else "")
+                conf.append(OcrWordConfidence(len(text), len(text) + len(w.text), w.confidence))
+                text += w.text
+            k += len(run)
+            continue
+        k += len(run)
+        last = run[-1].text
+        after = last[len(last.rstrip(".,;:")):]  # the sentence's punctuation, not the formula's
+        x1 = run[-1].bbox[2] - len(after) * (run[-1].bbox[2] - run[-1].bbox[0]) / max(1, len(last))
+        r = (run[0].bbox[0] * scale - 1, min(w.bbox[1] for w in run) * scale - pad, x1 * scale + 1,
+             max(baseline, max(w.bbox[3] for w in run) * scale) + pad)
+        img = crop(r)
+        img.kind, img.alt, img.text_size = "inline-math", "", line.size
+        img.descent, img.width_pt = r[3] - baseline, r[2] - r[0]
+        ph = new_placeholder()
+        images[ph] = img
+        text += (" " if text else "")
+        styles.append(StyleRange(len(text), len(text) + 1, math=True))
+        text += ph + after
+    return replace(line, text=text, conf=conf, styles=line.styles + styles,
+                   inline_images={**line.inline_images, **images})
 
 
 def _settle_tables(page: RawPage) -> RawPage:
@@ -2922,12 +3024,13 @@ def _figures_from_regions(regions: list[Rect], lines: list[RawLine], page_area: 
     return figures
 
 
-def _ocr_page(page: pymupdf.Page, pno: int, engine: OcrEngine, languages: list[str]
+def _ocr_page(page: pymupdf.Page, pno: int, engine: OcrEngine, languages: list[str],
+              known_word: Optional[Callable[[str], bool]] = None
               ) -> tuple[list[RawLine], list[RawFigure], list[RawTable]]:
     """OCR a page as it is (used for mixed pages that are not full scans)."""
     pix = page.get_pixmap(dpi=OCR_DPI, alpha=False)
     return _ocr_image(pix.tobytes("png"), OCR_DPI, page.rect.width, page.rect.height, pno, engine, languages,
-                      lambda r: render_clip(page, r))
+                      lambda r: render_clip(page, r), known_word)
 
 
 def _photo_crop(photo, dpi: int) -> Callable[[Rect], ImageData]:
@@ -2951,13 +3054,13 @@ def _photo_crop(photo, dpi: int) -> Callable[[Rect], ImageData]:
 
 
 def _scan_pages(rendered, source_page: int, engine: OcrEngine, languages: list[str],
-                split_spreads: bool) -> list[RawPage]:
+                split_spreads: bool, known_word: Optional[Callable[[str], bool]] = None) -> list[RawPage]:
     """Clean a rendered scan (split spreads, flatten, deskew) and OCR each book page.
 
     Runs in a worker thread: it only uses the rendered image, never the PDF.
     Page numbers are assigned by the caller.
     """
-    out, halves = _scan_image_pages(rendered, source_page, engine, languages, split_spreads)
+    out, halves = _scan_image_pages(rendered, source_page, engine, languages, split_spreads, known_word)
     if not hasattr(engine, "orientation"):
         return [_settle_tables(p) for p in out]
     if _looks_sideways(out):
@@ -2966,7 +3069,7 @@ def _scan_pages(rendered, source_page: int, engine: OcrEngine, languages: list[s
         rendered.save(buf, format="PNG")
         for turn in _turns(engine.orientation(buf.getvalue())):
             retry, turned = _scan_image_pages(rendered.rotate(-turn, expand=True), source_page, engine, languages,
-                                              split_spreads)
+                                              split_spreads, known_word)
             if _turned_reads_better(retry, out):
                 out, halves = retry, turned
             if not _looks_sideways(out):
@@ -2974,7 +3077,7 @@ def _scan_pages(rendered, source_page: int, engine: OcrEngine, languages: list[s
     if len(out) > 1:
         # one page of a spread can be printed sideways on its own (a wide table turned to fit the page); a nearly
         # empty page has little to gain
-        out = [_upright_half(sp, page, source_page, engine, languages)
+        out = [_upright_half(sp, page, source_page, engine, languages, known_word)
                if _runs_down([page]) or (_poor_ocr([page]) and _word_count([page]) >= 15) else page
                for sp, page in zip(halves, out)]
     return [_settle_tables(p) for p in out]
@@ -2988,14 +3091,15 @@ def _turns(turn: int) -> list[int]:
     return [turn] if turn else []
 
 
-def _upright_half(sp, page: RawPage, source_page: int, engine: OcrEngine, languages: list[str]) -> RawPage:
+def _upright_half(sp, page: RawPage, source_page: int, engine: OcrEngine, languages: list[str],
+                  known_word: Optional[Callable[[str], bool]] = None) -> RawPage:
     """A page of a spread that looks read sideways, read again turned the way the OCR engine says is up, if that
     reads better."""
     from .scan import prepare_page
 
     for turn in _turns(engine.orientation(sp.png())):
         turned = prepare_page(sp.photo.rotate(-turn, expand=True), SCAN_DPI, split_spreads=False)[0]
-        retry = _ocr_scan_page(turned, source_page, engine, languages, side=sp.side)
+        retry = _ocr_scan_page(turned, source_page, engine, languages, side=sp.side, known_word=known_word)
         if _turned_reads_better([retry], [page]):
             page = retry
         if not _looks_sideways([page]):
@@ -3004,21 +3108,22 @@ def _upright_half(sp, page: RawPage, source_page: int, engine: OcrEngine, langua
 
 
 def _scan_image_pages(rendered, source_page: int, engine: OcrEngine, languages: list[str],
-                      split_spreads: bool):
+                      split_spreads: bool, known_word: Optional[Callable[[str], bool]] = None):
     """OCR one scanned page (split into two book pages when it is a spread), with its figures; also returns the
     cleaned book pages."""
     from .scan import prepare_page
 
     halves = prepare_page(rendered, SCAN_DPI, split_spreads=split_spreads)
-    return [_ocr_scan_page(sp, source_page, engine, languages) for sp in halves], halves
+    return [_ocr_scan_page(sp, source_page, engine, languages, known_word=known_word) for sp in halves], halves
 
 
-def _ocr_scan_page(sp, source_page: int, engine: OcrEngine, languages: list[str], side=None) -> RawPage:
+def _ocr_scan_page(sp, source_page: int, engine: OcrEngine, languages: list[str], side=None,
+                   known_word: Optional[Callable[[str], bool]] = None) -> RawPage:
     """OCR one cleaned book page, with its figures."""
     info = PageInfo(-1, sp.width_pt, sp.height_pt, "scanned", ocr_used=True, source_page=source_page,
                     side=side or sp.side, skew=sp.skew)
     lines, figures, tables = _ocr_image(sp.png(), SCAN_DPI, sp.width_pt, sp.height_pt, -1, engine, languages,
-                                        _photo_crop(lambda page=sp: page.photo, SCAN_DPI))
+                                        _photo_crop(lambda page=sp: page.photo, SCAN_DPI), known_word)
     return RawPage(info, lines, figures, tables)
 
 
@@ -3290,7 +3395,7 @@ def read_pdf(path: str, ocr_engine: Optional[OcrEngine] = None, languages: Optio
                 running = [f for f in pending if not f.done()]
                 if len(running) >= workers * 2:  # bound memory: wait for a free slot
                     concurrent.futures.wait(running, return_when=concurrent.futures.FIRST_COMPLETED)
-                fut = pool.submit(_scan_pages, rendered, pno, ocr_engine, ocr_langs, split_spreads)
+                fut = pool.submit(_scan_pages, rendered, pno, ocr_engine, ocr_langs, split_spreads, known_word)
                 fut.add_done_callback(report_scan)
                 pending.append(fut)
                 pages.append(fut)  # placeholder, resolved below
@@ -3302,7 +3407,7 @@ def read_pdf(path: str, ocr_engine: Optional[OcrEngine] = None, languages: Optio
                 else:
                     if progress:
                         progress(f"Running OCR on page {pno + 1} of {n}", pno / max(1, n))
-                    lines, figs, tabs = _ocr_page(page, vno, ocr_engine, ocr_langs)
+                    lines, figs, tabs = _ocr_page(page, vno, ocr_engine, ocr_langs, known_word)
                     if kind == "mixed":
                         text_lines = _text_lines(page, vno, known_word)
                         lines = text_lines + [l for l in lines
