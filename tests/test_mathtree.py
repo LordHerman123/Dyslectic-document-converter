@@ -172,3 +172,17 @@ def test_small_capitals_starting_a_formula_are_part_of_its_line():
         page.insert_text((118, 100), "(q) = y", fontname="helv", fontsize=10)
     f = mathtree.linear(_page(draw), (95, 88, 160, 104), [], 10.0)
     assert f is not None and f.text.replace(" ", "") == "ELBO(q)=y"
+
+
+def test_big_delimiters_are_read_by_the_glyph_names_of_the_font():
+    """Extension fonts that add sizes to the CMEX codes (MathDesign: code 150 is "bracketleftbig6") draw whole big
+    delimiters at codes CMEX does not have: they are read by the glyph names the embedded font gives them. A piece
+    of a delimiter, or a name the font does not give, is not guessed."""
+    from types import SimpleNamespace
+    program = b"/Encoding 256 array\ndup 2 /bracketleftbig1 put\ndup 150 /bracketleftbig6 put\n" \
+              b"dup 153 /bracketrightbig6 put\ndup 160 /bracketlefttp put\nreadonly def"
+    parent = SimpleNamespace(extract_font=lambda xref: ("x", "pfa", "Type1", program))
+    fonts = [(7, "pfa", "Type1", "EVWXBV+MathDesign-CH-Regular-Extension-10", "F7", "")]
+    page = SimpleNamespace(parent=parent, get_fonts=lambda: fonts)
+    read = [mathtree._named_delimiter(page, "MathDesign-CH-Regular-Ex", c) for c in (150, 153, 160, 200)]
+    assert read == ["[", "]", "", ""]
