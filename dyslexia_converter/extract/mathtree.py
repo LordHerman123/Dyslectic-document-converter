@@ -657,6 +657,9 @@ class _Builder:
         for s in sorted(scripts, key=lambda a: a.x0):
             before = [b for b in on_line if b.x0 < s.x0 - 0.1]
             if not before:
+                if abs(s.base - main) <= 0.03 * top and s.kind not in built:
+                    level.append(s)  # small type starting the line (KL, ELBO in small capitals): part of it
+                    continue
                 raise Unsure("script before any symbol")
             owner = before[-1]
             raised = s.base < main - 0.08 * top
