@@ -13,26 +13,25 @@ At start a short notice says what to expect: the converter changes how a documen
 Everything works **locally and without AI**. AI is an optional extra that you turn on with your own
 API key. When it's on, it only sees small snippets that the local rules couldn't decide.
 
-## Download for Windows (version 1.20)
+## Download for Windows (version 1.21)
 
-Get `DyslexiaConverter-1.20.0-setup.exe` (installer) or `DyslexiaConverter-1.20.0-windows.zip` (unzip and
+Get `DyslexiaConverter-1.21.0-setup.exe` (installer) or `DyslexiaConverter-1.21.0-windows.zip` (unzip and
 double-click `DyslexiaConverter.exe`) from the repository's **Releases** page. Text recognition (Tesseract)
 is included; nothing else needs to be installed. How the Windows build is made: [windows/README.md](windows/README.md).
 
-## What's new in 1.20
+## What's new in 1.21
 
-* **Formulas read aloud:** reading aloud now says formulas as maths, in the document's language (English, Dutch,
-  German, French, Spanish or Italian), each in its place and marked while it is said. A formula the converter could not
-  read symbol by symbol is announced as "Formula" instead of being skipped.
-* **Tables in scanned pages** become real tables: columns stay apart, also when cells wrap over several lines, headings
-  over a group of columns are kept, and the text beside a table on a two-column page stays text.
-* **Tables without lines** in PDFs are recognised, and table cells keep their word breaks.
-* **Whole sentences, less clutter:** a bullet drawn apart stays with its item, a large number at the start of a section
-  goes before it, words split by a soft hyphen are joined, and page numbers of picture pages, publisher badges and
-  labels such as "COMMENT" above the title no longer get in the way.
-* **Formulas** keep their structure in more cases (limits such as lim ε→0⁺ in papers set in small type, sums in
-  derivations), and the converter leaves a formula as its picture rather than guess where part of it belongs.
-* **Notes:** the last line of a reference at the foot of a page no longer ends up under Notes.
+* **Maths in a sentence read aloud as maths:** x with an index i is said “x sub i”, ≤ is “is less than or equal to”,
+  |x|² is “the absolute value of x, squared”. Where the text cannot show how such maths is built (a root, for
+  example), it is read as it is written rather than guessed.
+* **Doubtful numbers in scanned tables** are flagged for checking against the original (never changed): a number
+  unlike the others in its column, or a word text recognition was unsure of. They can be corrected like any word.
+* **Tables printed sideways** in text PDFs (turned to fit the page) are read as real tables; a page that continues one
+  gets its headings.
+* **Formulas** keep their structure in more cases: small capitals such as KL at the start of a formula, big brackets
+  in some fonts, and a fraction under a root.
+* **Scanned maths papers:** a line such as “A piecewise definition:” is no longer taken for a heading, and small marks
+  under a formula stay in its picture.
 
 ## macOS and Linux
 
