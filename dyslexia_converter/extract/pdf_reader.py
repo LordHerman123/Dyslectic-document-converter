@@ -374,6 +374,174 @@ def _unspace(text: str, styles: list[StyleRange], positions: list[tuple[int, flo
     return " " * lead + out, [st for st in moved if st.end > st.start]
 
 
+SIDEWAYS_CHARS = 200  # a page with this much text running up or down it, and almost none across, is printed sideways
+CONTINUED_RE = re.compile(r"^\(?continued\)?\.?$", re.I)  # the note under a table that goes on on the next page
+
+
+def _upright_copy(page: pymupdf.Page) -> Optional[pymupdf.Page]:
+    """A page printed sideways (a wide table turned to fit the page: nearly all its text runs up or down it), drawn
+    upright on a page of its own, its text and rules still text and rules; None for any other page."""
+    if page.rotation:
+        return None
+    across, ways = 0, Counter()
+    try:
+        blocks = page.get_text("dict", flags=0)["blocks"]  # (only the text's direction is needed: quick)
+    except Exception:
+        return None
+    for b in blocks:
+        for l in b.get("lines", []):
+            n = sum(len(sp["text"].strip()) for sp in l["spans"])
+            if abs(l["dir"][1]) < 0.1:
+                across += n
+            elif abs(l["dir"][0]) < 0.1:
+                ways[round(l["dir"][1])] += n
+    sideways = sum(ways.values())
+    if sideways <= SIDEWAYS_CHARS or sideways <= 20 * across:
+        return None
+    way, n = ways.most_common(1)[0]
+    if n < 0.9 * sideways or has_invisible_text(page) or image_coverage(page) > 0.5:
+        return None  # (a scan's text layer: the scan is read as a scan)
+    turned = pymupdf.open().new_page(width=page.rect.height, height=page.rect.width)
+    turned.show_pdf_page(turned.rect, page.parent, page.number, rotate=-90 if way < 0 else 90)
+    return turned
+
+
+def _wrapped_table(page: pymupdf.Page, known_word: Optional[Callable[[str], bool]] = None,
+                   heads: Optional[list[list[str]]] = None) -> Optional[RawTable]:
+    """A table of text whose cells wrap over several lines, with no rules between its rows or columns (a wide table,
+    often printed sideways): its columns are where every line has a gap, a row starts after more room than between
+    the lines of a cell, and the lines above a rule near its top are its headings. A table without headings (a
+    page of a table continued) gets ``heads``, the headings of the table before it, when they have as many
+    columns. None when the page holds no such table."""
+    try:
+        blocks = page.get_text("dict")["blocks"]
+        words = page.get_text("words")
+        drawings = page.get_drawings()
+    except Exception:
+        return None
+    across = [tuple(l["bbox"]) for b in blocks for l in b.get("lines", []) if abs(l["dir"][1]) < 0.1]
+    words = [w for w in words if w[4].strip() and any(overlap_ratio(tuple(w[:4]), r) > 0.8 for r in across)]
+    lines: list[list] = []
+    for w in sorted(words, key=lambda w: ((w[1] + w[3]) / 2, w[0])):
+        cy = (w[1] + w[3]) / 2
+        if lines and abs(cy - lines[-1][0]) < 0.4 * (w[3] - w[1]):
+            lines[-1][1].append(w)
+        else:
+            lines.append([cy, [w]])
+    for ln in lines:
+        ln[1].sort(key=lambda w: w[0])
+
+    def text(ln) -> str:
+        return " ".join(w[4] for w in ln[1])
+    # the caption ("Table 1.", after the page number: "524 Table 1 (continued)"), "(continued)" and the page
+    # number are not the table's
+    lines = [ln for ln in lines if not CAPTION_RE.match(re.sub(r"^\d+\s+", "", text(ln)))
+             and not CONTINUED_RE.match(text(ln).strip()) and not text(ln).strip().isdigit()]
+    if len(lines) < 4:
+        return None
+    height = statistics.median(w[3] - w[1] for ln in lines for w in ln[1])
+    rules = sorted(r[1] for r in _horizontal_rules(drawings) if r[2] - r[0] > 0.5 * (
+        max(w[2] for ln in lines for w in ln[1]) - min(w[0] for ln in lines for w in ln[1])))
+    # headings: a few lines above a rule with the rest of the table below it
+    head_lines: list = []
+    for y in rules:
+        above = [ln for ln in lines if ln[0] < y]
+        if 1 <= len(above) <= 5 and len(above) * 2 < len(lines):
+            head_lines = above
+            break
+    body = [ln for ln in lines if ln not in head_lines]
+    if len(body) < 3:
+        return None
+    # the columns: gaps that nearly every line of the body has at the same place (a long word may run into one)
+    x0 = int(min(w[0] for ln in body for w in ln[1])) - 1
+    x1 = int(max(w[2] for ln in body for w in ln[1])) + 2
+    covered = [0] * (x1 - x0)
+    for ln in body:
+        seen = [False] * (x1 - x0)
+        for w in ln[1]:
+            for x in range(int(w[0]) - x0, min(x1 - x0, int(w[2]) + 1 - x0)):
+                seen[x] = True
+        covered = [c + v for c, v in zip(covered, seen)]
+    min_gap, limit = max(3.0, 0.35 * height), max(2, round(0.15 * len(body)))
+
+    def runs(empty: Callable[[int], bool]) -> list[tuple[int, int]]:
+        """The stretches between the table's edges where ``empty`` holds for the coverage."""
+        out, start = [], None
+        for i, c in enumerate(covered):
+            if empty(c):
+                start = i if start is None else start
+            elif start is not None:
+                if start > 0:
+                    out.append((start, i))
+                start = None
+        return out
+    # gaps no line has words in; and the left edges where many lines start a cell after a wide gap (a long word
+    # may run into the gap before such a column), the further lines of a cell often set in a little
+    cuts = [x0 + (a + b) / 2 for a, b in runs(lambda c: c == 0) if b - a >= min_gap]
+    starts = sorted(w[0] for ln in body for v, w in zip(ln[1], ln[1][1:]) if w[0] - v[2] >= min_gap)
+    support = max(3, round(0.2 * len(body)))
+    while starts:
+        edge = [x for x in starts if x - starts[0] <= 2 * min_gap]
+        if len(edge) >= support:
+            cuts.append(starts[0] - 0.5)
+        starts = starts[len(edge):]
+    middles = [(w[0] + w[2]) / 2 for ln in lines for w in ln[1]]
+    kept: list[float] = []
+    for c in sorted(cuts):
+        if not kept or any(kept[-1] < m < c for m in middles):  # no words between two borders: one border
+            kept.append(c)
+    cuts = kept
+    n = len(cuts) + 1
+    if not 3 <= n <= 12:
+        return None
+
+    def column(w) -> int:
+        return sum(1 for c in cuts if (w[0] + w[2]) / 2 > c)
+
+    def joined(parts: list[str]) -> str:
+        """The lines of a cell as one text, a word hyphenated at a line end joined again."""
+        out = ""
+        for part in parts:
+            m, r = re.search(r"(\w+)-$", out), re.match(r"([a-z]\w*)", part)
+            if m and r:
+                whole = known_word is not None and known_word(m.group(1) + r.group(1))
+                out = (out[:-1] if whole else out) + part
+            else:
+                out = (out + " " + part).strip()
+        return out
+    # a row of the table starts after more room than between the lines of a cell, or where the first column has
+    # words again after lines without
+    gaps = [b[0] - a[0] for a, b in zip(body, body[1:])]
+    pitch = statistics.median(gaps)
+    groups = [[body[0]]]
+    for g, prev, ln in zip(gaps, body, body[1:]):
+        first = any(column(w) == 0 for w in ln[1])
+        if g > 1.25 * pitch or (first and not any(column(w) == 0 for w in prev[1])):
+            groups.append([ln])
+        else:
+            groups[-1].append(ln)
+    rows = [[joined([" ".join(w[4] for w in ln[1] if column(w) == ci) for ln in g
+                     if any(column(w) == ci for w in ln[1])]) for ci in range(n)] for g in groups]
+    if sum(1 for r in rows for c in r if c) < 0.6 * n * len(rows):
+        return None  # mostly empty cells: not a table of text
+    if head_lines:
+        # a heading wider than its column is placed by its middle
+        head = [joined([" ".join(w[4] for w in ln[1] if sum(1 for c in cuts if (w[0] + w[2]) / 2 > c) == ci)
+                        for ln in head_lines]) for ci in range(n)]
+        rows.insert(0, head)
+        header_rows = 1
+    elif heads and all(len(h) == n for h in heads):
+        rows = [list(h) for h in heads] + rows
+        header_rows = len(heads)
+    else:
+        header_rows = 0
+    every = [w for ln in lines for w in ln[1]]
+    rect = (min(w[0] for w in every), min(w[1] for w in every), max(w[2] for w in every), max(w[3] for w in every))
+    if sum(1 for d in drawings if d["rect"].height > 1.6 and overlap_ratio(tuple(d["rect"]), rect) > 0.5) > 5:
+        return None  # boxes and lines among the words: a diagram, not a table of text
+    return RawTable(rect, TableData(rows, render_clip(page, _expand(rect, 2)), True, header_rows=header_rows))
+
+
 def _rotated_blocks(page: pymupdf.Page, taken: list[Rect]) -> list[RawFigure]:
     """Text set sideways (a landscape table, a rotated diagram) cannot be reflowed; keep it as a picture.
 
@@ -2268,9 +2436,12 @@ def _gap_tables(page: pymupdf.Page, lines: list[RawLine], existing: list[RawTabl
     return out
 
 
-def _aligned_table(run: list[tuple[float, list]]) -> Optional[tuple[Rect, list[list[str]]]]:
+def _aligned_table(run: list[tuple[float, list]], confidences: Optional[dict] = None
+                   ) -> Optional[tuple[Rect, list[list[str]]]]:
     """The table that rows of words make, if they make one (see :func:`_gap_tables`): (box, rows of cells), or
-    None. ``run``: per row its text size and its words, as (x0, y0, x1, y1, text, ...) from left to right."""
+    None. ``run``: per row its text size and its words, as (x0, y0, x1, y1, text, ...) from left to right.
+    ``confidences``: words read by text recognition (the sixth item has their confidence); filled with the lowest
+    confidence of the words of each cell, {(row, column): confidence}."""
     if len(run) < 3:
         return None
     size = max(sz for sz, _ in run)
@@ -2292,18 +2463,22 @@ def _aligned_table(run: list[tuple[float, list]]) -> Optional[tuple[Rect, list[l
             start = None
     if len(cuts) < 2:
         return None
-    rows = []
+    rows, lows = [], []
     for sz, ws in run:
         gaps = [(a[2], b[0]) for a, b in zip(ws, ws[1:]) if b[0] - a[2] >= 0.9 * sz]
         if any(not any(a < c < b for c in cuts) for a, b in gaps):
             return None  # a wide gap that is no column border: not a table
         cells = [""] * (len(cuts) + 1)
+        low: dict[int, float] = {}
         for w in ws:
             ci = sum(1 for c in cuts if (w[0] + w[2]) / 2 > c)
             cells[ci] = (cells[ci] + " " + w[4]).strip()
+            if confidences is not None:
+                low[ci] = min(low.get(ci, 100.0), w[5].confidence)
         if sum(1 for c in cells if c) < 2 or any(len(c.split()) > 6 for c in cells):
             return None
         rows.append(cells)
+        lows.append(low)
     if sum(1 for r in rows for c in r if c) < 0.6 * len(rows) * len(rows[0]):
         return None  # mostly empty cells: a formula or a scatter of labels, not a table
     lengths = sorted(len(c.split()) for r in rows for c in r if c)
@@ -2312,12 +2487,18 @@ def _aligned_table(run: list[tuple[float, list]]) -> Optional[tuple[Rect, list[l
     # a row whose first cell is empty goes on with the row above (a cell wrapped onto a second line), unless it is
     # numbers (a row of values without a label)
     merged: list[list[str]] = []
-    for r in rows:
+    merged_lows: list[dict[int, float]] = []
+    for r, low in zip(rows, lows):
         if len(merged) > 1 and not r[0] and not any(re.fullmatch(r"[-–+]?[\d.,±%]+", c) for c in r if c):
             merged[-1] = [(a + " " + b).strip() for a, b in zip(merged[-1], r)]
+            merged_lows[-1] = {ci: min(merged_lows[-1].get(ci, 100.0), low.get(ci, 100.0))
+                               for ci in set(merged_lows[-1]) | set(low)}
         else:
             merged.append(r)
+            merged_lows.append(low)
     rows = merged
+    if confidences is not None:
+        confidences.update({(ri, ci): v for ri, low in enumerate(merged_lows) for ci, v in low.items()})
     y0 = min(w[1] for _, ws in run for w in ws)
     y1 = max(w[3] for _, ws in run for w in ws)
     return (x0, y0, x1, y1), rows
@@ -2472,10 +2653,12 @@ def _ocr_tables(words: list, scale: float, crop: Callable[[Rect], ImageData]) ->
         confident = len(run) >= 3 and statistics.mean(
             w[5].confidence for _, rws in run for w in rws) >= 60  # not text read the wrong way up
         if confident:
-            got = _aligned_table(run)
+            conf: dict = {}
+            got = _aligned_table(run, conf)
             if got is not None:
                 rect, cells = got
-                tables.append(RawTable(rect, TableData(cells, crop(_expand(rect, 3)), True)))
+                tables.append(RawTable(rect, TableData(cells, crop(_expand(rect, 3)), True,
+                                                       unsure_cells=_doubtful_cells(cells, 1, conf))))
                 used |= {id(w[5]) for _, rws in run for w in rws}
         run = [(size, ws)] if ok else []
     # tables whose cells wrap over several lines: a header of short labels in three or more columns, then lines that
@@ -2606,25 +2789,77 @@ def _ocr_tables(words: list, scale: float, crop: Callable[[Rect], ImageData]) ->
                 else:
                     groups[-1].append(ws)
             n = len(cuts) + 1
+            def lowest(lines: list) -> dict[int, float]:
+                """The lowest confidence of the words in each column."""
+                low: dict[int, float] = {}
+                for w in (w for ws in lines for w in ws):
+                    low[column(w)] = min(low.get(column(w), 100.0), w[5].confidence)
+                return low
             # lines of headings that fill different columns are one row (a label set midway between two lines)
             head_rows: list[list[str]] = []
+            head_lows: list[dict[int, float]] = []
             for ws in reversed(heads):
                 r = [" ".join(w[4] for w in ws if column(w) == ci) for ci in range(n)]
                 if head_rows and all(not a or not b for a, b in zip(r, head_rows[0])):
                     head_rows[0] = [a or b for a, b in zip(r, head_rows[0])]
+                    head_lows[0] = {**head_lows[0], **lowest([ws])}  # (the two lines fill different columns)
                 else:
                     head_rows.insert(0, r)
+                    head_lows.insert(0, lowest([ws]))
             table_rows = head_rows + [[" ".join(w[4] for ws in g for w in ws if column(w) == ci) for ci in range(n)]
                                       for g in groups]
+            conf = {(ri, ci): v for ri, low in enumerate(head_lows + [lowest(g) for g in groups])
+                    for ci, v in low.items()}
             all_words = [w for ws in block for w in ws]
             rect = (min(w[0] for w in all_words), min(w[1] for w in all_words), max(w[2] for w in all_words),
                     max(w[3] for w in all_words))
-            tables.append(RawTable(rect, TableData(table_rows, crop(_expand(rect, 3)), True)))
+            tables.append(RawTable(rect, TableData(table_rows, crop(_expand(rect, 3)), True,
+                                                   unsure_cells=_doubtful_cells(table_rows, len(head_rows), conf))))
             used |= {id(w[5]) for w in all_words}
             k = j
         else:
             k += 1
     return tables, used
+
+
+CELL_UNCLEAR_CONF = 50  # a cell with a word text recognition read below this confidence is to check (as for text)
+_NUMBER = re.compile(r"[-−–+]?\d+(?:[.,]\d+)?%?")
+_DIGITS_OR_LIKE = re.compile(r"[-−–+]?[\dOoIl|.,]+%?")  # digits, or letters text recognition reads for them
+_POINT = re.compile(r"[.,]")
+
+
+def _doubtful_cells(rows: list[list[str]], header_rows: int, confidences: dict) -> dict:
+    """The cells of a scanned table to check, {(row, column): why}: "unclear" where text recognition was unsure of
+    a word (``confidences``: the lowest confidence of each cell's words), and "number" for a number unlike the
+    others in its column of numbers: letters among digits ("Ol" for 0.1), or a whole number among numbers with a
+    decimal point that has more digits than the decimals ("291" among 29.1 and 15.8: the point may have been
+    missed), unless the other numbers of its row are whole numbers too. Only flagged for the reader to check
+    against the original; the text is never changed."""
+    out = {k: "unclear" for k, v in confidences.items()
+           if 0 <= v < CELL_UNCLEAR_CONF and k[0] < len(rows) and k[1] < len(rows[k[0]]) and rows[k[0]][k[1]].strip()}
+    for ci in range(max((len(r) for r in rows), default=0)):
+        cells = [(ri, r[ci].strip()) for ri, r in enumerate(rows)
+                 if ri >= header_rows and ci < len(r) and r[ci].strip()]
+        numbers = [(ri, c) for ri, c in cells if _NUMBER.fullmatch(c)]
+        if len(numbers) < 3 or len(numbers) * 2 < len(cells):
+            continue  # not a column of numbers
+        for ri, c in cells:
+            if not _NUMBER.fullmatch(c) and _DIGITS_OR_LIKE.fullmatch(c) and re.search(r"[OoIl|]", c):
+                out.setdefault((ri, ci), "number")
+        places = Counter(len(_POINT.split(c.rstrip("%"))[1]) for _, c in numbers if _POINT.search(c))
+        if not places:
+            continue
+        decimals = places.most_common(1)[0][0]
+        for ri, c in numbers:
+            digits = re.sub(r"\D", "", c)
+            if _POINT.search(c) or len(digits) <= decimals or digits == "0":
+                continue
+            # a row of whole numbers (a table of settings, one quantity per row) is no slip of a decimal point
+            others = [o.strip() for k, o in enumerate(rows[ri]) if k != ci and _NUMBER.fullmatch(o.strip())]
+            if others and not any(_POINT.search(o) for o in others):
+                continue
+            out.setdefault((ri, ci), "number")
+    return out
 
 
 def _channels(rows: list[list], size: float, width: float = 0.9) -> list[float]:
@@ -2797,7 +3032,9 @@ def _scan_formulas(lines: list[RawLine], width: float, crop: Callable[[Rect], Im
     for l in sorted(flagged, key=lambda l: l.y0):
         for reg in regions:
             r = reg[0]
-            if l.y0 - r[3] < 1.5 * l.size and min(r[2], l.x1) - max(r[0], l.x0) > -0.1 * text_w and \
+            # (a line of small marks under a formula reaches as far as the formula's own lines)
+            reach = 1.5 * max([l.size] + [m.size for m in reg[1]])
+            if l.y0 - r[3] < reach and min(r[2], l.x1) - max(r[0], l.x0) > -0.1 * text_w and \
                     not text_between(r, l):
                 reg[0] = _union(r, l.bbox)
                 reg[1].append(l)
@@ -3138,8 +3375,9 @@ def _replace_garbled_halves(page: pymupdf.Page, lines: list[RawLine], figures: l
 
 
 def _estimate_font_size(text: str, height: float) -> float:
-    """Estimate the font size of an OCR line from its ink height."""
-    has_asc = bool(re.search(r"[A-Zbdfhklt0-9(\[{|/]", text))
+    """Estimate the font size of an OCR line from its ink height (the dots of i and j reach about as high as
+    ascenders)."""
+    has_asc = bool(re.search(r"[A-Zbdfhijklt0-9(\[{|/]", text))
     has_desc = bool(re.search(r"[gjpqy,;(\[{|]", text))
     em = (0.72 if has_asc else 0.5) + (0.22 if has_desc else 0.0)
     return round(height / em * 2) / 2
@@ -3264,10 +3502,19 @@ def read_pdf(path: str, ocr_engine: Optional[OcrEngine] = None, languages: Optio
                 eta = f" - about {_duration(left)} left" if done < scans_total else ""
                 progress(f"Read {done} of {scans_total} scanned page(s){eta}", done / scans_total)
 
+        heads: Optional[list[list[str]]] = None  # the headings of a table on the page before, printed sideways
         for pno, page in enumerate(doc):
             if not first <= pno + 1 <= last:
                 continue
             _normalise_rotation(page)
+            # a page printed sideways with a table of text: read upright (other sideways text stays a picture)
+            turned = _upright_copy(page)
+            wrapped = _wrapped_table(turned, known_word, heads) if turned is not None else None
+            if wrapped is not None:
+                page = turned
+                heads = wrapped.table.rows[:wrapped.table.header_rows]
+            else:
+                heads = None
             if progress and not scans_total:
                 progress(f"Reading page {pno + 1} of {n}", pno / max(1, n))
             kind = classify_page(page)
@@ -3313,12 +3560,16 @@ def read_pdf(path: str, ocr_engine: Optional[OcrEngine] = None, languages: Optio
                     info.ocr_used = True
             else:
                 all_lines = _text_lines(page, vno, known_word)
-                rp.tables = _tables(page)
-                rp.tables += _rule_tables(page, rp.tables)
-                rp.tables += _caption_tables(page, all_lines, rp.tables)
+                if wrapped is not None:
+                    rp.tables = [wrapped]
+                    all_lines = [l for l in all_lines if not CONTINUED_RE.match(l.text.strip())]
+                else:
+                    rp.tables = _tables(page)
+                    rp.tables += _rule_tables(page, rp.tables)
+                    rp.tables += _caption_tables(page, all_lines, rp.tables)
                 table_rects = [t.bbox for t in rp.tables]
                 lines = [l for l in all_lines if not any(overlap_ratio(l.bbox, t) > 0.6 for t in table_rects)]
-                rp.figures = _figures(page, doc, lines, table_rects, repeated)
+                rp.figures = _figures(page, page.parent, lines, table_rects, repeated)
                 rp.figures += _rotated_blocks(page, [f.bbox for f in rp.figures] + table_rects)
                 fig_rects = [f.bbox for f in rp.figures]
                 lines = [l for l in lines if not any(overlap_ratio(l.bbox, f) > 0.6 for f in fig_rects)]

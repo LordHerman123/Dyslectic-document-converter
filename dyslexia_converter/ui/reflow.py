@@ -381,14 +381,16 @@ class ReflowMode:
         if self._reading and self._read_pos is not None:
             self._mark_reading(self._read_pos, 0)
 
-    def _runs(self, it: RItem) -> list[Run]:
-        """The item's runs, with small formula pictures written as their text (a picture cannot sit in a line)."""
+    def _runs(self, it: RItem, pictures_as_maths: bool = True) -> list[Run]:
+        """The item's runs, with small formula pictures written as their text (a picture cannot sit in a line);
+        ``pictures_as_maths``: that text is marked as maths (else it is a formula of its own, not part of the maths
+        set as text around it)."""
         pics = self.result.inline_images if self.result else {}
         out = []
         for r in it.runs:
             if any(ch in pics for ch in r.text):
                 text = "".join((" " + (pics[ch].alt or "▢") + " ") if ch in pics else ch for ch in r.text)
-                out.append(Run(text, bold=r.bold, italic=r.italic, math=True))
+                out.append(Run(text, bold=r.bold, italic=r.italic, math=pictures_as_maths))
             else:
                 out.append(r)
         return out
@@ -571,7 +573,7 @@ class ReflowMode:
     # ------------------------------------------------------------------ reading aloud
     def _sentences(self) -> None:
         """The text as sentences of words, each word knowing its item and place, for the speech engine."""
-        from ..mathspeech import speak
+        from ..mathspeech import formulas_in_runs, speak
         from ..render.labels import label
 
         units, spans = [], []
@@ -588,12 +590,14 @@ class ReflowMode:
                 continue
             text = self.plain(it)
             words = [(m.start(), m.end(), m.group()) for m in re.finditer(r"\S+", text)]
+            words, said = _with_text_formulas(text, words, formulas_in_runs(self._runs(it, False)), lang)
             cur, cur_spans = [], []
             for k, (a, b, w) in enumerate(words):
                 start = sum(len(x.text) + 1 for x in cur)
                 cur.append(speech.Word(w, i, [], start))
                 cur_spans.append((a, b))
-                nxt = words[k + 1][2] if k + 1 < len(words) else None
+                # (a sentence may start with a formula, said in words that start in lower case)
+                nxt = ("X" if k + 1 in said else words[k + 1][2]) if k + 1 < len(words) else None
                 if len(cur) >= speech.MAX_WORDS or speech._ends_sentence(w, nxt) or nxt is None:
                     units.append(speech.Sentence(cur))
                     spans.append(cur_spans)
@@ -801,6 +805,32 @@ class ReflowMode:
             self.read_btn.icon = ft.Icons.PLAY_ARROW_ROUNDED
             self.read_btn.tooltip = t("Continue") if self._read_pos is not None else t("Read aloud")
         self.stop_btn.visible = self._reading or self._read_pos is not None
+
+
+def _with_text_formulas(text: str, words: list, formulas: list, language: str) -> tuple[list, set]:
+    """``words`` (start, end, word) of ``text`` with each formula set as text said as maths in one word over its
+    place; returns them and the numbers of those words. A formula that is part of a longer word ("x-axis") or cannot
+    be said for sure (see :func:`mathspeech.speak_text_formula`) leaves the words as they are; punctuation after it
+    stays."""
+    from ..mathspeech import speak_text_formula
+
+    out = [(a, b, w, False) for a, b, w in words]
+    for s0, s1, formula in reversed(formulas):
+        k = [n for n, (a, b, _, _) in enumerate(out) if a < s1 and b > s0]
+        if not k:
+            continue
+        a, b = out[k[0]][0], out[k[-1]][1]
+        if not re.fullmatch(r"[(\[{]*", text[a:s0] if a < s0 else "") or \
+                not re.fullmatch(r"[.,;:!?)\]}]*", text[s1:b] if b > s1 else ""):
+            continue
+        spoken = speak_text_formula(formula, language)
+        if spoken:
+            # (brackets around it and punctuation after it are kept, also punctuation set with the formula: "γ,")
+            before, after = (text[a:s0] if a < s0 else ""), (text[s1:b] if b > s1 else "")
+            stop = re.search(r"[.,;:!?]*$", text[a:b]).group()
+            spoken = before + spoken.rstrip(" .,;:!?") + re.sub(r"[.,;:!?]", "", after) + stop
+            out[k[0]:k[-1] + 1] = [(a, b, spoken, True)]
+    return [(a, b, w) for a, b, w, _ in out], {n for n, e in enumerate(out) if e[3]}
 
 
 @functools.lru_cache(maxsize=20000)

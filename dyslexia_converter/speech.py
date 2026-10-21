@@ -105,16 +105,18 @@ def reading_units(pdf: bytes | str, max_words: int = MAX_WORDS, skip_pages: froz
                 raw.append((text, pno, (x0, y0, x1, y1), (pno, block)))
     finally:
         doc.close()
+    said: set[int] = set()  # the formulas said as maths (by their place, a box of their own)
     if formulas:
         raw = _with_formulas(raw, [f for f in formulas if f[0] not in skip_pages], language)
+        said = {id(e[2]) for e in raw if len(e) > 4}
     words: list[tuple[Word, tuple[int, int]]] = []
     i = 0
     while i < len(raw):
-        text, pno, rect, blk = raw[i]
+        text, pno, rect, blk = raw[i][:4]
         rects = [rect]
         # "con-" at the end of a line + "tinues": one word
         while text.endswith(("-", "­")) and len(text) > 2 and i + 1 < len(raw) and raw[i + 1][0][:1].islower() \
-                and raw[i + 1][2][1] > rect[1] + 1:
+                and id(raw[i + 1][2]) not in said and raw[i + 1][2][1] > rect[1] + 1:
             i += 1
             text = text[:-1] + raw[i][0]
             rects.append(raw[i][2])
@@ -125,7 +127,9 @@ def reading_units(pdf: bytes | str, max_words: int = MAX_WORDS, skip_pages: froz
     for n, (w, blk) in enumerate(words):
         cur.words.append(w)
         nxt = words[n + 1] if n + 1 < len(words) else None
-        end = nxt is None or _ends_sentence(w.text, nxt[0].text) or nxt[1] != blk or len(cur.words) >= max_words
+        # a sentence may start with a formula ("⊙ is ..."), said in words that start in lower case
+        nxt_text = "X" if nxt is not None and id(nxt[0].rects[0]) in said else (nxt[0].text if nxt else None)
+        end = nxt is None or _ends_sentence(w.text, nxt_text) or nxt[1] != blk or len(cur.words) >= max_words
         if end:
             sentences.append(cur)
             cur = Sentence()
@@ -139,15 +143,23 @@ def reading_units(pdf: bytes | str, max_words: int = MAX_WORDS, skip_pages: froz
 
 def _with_formulas(raw: list[tuple], formulas: Sequence[tuple], language: str) -> list[tuple]:
     """The words of the pages with each formula picture said in words at its place in the reading order. Words drawn
-    over an inline formula (its text for screen readers) give way to it."""
-    from .mathspeech import speak
+    over an inline formula (its text for screen readers) give way to it. A formula set as text (noted with "text")
+    takes the place of its words, where those words are the formula and it can be said for sure."""
+    from .mathspeech import speak, speak_text_formula
     from .render.labels import label
 
     pages: dict[int, list[tuple]] = {}
     for e in raw:
         pages.setdefault(e[1], []).append(e)
-    for k, (page, x0, y0, x1, y1, text, built, display) in enumerate(formulas):
-        said = (speak(text, language) if built and text else "") or label(language, "formula")
+    for k, f in enumerate(formulas):
+        page, x0, y0, x1, y1, text, built, display = f[:8]
+        as_text = len(f) > 8 and f[8] == "text"
+        if as_text:
+            said = speak_text_formula(text, language)
+            if not said:
+                continue  # read as it is written
+        else:
+            said = (speak(text, language) if built and text else "") or label(language, "formula")
 
         def inside(r: Rect) -> bool:
             cx, cy = (r[0] + r[2]) / 2, (r[1] + r[3]) / 2
@@ -158,14 +170,40 @@ def _with_formulas(raw: list[tuple], formulas: Sequence[tuple], language: str) -
             it: the next word may start just inside it)."""
             level = min(r[3], y1) - max(r[1], y0) > 0.3 * min(r[3] - r[1], y1 - y0)
             return r[1] >= y1 - 1 if display or not level else r[0] + r[2] >= x0 + x1
-        words = [e for e in pages.get(page, []) if display or not inside(e[2])]
+        here = pages.get(page, [])
+        gone: list = []
+        if as_text:
+            def level(r: Rect) -> bool:
+                return min(r[3], y1) - max(r[1], y0) > 0.3 * min(r[3] - r[1], y1 - y0)
+
+            # (every word drawn over the box, however little: its box is where its own characters are)
+            touching = [e for e in here if level(e[2]) and min(e[2][2], x1) - max(e[2][0], x0) > 0.5]
+            # only words that are the formula, with brackets or punctuation around it, give way to it; maths that is
+            # part of a longer word ("x-axis", "aff(1,R)", "f(x)" of which only f is maths) is read as it is written
+            drawn = re.sub(r"\s", "", f[9]) if len(f) > 9 else ""
+            joined = "".join(re.sub(r"\s", "", e[0]) for e in touching)
+            start = joined.find(drawn) if drawn else -1
+            if not touching or start < 0:
+                continue
+            lead, tail = joined[:start], joined[start + len(drawn):]
+            if not re.fullmatch(r"[(\[{]*", lead) or not re.fullmatch(r"[.,;:!?)\]}]*", tail):
+                continue
+            gone = touching
+            # the brackets around it and punctuation after it ("(x_i).", "γ,"), also punctuation set with it, are
+            # kept, so the sentence ends where it did
+            said = lead + said.rstrip(" .,;:!?") + re.search(r"[.,;:!?]*$", drawn).group() + tail
+            words = [e for e in here if not any(e is g for g in gone)]
+        else:
+            words = [e for e in here if display or not inside(e[2])]
         at = next((n for n, e in enumerate(words) if after(e[2])), len(words))
         if display:
             block = (page, -1 - k)  # a sentence of its own
+        elif gone:  # in the place (and text block) of the words it replaces
+            block = gone[0][3]
         else:  # part of the sentence it stands in
             near = words[at - 1] if at else (words[at] if words else None)
             block = near[3] if near is not None else (page, -1 - k)
-        words.insert(at, (said, page, (x0, y0, x1, y1), block))
+        words.insert(at, (said, page, (x0, y0, x1, y1), block) + (("formula",) if as_text else ()))
         pages[page] = words
     return [e for page in sorted(pages) for e in pages[page]]
 

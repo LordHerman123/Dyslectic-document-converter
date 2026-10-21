@@ -87,6 +87,25 @@ class TableData:
     reliable: bool = True
     header_rows: int = 1
     bold_cells: set = field(default_factory=set)  # {(row, column)} set in bold in the original (best scores)
+    # {(row, column): why} cells of a scanned table the reader should check, why as for words to check: "unclear"
+    # (text recognition was unsure) or "number" (a number unlike the others in its column, such as 291 among 29.1
+    # and 15.8: a decimal point may have been missed); the text is never changed
+    unsure_cells: dict = field(default_factory=dict)
+
+
+def table_text(rows: list[list[str]]) -> str:
+    """A table's cells as one text, to correct words in them like any text: a tab between cells, a line break
+    between rows."""
+    return "\n".join("\t".join(r) for r in rows)
+
+
+def table_rows(text: str, like: list[list[str]]) -> list[list[str]]:
+    """The cells of a table text (see :func:`table_text`); ``like`` (the cells as they were) when the text no longer
+    has the same rows and columns, so a table is never torn apart."""
+    rows = [r.split("\t") for r in text.split("\n")]
+    if len(rows) != len(like) or any(len(a) != len(b) for a, b in zip(rows, like)):
+        return like
+    return rows
 
 
 @dataclass
@@ -116,6 +135,13 @@ class Block:
     source: str = "text"  # "text" or "ocr"
     ocr_confidence: list[OcrWordConfidence] = field(default_factory=list)
     font_size: float = 0.0
+
+    @property
+    def editable_text(self) -> str:
+        """The text corrections are made in: the block's own text, or a table's cells (see :func:`table_text`)."""
+        if not self.text and self.table is not None:
+            return table_text(self.table.rows)
+        return self.text
 
 
 @dataclass

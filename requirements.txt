@@ -1,5 +1,5 @@
 # Core (no AI needed)
-pymupdf>=1.24
+pymupdf>=1.24,<2
 reportlab>=4.0
 pyspellchecker>=0.8
 rapidfuzz>=3.0

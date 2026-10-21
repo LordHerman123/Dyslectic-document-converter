@@ -118,6 +118,7 @@ class _Piece:
     image: Optional[ImageData] = None  # a small formula picture instead of text
     height: float = 0.0
     unsure: str = ""  # a word the converter is unsure about: why (see Run.unsure)
+    math: bool = False  # part of a formula set as text (read aloud as maths)
 
 
 class RichParagraph(Flowable):
@@ -229,6 +230,7 @@ class RichParagraph(Flowable):
                 pieces = self._pieces_for(token, r.bold, r.italic, r.superscript, r.subscript, r.math)
                 for p in pieces:
                     p.unsure = r.unsure
+                    p.math = r.math
                 cur += pieces
         if cur:
             words.append(cur)
@@ -306,7 +308,7 @@ class RichParagraph(Flowable):
                     cur[-1].text += ch
                     cur[-1].width += w
                 else:
-                    cur.append(_Piece(ch, p.font, p.size, p.rise, w, unsure=p.unsure))
+                    cur.append(_Piece(ch, p.font, p.size, p.rise, w, unsure=p.unsure, math=p.math))
                 cur_w += w
         if cur:
             chunks.append(cur)
@@ -426,9 +428,11 @@ class RichParagraph(Flowable):
             x = text_x
             if s.align == "center":
                 x = text_x + max(0.0, (width - natural) / 2)
+            maths = _TextMaths(c, baseline)
             for wi, word in enumerate(line):
                 px = x
                 for pi, p in enumerate(word):
+                    maths.add(p, px, first=pi == 0)
                     if p.image is not None:
                         spoken = p.image.alt if getattr(c, "_tagger", None) is not None else ""
                         if spoken:  # read aloud as its text instead of being skipped
@@ -453,6 +457,7 @@ class RichParagraph(Flowable):
                         _note_unsure(c, px - p.back, baseline + p.rise, p)
                     px += p.width
                 x += sum(p.width for p in word) + gap
+            maths.close()
         if s.rule_below is not None and self._last:
             c.setStrokeColor(s.rule_below)
             c.setLineWidth(0.8)
@@ -505,6 +510,63 @@ def _note_unsure(c, x: float, y: float, p: _Piece) -> None:
 
 
 _render_state = _RenderState()
+
+
+class _TextMaths:
+    """Notes the formulas set as text on one line (maths pieces with their indices, over word breaks) where they are
+    drawn, with their text in the converter's notation (``x_i^2``), so reading aloud can say them as maths (see
+    :func:`_note_formula`, with "text" and the characters as drawn, ``xi2``, added; formula pictures are noted on
+    their own)."""
+
+    def __init__(self, c, baseline: float):
+        self.c, self.baseline = c, baseline
+        self.parts: list[tuple[str, str]] = []  # (base / sup / sub / space, text)
+        self.box: Optional[list[float]] = None  # x0, x1, lowest rise, highest top of ink, largest size
+
+    def add(self, p: _Piece, px: float, first: bool) -> None:
+        """A piece drawn at ``px``; ``first``: it starts a word."""
+        script = p.rise != 0 and p.image is None
+        if p.image is not None or not (p.math or (script and self.parts)):
+            self.close()
+            return
+        if first and self.parts:
+            self.parts.append(("space", " "))
+        kind = "sup" if p.rise > 0 and script else "sub" if script else "base"
+        if self.parts and self.parts[-1][0] == kind:
+            self.parts[-1] = (kind, self.parts[-1][1] + p.text)
+        else:
+            self.parts.append((kind, p.text))
+        here = [px - p.back, px + p.width, p.rise, p.rise + 0.8 * p.size, p.size]
+        self.box = here if self.box is None else [min(self.box[0], here[0]), max(self.box[1], here[1]),
+                                                  min(self.box[2], here[2]), max(self.box[3], here[3]),
+                                                  max(self.box[4], here[4])]
+
+    def close(self) -> None:
+        """The formula so far is complete: note it (when it has something of maths in it)."""
+        parts, box = self.parts, self.box
+        self.parts, self.box = [], None
+        if not parts or box is None:
+            return
+        text = ""
+        for kind, t in parts:
+            t = t.strip() if kind != "space" else t
+            if kind in ("sup", "sub"):
+                text += ("^" if kind == "sup" else "_") + (t if len(t) == 1 else f"({t})")
+            else:
+                text += t
+        text = text.strip().strip(",;").strip()  # (a comma between formulas belongs to the sentence)
+        if not text.strip("∗*†‡§¶ "):
+            return  # a note marker, not maths
+        drawn = "".join(t for _, t in parts).strip().strip(",;").strip()
+        sink = getattr(self.c, "_formulas", None)
+        if sink is None:
+            return
+        a, _, _, d, e, f = self.c._currentMatrix
+        page_h = self.c._pagesize[1]
+        x0, x1 = e + a * box[0], e + a * box[1]
+        top, bottom = f + d * (self.baseline + box[3]), f + d * (self.baseline + box[2] - 0.25 * box[4])
+        sink.append((self.c.getPageNumber() - 1, round(x0, 2), round(page_h - top, 2), round(x1, 2),
+                     round(page_h - bottom, 2), text, True, False, "text", drawn))
 
 
 def _stack_indices(word: list[_Piece]) -> None:
@@ -795,6 +857,27 @@ def _equation_flowable(item: RItem, s: FormatSettings, col_w: float) -> Optional
     return fl
 
 
+class _CheckedCell(Paragraph):
+    """A table cell the reader should check (see ``TableData.unsure_cells``): drawn as any cell, and its box noted
+    as for a word to check (see :func:`_note_unsure`), so focus mode marks the words in it."""
+
+    def __init__(self, text: str, style: ParagraphStyle, why: str):
+        super().__init__(text, style)
+        self._why = why
+
+    def draw(self):
+        """Draw the cell's text and note its box: page, x0, y0, x1, y1 in points from the top-left corner, why."""
+        super().draw()
+        c = self.canv
+        sink = getattr(c, "_unsure", None)
+        if sink is None:
+            return
+        a, _, _, d, e, f = c._currentMatrix
+        page_h = c._pagesize[1]
+        sink.append((c.getPageNumber() - 1, round(e, 2), round(page_h - f - d * self.height, 2),
+                     round(e + a * self.width, 2), round(page_h - f, 2), self._why))
+
+
 def _table_flowable(item: RItem, s: FormatSettings, col_w: float, max_h: float, printable: bool,
                     room: float = 0.0) -> tuple[Flowable, str]:
     """A table in the column, or its picture from the original when the table could not be read reliably (or the user
@@ -816,7 +899,8 @@ def _table_flowable(item: RItem, s: FormatSettings, col_w: float, max_h: float, 
 
     if not usable:
         return picture("Table shown as an image of the original.")
-    header_rows = max(1, min(tab.header_rows, len(rows) - 1)) if len(rows) > 1 else 1
+    # (a table without headings: a page of a table continued, whose headings are on a page not converted)
+    header_rows = min(tab.header_rows, len(rows) - 1) if len(rows) > 1 else min(tab.header_rows, 1)
     bold_cells = tab.bold_cells or set()
     pad = 10  # cell padding left + right
 
@@ -851,14 +935,19 @@ def _table_flowable(item: RItem, s: FormatSettings, col_w: float, max_h: float, 
         """Escape text for ReportLab's markup."""
         return t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-    data = [[Paragraph(esc(r[i]) if i < len(r) else "", strong if is_bold(ri, i) else cell) for i in range(n_cols)]
-            for ri, r in enumerate(rows)]
+    def paragraph(ri: int, ci: int) -> Paragraph:
+        """The text of a cell; a cell to check notes where it is drawn."""
+        text, style = esc(rows[ri][ci]) if ci < len(rows[ri]) else "", strong if is_bold(ri, ci) else cell
+        why = tab.unsure_cells.get((ri, ci)) if tab.unsure_cells and text.strip() else None
+        return _CheckedCell(text, style, why) if why else Paragraph(text, style)
+
+    data = [[paragraph(ri, i) for i in range(n_cols)] for ri in range(len(rows))]
     t = Table(data, colWidths=widths, repeatRows=header_rows, hAlign="LEFT")
     style = [("GRID", (0, 0), (-1, -1), 0.5, TABLE_GRID if not ink else colors.grey),
              ("VALIGN", (0, 0), (-1, -1), "TOP"),
              ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
              ("LEFTPADDING", (0, 0), (-1, -1), 5), ("RIGHTPADDING", (0, 0), (-1, -1), 5)]
-    if not ink:
+    if not ink and header_rows:
         style.append(("BACKGROUND", (0, 0), (-1, header_rows - 1), TABLE_HEAD))
     t.setStyle(TableStyle(style))
     return t, ""

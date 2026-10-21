@@ -110,7 +110,7 @@ class _Book:
                         f'alt="{_x(doc_label(self.result.language, "table_picture"))}"{_width(it)}/></figure>')
             return ""
         n = max(len(r) for r in rows)
-        head = max(1, min(tab.header_rows, len(rows) - 1)) if len(rows) > 1 else 0
+        head = min(tab.header_rows, len(rows) - 1) if len(rows) > 1 else 0
         bold = tab.bold_cells or set()
 
         def row_html(ri: int, row: list[str], tag: str) -> str:

@@ -2023,7 +2023,8 @@ class ConverterApp:
         """Why a word is to check (focus mode)."""
         t = self.t
         return {"unclear": t("Unclear in the scan"), "unknown": t("Not in the dictionary"),
-                "split": t("The sentence may go on in the next paragraph")}.get(why, "")
+                "split": t("The sentence may go on in the next paragraph"),
+                "number": t("A number unlike the others in its column: compare it with the original")}.get(why, "")
 
     async def refresh_quality(self) -> None:
         """Rate the conversion again (after converting or correcting words) and show the notice."""

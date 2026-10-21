@@ -105,6 +105,35 @@ def _node(text: str, members: list[Atom], base: float, size: float, single: Opti
 
 
 # ----------------------------------------------------------------------------------------------- reading the page
+# whole big delimiters by the glyph names of an extension font's own encoding (fonts that add sizes to the CMEX
+# codes, such as MathDesign's: code 150 is "bracketleftbig6"); a piece (tp, ex, mid, bt) stays a piece
+_NAMED_DELIMITERS = {"parenleft": "(", "parenright": ")", "bracketleft": "[", "bracketright": "]",
+                     "braceleft": "{", "braceright": "}", "angleleft": "⟨", "angleright": "⟩", "floorleft": "⌊",
+                     "floorright": "⌋", "ceilingleft": "⌈", "ceilingright": "⌉"}
+_DELIMITER_NAME = re.compile(r"(%s)(?:big\d*|Big|bigg|Bigg)?$" % "|".join(_NAMED_DELIMITERS))
+_encodings: dict[tuple[int, str], dict[int, str]] = {}
+
+
+def _named_delimiter(page: pymupdf.Page, font: str, code: int) -> str:
+    """The big delimiter a code of an extension font draws, by the glyph name its embedded Type 1 program gives the
+    code; "" when the font or the name does not say."""
+    key = (id(page.parent), font)
+    if key not in _encodings:
+        names: dict[int, str] = {}
+        try:
+            for xref, _ext, _type, basefont, *_rest in page.get_fonts():
+                if base_font(basefont).startswith(base_font(font)):  # (a span may give the name cut short)
+                    buf = page.parent.extract_font(xref)[3] or b""
+                    names = {int(c): n for c, n in
+                             re.findall(r"dup (\d+) ?/(\S+) put", buf.decode("latin-1", "replace"))}
+                    break
+        except Exception:
+            names = {}
+        _encodings[key] = names
+    m = _DELIMITER_NAME.match(_encodings[key].get(code, ""))
+    return _NAMED_DELIMITERS[m.group(1)] if m else ""
+
+
 def _glyphs(page: pymupdf.Page, rect: pymupdf.Rect, areas: Optional[list] = None) -> list[Atom]:
     d = page.get_text("rawdict", clip=rect + (-2, -2, 2, 2), flags=pymupdf.TEXTFLAGS_RAWDICT
                       & ~pymupdf.TEXT_PRESERVE_IMAGES)
@@ -134,6 +163,8 @@ def _glyphs(page: pymupdf.Page, rect: pymupdf.Rect, areas: Optional[list] = None
                     accent = ""
                     if ext and 0x62 <= code <= 0x67:
                         accent = "hat" if code <= 0x64 else "tilde"  # wide accents
+                    if ext and not t.strip() and code > 0x7F:
+                        t = _named_delimiter(page, font, code)
                     if not t.strip() and not accent:
                         if hang and ch.strip():  # a piece of a tall bracket: joined with the others below
                             size = span["size"]
@@ -404,14 +435,28 @@ class _Builder:
             if not inside:
                 raise Unsure("empty radical")
             self.rules.remove(rule)
-            body = self.row(inside)
+            # a fraction (or another root) under the sign is built first, with the lines under the sign
+            inner = [r for r in self.rules if rule.x0 - 0.5 <= (r.x0 + r.x1) / 2 <= rule.x1 + 0.5
+                     and rule.base + 0.5 < r.base <= root.y1 + 0.5]
+            if inner:
+                sub = _Builder(list(inside), list(inner), self.body)
+                sub.radicals()
+                sub.fractions()
+                if sub.rules:
+                    raise Unsure("a line that is not part of the formula's structure")
+                self.rules = [r for r in self.rules if all(r is not i for i in inner)]
+                body = sub.row(sub.atoms)
+                built = sub.atoms
+            else:
+                body = self.row(inside)
+                built = inside
             single = len(inside) == 1 and inside[0].single
             text = "√" + (f"[{self.row(index)}]" if index else "") + _group(body, single)
             members = inside + index + [root]
             self.take(members)
             size = max(a.size for a in inside)
-            # the radicand's own line (its scripts sit lower or higher)
-            line = [a for a in inside if a.kind != "rule" and a.size >= 0.8 * size]
+            # the radicand's own line (its scripts sit lower or higher; a fraction's is its bar's)
+            line = [a for a in built if a.kind != "rule" and a.size >= 0.8 * size]
             self.atoms.append(_node(text, members, max(a.base for a in line), size, single=False))
 
     def fractions(self) -> None:
@@ -657,6 +702,9 @@ class _Builder:
         for s in sorted(scripts, key=lambda a: a.x0):
             before = [b for b in on_line if b.x0 < s.x0 - 0.1]
             if not before:
+                if abs(s.base - main) <= 0.03 * top and s.kind not in built:
+                    level.append(s)  # small type starting the line (KL, ELBO in small capitals): part of it
+                    continue
                 raise Unsure("script before any symbol")
             owner = before[-1]
             raised = s.base < main - 0.08 * top

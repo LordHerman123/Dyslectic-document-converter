@@ -9,6 +9,7 @@ function or a letter, where ``f(x)`` is "f of x". Every symbol is said: nothing 
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -34,7 +35,7 @@ GREEK_VARIANTS = {"ϵ": "ε", "ϑ": "θ", "ϕ": "φ", "ϱ": "ρ", "ς": "σ", "�
 # "{x}" is where the spoken part goes
 WORDS: dict[str, dict[str, str]] = {
     "en": {
-        "capital": "capital {x}", "sub": "sub", "power": "to the power", "squared": "squared", "cubed": "cubed",
+        "placeholder": "dot", "capital": "capital {x}", "sub": "sub", "power": "to the power", "squared": "squared", "cubed": "cubed",
         "over": "over", "frac": "the fraction", "frac_end": "end fraction", "sqrt": "the square root of",
         "root": "the root with index {x} of", "root_end": "end root", "of": "of", "sum": "the sum",
         "prod": "the product", "int": "the integral", "iint": "the double integral", "oint": "the contour integral",
@@ -62,7 +63,7 @@ WORDS: dict[str, dict[str, str]] = {
         "det": "determinant", "tr": "trace", "Pr": "probability",
     },
     "nl": {
-        "capital": "hoofdletter {x}", "sub": "index", "power": "tot de macht", "squared": "kwadraat",
+        "placeholder": "punt", "capital": "hoofdletter {x}", "sub": "index", "power": "tot de macht", "squared": "kwadraat",
         "cubed": "tot de derde", "over": "gedeeld door", "frac": "de breuk", "frac_end": "einde breuk",
         "sqrt": "de wortel van", "root": "de wortel met index {x} van", "root_end": "einde wortel", "of": "van",
         "sum": "de som", "prod": "het product", "int": "de integraal", "iint": "de dubbele integraal",
@@ -92,7 +93,7 @@ WORDS: dict[str, dict[str, str]] = {
         "Pr": "kans",
     },
     "de": {
-        "capital": "großes {x}", "sub": "Index", "power": "hoch", "squared": "Quadrat", "cubed": "hoch drei",
+        "placeholder": "Punkt", "capital": "großes {x}", "sub": "Index", "power": "hoch", "squared": "Quadrat", "cubed": "hoch drei",
         "over": "durch", "frac": "Bruch", "frac_end": "Ende des Bruchs", "sqrt": "Wurzel aus",
         "root": "{x}-te Wurzel aus", "root_end": "Ende der Wurzel", "of": "von", "sum": "Summe",
         "prod": "Produkt", "int": "Integral", "iint": "Doppelintegral", "oint": "Kurvenintegral",
@@ -120,7 +121,7 @@ WORDS: dict[str, dict[str, str]] = {
         "det": "Determinante", "tr": "Spur", "Pr": "Wahrscheinlichkeit",
     },
     "fr": {
-        "capital": "{x} majuscule", "sub": "indice", "power": "puissance", "squared": "au carré",
+        "placeholder": "point", "capital": "{x} majuscule", "sub": "indice", "power": "puissance", "squared": "au carré",
         "cubed": "au cube", "over": "sur", "frac": "la fraction", "frac_end": "fin de la fraction",
         "sqrt": "la racine carrée de", "root": "la racine {x}-ième de", "root_end": "fin de la racine", "of": "de",
         "sum": "la somme", "prod": "le produit", "int": "l'intégrale", "iint": "l'intégrale double",
@@ -150,7 +151,7 @@ WORDS: dict[str, dict[str, str]] = {
         "cos": "cosinus", "tan": "tangente", "det": "déterminant", "tr": "trace", "Pr": "probabilité",
     },
     "es": {
-        "capital": "{x} mayúscula", "sub": "subíndice", "power": "elevado a", "squared": "al cuadrado",
+        "placeholder": "punto", "capital": "{x} mayúscula", "sub": "subíndice", "power": "elevado a", "squared": "al cuadrado",
         "cubed": "al cubo", "over": "entre", "frac": "la fracción", "frac_end": "fin de la fracción",
         "sqrt": "la raíz cuadrada de", "root": "la raíz {x}-ésima de", "root_end": "fin de la raíz", "of": "de",
         "sum": "la suma", "prod": "el producto", "int": "la integral", "iint": "la integral doble",
@@ -179,7 +180,7 @@ WORDS: dict[str, dict[str, str]] = {
         "cos": "coseno", "tan": "tangente", "det": "determinante", "tr": "traza", "Pr": "probabilidad",
     },
     "it": {
-        "capital": "{x} maiuscola", "sub": "pedice", "power": "elevato a", "squared": "al quadrato",
+        "placeholder": "punto", "capital": "{x} maiuscola", "sub": "pedice", "power": "elevato a", "squared": "al quadrato",
         "cubed": "al cubo", "over": "fratto", "frac": "la frazione", "frac_end": "fine della frazione",
         "sqrt": "la radice quadrata di", "root": "la radice {x}-esima di", "root_end": "fine della radice",
         "of": "di", "sum": "la somma", "prod": "il prodotto", "int": "l'integrale", "iint": "l'integrale doppio",
@@ -216,7 +217,7 @@ STRUCTURE = ("capital", "sub", "power", "squared", "cubed", "over", "frac", "fra
              "of", "sum", "prod", "int", "iint", "oint", "from", "to", "lim", "max", "min", "argmax", "argmin", "sup",
              "inf", "open", "close", "abs", "abs_end", "norm", "norm_end", "given", "hat", "bar", "tilde", "dot",
              "ddot", "vec", "matrix", "cases", "row", "end_matrix", "equation", "transpose", "prime", "dprime", "star",
-             "super")
+             "super", "placeholder")
 SUPER = {"en": "superscript", "nl": "superscript", "de": "hochgestellt", "fr": "exposant", "es": "superíndice",
          "it": "apice"}
 for _lang, _words in WORDS.items():
@@ -238,8 +239,13 @@ CONTRACTIONS = {
           + [(f"{p} l'", f"{c}ll'") for p, c in (("a", "a"), ("di", "de"), ("da", "da"), ("su", "su"))],
 }
 OPERATIONS = set("=≠<>≤≥≈≡∝∼≃≪≫∈∉⊂⊆∪∩→←↦⇒⇔+−-±∓·×⋅⊙⊗⊕∘/,;:|")
+# accents set as combining marks over a letter (ā), as they come from text: said like hat(x), bar(x), ...
+COMBINING = {"\u0302": "hat", "\u0303": "tilde", "\u0304": "bar", "\u0305": "bar", "\u0307": "dot", "\u0308": "ddot",
+             "\u20d7": "vec"}
+ORDINALS = {"th", "st", "nd", "rd"}  # l^th: the l-th, not a power
+POWER_BASES = {"e", "ℝ", "ℂ", "ℕ", "ℤ", "ℚ"}  # what is raised on these is a power (see _Say.power)
 LABEL = re.compile(r",\s*equation \((\w{1,4})\)\s*$")
-TOKEN = re.compile(r"\s+|\d+(?:\.\d+)?|[A-Za-z]+|.", re.S)
+TOKEN = re.compile(r"\s+|\d+(?:\.\d+)?|[A-Za-zÀ-ÖØ-öø-ɏ]+|.", re.S)  # (Latin letters, accented too)
 
 
 @dataclass
@@ -403,6 +409,8 @@ class _Say:
             return self.greek[t]
         if t.lower() in self.greek and len(t) == 1 and t.isupper():
             return self.word("capital", self.greek[t.lower()])
+        if t == "\x00dot":
+            return self.word("placeholder")
         if t in BIG:  # an operator without its limits ("√∑ x")
             return self.word(BIG[t])
         return self.w.get(t, t)
@@ -473,10 +481,13 @@ class _Say:
         for p in n.text:
             out += " " + self.word("dprime" if p == "″" else "prime")
         if sup is not None:
-            out += " " + self.power(sup)
+            out += " " + self.power(sup, base)
         return out
 
-    def power(self, sup: _Node) -> str:
+    def power(self, sup: _Node, base: Optional[_Node] = None) -> str:
+        flat = "".join(n.text for n in (sup.parts if sup.kind == "seq" else [sup]) if n.kind == "sym")
+        if flat in ORDINALS and (sup.kind != "seq" or all(n.kind == "sym" for n in sup.parts)):
+            return flat  # "l th"
         s = sup.parts[0] if sup.kind == "seq" and len(sup.parts) == 1 else sup
         if s.kind == "sym":
             if s.text == "2":
@@ -491,9 +502,13 @@ class _Say:
                 return self.word("prime")
             if s.text in OPERATIONS:
                 return f"{self.word('super')} {self.say(s)}"
-        if self.simple(sup):
-            return f"{self.word('power')} {self.say(sup)}"
-        return f"{self.word('power')} {self.say(sup)},"
+        # a number is a power, and so is anything raised on e, a number or a set of numbers (e^(iπ), 2^n, ℝ^n); a
+        # letter on another letter may as well be a label or index (W^Q, layer l): said as "superscript" then
+        numeric = all(n.kind == "sym" and (re.fullmatch(r"\d+(?:\.\d+)?", n.text) or n.text in "−-") for n in
+                      (sup.parts if sup.kind == "seq" else [sup])) and any(c.isdigit() for c in flat)
+        powered = base is not None and base.kind == "sym" and (base.text in POWER_BASES or base.text.isdigit())
+        word = self.word("power" if numeric or powered else "super")
+        return f"{word} {self.say(sup)}" + ("" if self.simple(sup) else ",")
 
     def big(self, op: str, node: _Node) -> str:
         """A sum, product or integral with its limits: "the sum from i equals 1 to n of"."""
@@ -506,11 +521,23 @@ class _Say:
         return out + f" {self.word('of')}"
 
     def seq(self, items: list[_Node]) -> str:
+        if len(items) == 1 and items[0].kind == "sym" and items[0].text in "·∙⋅.":
+            return self.word("placeholder")  # f(·), g(.): any argument
+        for k, it in enumerate(items):  # [·,·]: dots standing for arguments, between commas or brackets
+            if it.kind == "sym" and it.text in "·∙⋅" and all(
+                    n is None or (n.kind == "sym" and n.text in ",;")
+                    for n in (items[k - 1] if k else None, items[k + 1] if k + 1 < len(items) else None)):
+                items = items[:k] + [_Node("sym", "\x00dot")] + items[k + 1:]
         words: list[str] = []
-        bars = [k for k, it in enumerate(items) if it.kind == "sym" and it.text in "|‖∥"]
+
+        def bar(it: _Node) -> str:
+            """The bar an item is (a closing bar may carry an index or power: |x|^2)."""
+            head = it.parts[0] if it.kind == "script" else it
+            return head.text if head.kind == "sym" and head.text in "|‖∥" else ""
+        bars = [k for k, it in enumerate(items) if bar(it)]
         pairs = {}
         for kind in ("|", "‖∥"):
-            ks = [k for k in bars if items[k].text in kind]
+            ks = [k for k in bars if bar(items[k]) in kind]
             if len(ks) >= 2 and len(ks) % 2 == 0:
                 for a, b in zip(ks[::2], ks[1::2]):
                     pairs[a], pairs[b] = "abs" if kind == "|" else "norm", "end"
@@ -526,7 +553,14 @@ class _Say:
                 words.append(self.word(head.text, self.say(it.parts[1])))
             elif k in pairs:
                 if pairs[k] == "end":
-                    words.append(self.word("abs_end" if items[k].text == "|" else "norm_end") + ",")
+                    end = self.word("abs_end" if bar(it) == "|" else "norm_end")
+                    if it.kind == "script":  # |x|^2, ‖x‖_2: the index and power of what the bars hold
+                        _, sub, sup = it.parts
+                        if sub is not None:
+                            end += f" {self.word('sub')} {self.say(sub)}"
+                        if sup is not None:
+                            end += " " + self.power(sup)
+                    words.append(end + ",")
                 else:
                     words.append(self.word(pairs[k]))
             elif nxt is not None and nxt.kind == "group" and nxt.text.startswith("()") and self.applies(it, nxt):
@@ -549,6 +583,9 @@ class _Say:
         if head.kind != "sym":
             return False
         t = head.text
+        first = group.parts[0].parts[0] if group.parts and group.parts[0].parts else None
+        if first is not None and first.kind == "sym" and first.text in "=<>≤≥≈≠":
+            return False  # "N (= 1)": what it is, not a function of it
         # "f(x)" and "log (x)"; a letter and a bracket set apart ("F (θ)") may be a product
         return t in FUNCTIONS or (len(t) == 1 and (t.isalpha() or t in GREEK_VARIANTS) and not group.text.endswith("s"))
 
@@ -572,6 +609,11 @@ def _speak(text: str, lang: str) -> str:
     if m:
         number, text = m.group(1), text[:m.start()]
     text = re.sub(r"\.\s*\.\s*\.", "…", re.sub(r"·\s*·\s*·", "⋯", text))  # ". . ." is one ellipsis
+    # a stroke through a sign, set before it ("̸=" as a PDF may give it), is "not": ≠, ∉, ≢
+    text = re.sub("\u0338\\s*([=<>≤≥∈∋≡∼≃≈⊂⊃⊆⊇])", "\\1\u0338", text)
+    text = unicodedata.normalize("NFC", re.sub(
+        "(\\S)([" + "".join(COMBINING) + "])", lambda m: f"{COMBINING[m.group(2)]}({m.group(1)})",
+        unicodedata.normalize("NFD", text)))
     rows = [r for r in re.split(r"\s;\s", text) if r.strip()]  # the rows of a derivation
     said = "; ".join(sayer.say(_Parser(_tokens(r)).seq()) for r in rows)
     said = re.sub(r"\s+", " ", said).strip().rstrip(",")
@@ -580,3 +622,65 @@ def _speak(text: str, lang: str) -> str:
     if number:
         said += f", {sayer.word('equation')} {number}"
     return said
+
+
+def speak_text_formula(text: str, lang: str = "en") -> str:
+    """A formula set as text (see :func:`formulas_in_runs`) said as maths, or "" where its text cannot tell how it is
+    built (it is then read as it is written): an index or power without anything it belongs to, a root (how far its
+    bar reaches is not in the text), an index or power with a letter and a digit in it (in ``e^(−x2)`` the square of
+    x has become a plain 2) or with only a sign (``e^−``: the rest of it is a picture), brackets or bars that do
+    not pair, two bars side by side (``D(q||p)`` is no absolute value), an index or power that is empty or has one
+    of its own (``m_(max_new)``, a name from a program), or a number with a thousands comma (``2,000``). What is said
+    is checked too: a bracket left in it was not understood."""
+    if re.search(r"(^|[\s(\[{,=+−-])[\^_]", text) or re.search(r"[√∛∜]", text) or re.search(r"\|\s*\|", text) or \
+            re.search(r"[\^_](?=\s|$|[,;)\]}])|[\^_]\([^()]*[\^_]|\d,\d{3}(?!\d)", text) or \
+            re.search(r"[\^_][−+±∓-](?!\w|\()", text) or re.search(r"[\^_]\([^()]*[A-Za-z\u0370-\u03ff]\d", text) or \
+            any(text.count(a) != text.count(b) for a, b in ("()", "[]", "{}")) or \
+            text.count("|") % 2 or (text.count("‖") + text.count("∥")) % 2:
+        return ""
+    said = speak(text, lang)
+    return "" if re.search(r"[\^_\x00()\[\]{}]", said) else said
+
+
+def formulas_in_runs(runs: list) -> list[tuple[int, int, str]]:
+    """The formulas set as text in a paragraph's runs (maths runs with their indices, over spaces), as (start, end,
+    text in the converter's notation) with positions in the runs' joined text: ``x`` + index ``i`` + power ``2`` is
+    ``x_i^2``. Note markers (∗, †) are not maths."""
+    out: list[tuple[int, int, str]] = []
+    parts: list[tuple[str, str]] = []
+    start = pos = end = 0
+
+    def close() -> None:
+        nonlocal parts
+        text = ""
+        for kind, t in parts:
+            if kind in ("sup", "sub"):
+                t = t.strip()
+                text += ("^" if kind == "sup" else "_") + (t if len(t) == 1 else f"({t})")
+            else:
+                text += t
+        text = text.strip().strip(",;").strip()
+        if text.strip("∗*†‡§¶ "):
+            out.append((start, end, text))
+        parts = []
+
+    for r in runs:
+        script = r.superscript or r.subscript
+        if r.math or (script and parts):
+            if not parts:
+                start = pos + len(r.text) - len(r.text.lstrip())
+            kind = "sup" if r.superscript else "sub" if r.subscript else "base"
+            if parts and parts[-1][0] == kind:
+                parts[-1] = (kind, parts[-1][1] + r.text)
+            else:
+                parts.append((kind, r.text))
+            end = pos + len(r.text.rstrip())
+        elif parts and not r.text.strip():
+            parts.append(("base", r.text))  # a space between two parts of one formula
+        else:
+            if parts:
+                close()
+        pos += len(r.text)
+    if parts:
+        close()
+    return out
