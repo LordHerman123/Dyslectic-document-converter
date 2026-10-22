@@ -21,6 +21,7 @@ is included; nothing else needs to be installed. How the Windows build is made: 
 
 ## What's new in 1.21
 
+* **Quick check in focus mode:** a counter in the top bar shows the document's quality estimate and how many words are to check. Each click jumps to the next one, page after page, with *Edit* at hand to correct it.
 * **Maths in a sentence read aloud as maths:** x with an index i is said “x sub i”, ≤ is “is less than or equal to”,
   |x|² is “the absolute value of x, squared”. Where the text cannot show how such maths is built (a root, for
   example), it is read as it is written rather than guessed.
