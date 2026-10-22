@@ -190,6 +190,14 @@ class FocusMode:
         del app.hl_items[1:]  # forget the menu of an earlier focus mode
 
         self.page_label = app.text("", 14)
+        # the document's quality and how many words are to check; each click shows the next one, page after page
+        self.check_dot = ft.Container(width=10, height=10, border_radius=5)
+        self.check_text = app.text("", 13, weight=ft.FontWeight.BOLD)
+        self.check_chip = ft.Container(
+            ft.Row([self.check_dot, self.check_text, ft.Icon(ft.Icons.ARROW_FORWARD, size=16)], spacing=6,
+                   tight=True, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            padding=ft.Padding.symmetric(horizontal=12, vertical=6), border_radius=16, ink=True, visible=False,
+            on_click=lambda e: app.page.run_task(self.next_check))
         self.read_toggle = ft.IconButton(ft.Icons.VOLUME_UP, tooltip=t("Read aloud"), on_click=self.on_read_panel,
                                          selected=bool(app.ui.get("read_panel_open", False)),
                                          style=self._toggle_style(), visible=app._speech_allowed())
@@ -220,6 +228,7 @@ class FocusMode:
             self.swatches,
             self.ruler_toggle, self.notes_toggle, self._original_button(), self._ai_button(),
             ft.Container(expand=True),
+            self.check_chip, ft.Container(width=6),
             self.page_label,
             app.build_export_menu(compact=True),
             *self._page_buttons(),
@@ -399,8 +408,12 @@ class FocusMode:
         self._checks = quality.parts_on_pages(self.words, marks) if self.words else {}
         if self._check and (self._check[0] >= n or self.source != "converted"):
             self._check = None
-        elif self._check:
-            self._check = (self._check[0], min(self._check[1], max(0, len(self._checks.get(self._check[0], [])) - 1)))
+        elif self._check:  # the same place in the list of the whole document: a corrected word has left it
+            page, k = self._check
+            flat = self._check_list()
+            at = sum(1 for p, _ in flat if p < page) + k
+            self._check = flat[min(at, len(flat) - 1)] if flat else (page, 0)
+        self._update_check_chip()
         self._lines = {}
         page_bg = TINT_COLOURS.get(self.tint, TINT_COLOURS["white"])[0]
         self.images, self.frames, self.detectors, self.overlays, self.marks = [], [], [], [], []
@@ -1324,6 +1337,7 @@ class FocusMode:
         if self._check is not None and not keep_check:
             page, self._check = self._check[0], None
             await self.redraw(page)
+            self._update_check_chip()
         if self._picture is not None:
             page, self._picture = self._picture[0], None
             await self.redraw(page)
@@ -1498,6 +1512,7 @@ class FocusMode:
         if old is not None:
             await self.redraw(old)
         await self.redraw(i)
+        self._update_check_chip()
         self._show_card(self._check_card(), "check")
 
     async def open_checking(self, source_page: Optional[int]) -> None:
@@ -1554,12 +1569,15 @@ class FocusMode:
                    app.text(" ".join(reasons), 13, color=ft.Colors.ON_SURFACE_VARIANT)]
         else:
             a, b, why = parts[k]
-            row = [app.text(t("Word {k} of {n} to check", k=k + 1, n=len(parts)), 14, weight=ft.FontWeight.BOLD),
+            flat = self._check_list()
+            at = flat.index((page, k))
+            row = [app.text(t("Word {k} of {n} to check", k=at + 1, n=len(flat)), 14, weight=ft.FontWeight.BOLD),
+                   app.text(t("Page {n}", n=page + 1), 13, color=ft.Colors.ON_SURFACE_VARIANT),
                    app.text(app.check_reason(why), 13, color=ft.Colors.ON_SURFACE_VARIANT),
                    btn(ft.Icons.CHEVRON_LEFT, t("Previous word to check"),
-                       lambda e: app.page.run_task(self.step_check, -1), disabled=k == 0),
+                       lambda e: app.page.run_task(self.step_check, -1), disabled=at == 0),
                    btn(ft.Icons.CHEVRON_RIGHT, t("Next word to check"),
-                       lambda e: app.page.run_task(self.step_check, 1), disabled=k >= len(parts) - 1),
+                       lambda e: app.page.run_task(self.step_check, 1), disabled=at >= len(flat) - 1),
                    ft.TextButton(t("Edit"), icon=ft.Icons.EDIT_OUTLINED,
                                  tooltip=t("Correct these words (for example a word split by a space)"),
                                  on_click=lambda e: app.page.run_task(self.edit_selection, a, b),
@@ -1574,14 +1592,79 @@ class FocusMode:
         return ft.Column([bar], tight=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER)
 
     async def step_check(self, step: int) -> None:
-        """Show the previous (-1) or next (1) word to check on the page."""
+        """Show the previous (-1) or next (1) word to check, on to the next page when this one is done."""
         if not self._check:
             return
-        page, k = self._check
-        parts = self._checks.get(page, [])
-        self._check = (page, max(0, min(len(parts) - 1, k + step)))
+        flat = self._check_list()
+        if self._check not in flat:
+            return
+        await self.go_to_check(max(0, min(len(flat) - 1, flat.index(self._check) + step)))
+
+    def _check_list(self) -> list[tuple[int, int]]:
+        """Every word to check in the document, in reading order, as (page, number on the page)."""
+        return [(p, k) for p in sorted(self._checks) for k in range(len(self._checks[p]))]
+
+    async def go_to_check(self, at: int) -> None:
+        """Show word ``at`` of the document's words to check: its page brought into view, the word boxed and the
+        bar under it (Edit corrects it; the next click goes on from there)."""
+        flat = self._check_list()
+        if not flat:
+            return
+        page, k = flat[at]
+        old = self._check[0] if self._check else None
+        self._check = (page, k)
+        a = self._checks[page][k][0]
+        top = min(y0 for _x0, y0, _x1, _y1 in self.words[a][2]) if self.words[a][2] else 0.0
+        if page != self.current or self.layout == "scroll":
+            await self.scroll_to(page, within=top)
+        if old is not None and old != page:
+            await self.redraw(old)
         await self.redraw(page)
+        self._update_check_chip()
         self._show_card(self._check_card(), "check")
+
+    async def next_check(self) -> None:
+        """The counter in the top bar was clicked: the first word to check, then each next one (after the last,
+        back to the first)."""
+        flat = self._check_list()
+        if not flat:
+            return
+        if self._check in flat:
+            at = flat.index(self._check) + 1
+            if at >= len(flat):
+                at = 0
+                self._toast(self.app.t("That was the last one: back to the first."))
+        else:
+            at = 0
+        await self.go_to_check(at)
+
+    def _update_check_chip(self) -> None:
+        """The counter in the top bar: the document's quality (a coloured dot) and the words to check, with which
+        one is shown while checking."""
+        app, t = self.app, self.app.t
+        quality = app.quality
+        chip = self.check_chip
+        if self.source != "converted" or quality is None:
+            chip.visible = False
+            return
+        r = quality.document
+        colour = app.QUALITY_STYLE[r.level][0]
+        flat = self._check_list()
+        self.check_dot.bgcolor = colour
+        chip.bgcolor = "#26" + colour[1:]
+        chip.border = ft.Border.all(1, colour)
+        if not flat:
+            self.check_text.value = app.level_name(r.level) + " · " + t("Nothing to check")
+        elif self._check in flat:
+            self.check_text.value = app.level_name(r.level) + " · " + t(
+                "{k} / {n} to check", k=flat.index(self._check) + 1, n=len(flat))
+        else:
+            self.check_text.value = app.level_name(r.level) + " · " + t("{n} to check", n=len(flat))
+        chip.tooltip = "\n".join([t("Quality estimate for this document: {level}.", level=app.level_name(r.level))]
+                                 + app.quality_reasons(r) + ([t("Click to go to the next word to check "
+                                                                "(all pages, in order).")] if flat else []))
+        chip.disabled = not flat
+        chip.visible = True
 
     def _card_box(self, rows: list[ft.Control], bgcolor=None) -> ft.Control:
         """A card of these rows, as wide as fits (at most 480 pixels)."""

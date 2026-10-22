@@ -470,3 +470,41 @@ def test_donation_reminder_every_tenth_start_and_never_again(isolated_home):
     never.on_click(None)
     assert app.ui["donate_reminder"] is False and app.page.popped == 1
     assert not any(app.count_start() for _ in range(30))  # switched off for good
+
+
+async def _check_the_whole_document(app, path):
+    """Focus mode's counter of words to check: each click shows the next one, page after page, with the bar under
+    it; closing the bar ends checking and the counter shows the total again."""
+    app.source_path = str(path)
+    await app.load_document()
+    f = app.focus
+    await f.open()
+    for _ in range(20):
+        await _settle(0.25)
+    assert f.active and app.quality is not None
+    pages = sorted({p for p, _text, rects in f.words if rects})
+    assert len(pages) >= 2, "the sample paper has two pages of text"
+    first = [n for n, (p, _t, r) in enumerate(f.words) if p == pages[0] and r]
+    second = [n for n, (p, _t, r) in enumerate(f.words) if p == pages[1] and r]
+    f._checks = {pages[0]: [(first[3], first[3], "unclear"), (first[9], first[10], "unknown")],
+                 pages[1]: [(second[2], second[2], "number")]}
+    f._update_check_chip()
+    assert f.check_chip.visible and f.check_text.value.endswith("3 to check")
+    await f.next_check()  # the first one
+    assert f._check == (pages[0], 0) and f.check_text.value.endswith("1 / 3 to check")
+    assert f.card_mode == "check"
+    await f.next_check()
+    await f.next_check()  # on to the next page
+    assert f._check == (pages[1], 0) and f.current == pages[1] and f.check_text.value.endswith("3 / 3 to check")
+    await f.step_check(-1)  # the bar's Previous goes back over the page break
+    assert f._check == (pages[0], 1)
+    await f.next_check()
+    await f.next_check()  # after the last: back to the first
+    assert f._check == (pages[0], 0)
+    await f.close_card()
+    assert f._check is None and f.check_text.value.endswith("3 to check")
+    await f.close()
+
+
+def test_app_check_quick_checking(headless, paper):
+    headless(lambda app: _check_the_whole_document(app, paper))
