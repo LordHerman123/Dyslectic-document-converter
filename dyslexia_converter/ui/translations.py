@@ -2189,6 +2189,28 @@ T: dict[str, dict[str, str]] = {
     "Next word to check": {"nl": "Volgend woord om na te kijken", "fr": "Mot suivant à vérifier",
                            "de": "Nächstes zu prüfendes Wort", "es": "Palabra siguiente que revisar",
                            "it": "Parola successiva da controllare"},
+    "{n} to check": {"nl": "{n} na te kijken", "fr": "{n} à vérifier", "de": "{n} zu prüfen", "es": "{n} que revisar",
+                     "it": "{n} da controllare"},
+    "{k} / {n} to check": {"nl": "{k} / {n} na te kijken", "fr": "{k} / {n} à vérifier", "de": "{k} / {n} zu prüfen",
+                           "es": "{k} / {n} que revisar", "it": "{k} / {n} da controllare"},
+    "Nothing to check": {"nl": "Niets na te kijken", "fr": "Rien à vérifier", "de": "Nichts zu prüfen",
+                         "es": "Nada que revisar", "it": "Niente da controllare"},
+    "Quality estimate for this document: {level}.": {
+        "nl": "Kwaliteitsschatting voor dit document: {level}.",
+        "fr": "Estimation de la qualité de ce document : {level}.",
+        "de": "Qualitätsschätzung für dieses Dokument: {level}.",
+        "es": "Estimación de calidad de este documento: {level}.",
+        "it": "Stima della qualità di questo documento: {level}."},
+    "Click to go to the next word to check (all pages, in order).": {
+        "nl": "Klik om naar het volgende woord om na te kijken te gaan (alle pagina's, op volgorde).",
+        "fr": "Cliquez pour aller au mot suivant à vérifier (toutes les pages, dans l'ordre).",
+        "de": "Klicken, um zum nächsten zu prüfenden Wort zu gehen (alle Seiten, der Reihe nach).",
+        "es": "Haga clic para ir a la siguiente palabra que revisar (todas las páginas, en orden).",
+        "it": "Fai clic per andare alla parola successiva da controllare (tutte le pagine, in ordine)."},
+    "That was the last one: back to the first.": {
+        "nl": "Dat was de laatste: terug naar de eerste.", "fr": "C'était le dernier : retour au premier.",
+        "de": "Das war das letzte: zurück zum ersten.", "es": "Era la última: de vuelta a la primera.",
+        "it": "Era l'ultima: si torna alla prima."},
 }
 
 # messages from the processing core, matched in i18n.MESSAGE_PATTERNS; {0}, {1}... are the parts found
