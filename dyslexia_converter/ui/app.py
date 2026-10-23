@@ -606,9 +606,11 @@ class ConverterApp:
         self.orig_label = self.text(t("Original"), 13)
         self.conv_label = self.text(t("Converted"), 13)
         self.view_seg = ft.SegmentedButton(
-            segments=[ft.Segment(value="orig", label=ft.Text(t("Original"), no_wrap=True)),
-                      ft.Segment(value="side", label=ft.Text(t("Both"), no_wrap=True)),
-                      ft.Segment(value="conv", label=ft.Text(t("Converted"), no_wrap=True))],
+            # (the padding keeps wide fonts such as OpenDyslexic from being cut off at the end of a segment)
+            segments=[ft.Segment(value=v, label=ft.Container(
+                ft.Text(t(name), no_wrap=True, overflow=ft.TextOverflow.VISIBLE),
+                padding=ft.Padding.symmetric(horizontal=6)))
+                      for v, name in (("orig", "Original"), ("side", "Both"), ("conv", "Converted"))],
             selected=[self.view_mode], show_selected_icon=False, on_change=self.on_view_mode)
 
         def nav(which: str, label: ft.Text) -> ft.Row:
@@ -681,7 +683,7 @@ class ConverterApp:
         """Show the detected language next to 'Detect automatically'."""
         label = self.t("Detect automatically")
         if self.session and self.settings.ocr_language == "auto":
-            label = self.t("Detect automatically (found: {language})",
+            label = self.t("Automatic: {language}",
                            language=self.lang_name(self.session.document.language))
         self.doc_lang_dd.options[0] = ft.DropdownOption(key="auto", text=label)
 
@@ -693,13 +695,13 @@ class ConverterApp:
         t = self.t
         self.review_summary = self.text(t("No scanned document loaded."), 14)
         self.review_list = ft.Column(spacing=8)  # the page scrolls as a whole
-        self.word_field = ft.TextField(label=t("Add a word to your dictionary"), width=280,
+        self.word_field = ft.TextField(label=t("Add a word to your dictionary"), width=360,
                                        on_submit=self.on_add_word)
         self.words_view = ft.Row(spacing=6, run_spacing=6, wrap=True)
         self._fill_words()
-        self.mistake_field = ft.TextField(label=t("As it appears (for example scientifi c)"), width=340,
+        self.mistake_field = ft.TextField(label=t("As it appears"), hint_text=t("for example scientifi c"), width=300,
                                           on_submit=self.on_add_mistake)
-        self.mistake_fix = ft.TextField(label=t("Should be (empty: only mark it)"), width=300,
+        self.mistake_fix = ft.TextField(label=t("Should be"), hint_text=t("empty: only mark it"), width=260,
                                         on_submit=self.on_add_mistake)
         self.mistakes_view = ft.Column(spacing=2)
         self._fill_mistakes()
@@ -2184,9 +2186,11 @@ class ConverterApp:
                                                       "the size and spacing at once"))
         self.hl_items = []
         self.export_menu = self.build_export_menu()
-        return ft.Row([self.view_seg, self.read_toggle, ft.Container(expand=True), self.checker.button(),
-                       self.reflow_btn, self.focus_btn, self.export_menu], spacing=10,
-                      vertical_alignment=ft.CrossAxisAlignment.CENTER)
+        # (a wide font or large text: the buttons go on to a second line rather than squeeze the view switch)
+        return ft.Row([ft.Row([self.view_seg, self.read_toggle], spacing=10, tight=True),
+                       ft.Row([self.checker.button(), self.reflow_btn, self.focus_btn, self.export_menu], spacing=10,
+                              tight=True)], wrap=True, spacing=10, run_spacing=8,
+                      alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
     def build_export_menu(self, compact: bool = False) -> ft.PopupMenuButton:
         """One "Export" button; the formats (and whether to include highlights) are in its menu."""

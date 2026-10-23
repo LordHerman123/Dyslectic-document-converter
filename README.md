@@ -15,12 +15,17 @@ API key. When it's on, it only sees small snippets that the local rules couldn't
 
 ## Download for Windows (version 1.21)
 
-Get `DyslexiaConverter-1.21.0-setup.exe` (installer) or `DyslexiaConverter-1.21.0-windows.zip` (unzip and
+Get `DyslexiaConverter-1.21.1-setup.exe` (installer) or `DyslexiaConverter-1.21.1-windows.zip` (unzip and
 double-click `DyslexiaConverter.exe`) from the repository's **Releases** page. Text recognition (Tesseract)
 is included; nothing else needs to be installed. How the Windows build is made: [windows/README.md](windows/README.md).
 
 ## What's new in 1.21
 
+* **1.21.1:** *My common mistakes* (OCR review): type a mistake that keeps coming back, such as “scientifi c”, with
+  what it should be, and it is corrected in every document (or only marked to check). Words split after fi, fl or ff
+  are joined automatically when the joined word is in the dictionary. Words you added to your dictionary can be
+  removed again (×). Equations in Word files are kept. Mac and Linux downloads are back on the release page, and
+  labels no longer get cut off with wide fonts such as OpenDyslexic.
 * **Quick check in focus mode:** a counter in the top bar shows the document's quality estimate and how many words are to check. Each click jumps to the next one, page after page, with *Edit* at hand to correct it.
 * **Maths in a sentence read aloud as maths:** x with an index i is said “x sub i”, ≤ is “is less than or equal to”,
   |x|² is “the absolute value of x, squared”. Where the text cannot show how such maths is built (a root, for

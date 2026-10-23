@@ -415,12 +415,9 @@ T: dict[str, dict[str, str]] = {
     "Detect automatically": {"nl": "Automatisch herkennen", "fr": "Détecter automatiquement",
                              "de": "Automatisch erkennen", "es": "Detectar automáticamente",
                              "it": "Rileva automaticamente"},
-    "Detect automatically (found: {language})": {
-        "nl": "Automatisch herkennen (gevonden: {language})",
-        "fr": "Détecter automatiquement (trouvé : {language})",
-        "de": "Automatisch erkennen (erkannt: {language})",
-        "es": "Detectar automáticamente (detectado: {language})",
-        "it": "Rileva automaticamente (rilevato: {language})"},
+    "Automatic: {language}": {"nl": "Automatisch: {language}", "fr": "Automatique : {language}",
+                              "de": "Automatisch: {language}", "es": "Automático: {language}",
+                              "it": "Automatico: {language}"},
     "Detected from the text of each PDF. Choose a language if the guess is wrong: it sets the dictionary for OCR, "
     "spelling fixes and rejoining split words.": {
         "nl": "Wordt herkend aan de tekst van elke pdf. Kies een taal als de gok fout is: die bepaalt het "
@@ -2188,14 +2185,15 @@ T: dict[str, dict[str, str]] = {
     "Next word to check": {"nl": "Volgend woord om na te kijken", "fr": "Mot suivant à vérifier",
                            "de": "Nächstes zu prüfendes Wort", "es": "Palabra siguiente que revisar",
                            "it": "Parola successiva da controllare"},
-    "As it appears (for example scientifi c)": {
-        "nl": "Zoals het er staat (bijvoorbeeld scientifi c)", "fr": "Tel qu'il apparaît (par exemple scientifi c)",
-        "de": "Wie es erscheint (zum Beispiel scientifi c)", "es": "Tal como aparece (por ejemplo scientifi c)",
-        "it": "Come appare (per esempio scientifi c)"},
-    "Should be (empty: only mark it)": {
-        "nl": "Moet zijn (leeg: alleen markeren)", "fr": "Devrait être (vide : seulement le marquer)",
-        "de": "Sollte sein (leer: nur markieren)", "es": "Debería ser (vacío: solo marcarlo)",
-        "it": "Dovrebbe essere (vuoto: solo segnalarlo)"},
+    "As it appears": {"nl": "Zoals het er staat", "fr": "Tel qu'il apparaît", "de": "Wie es erscheint",
+                      "es": "Tal como aparece", "it": "Come appare"},
+    "for example scientifi c": {"nl": "bijvoorbeeld scientifi c", "fr": "par exemple scientifi c",
+                                "de": "zum Beispiel scientifi c", "es": "por ejemplo scientifi c",
+                                "it": "per esempio scientifi c"},
+    "Should be": {"nl": "Moet zijn", "fr": "Devrait être", "de": "Sollte sein", "es": "Debería ser",
+                  "it": "Dovrebbe essere"},
+    "empty: only mark it": {"nl": "leeg: alleen markeren", "fr": "vide : seulement le marquer",
+                            "de": "leer: nur markieren", "es": "vacío: solo marcarlo", "it": "vuoto: solo segnalarlo"},
     "My common mistakes": {"nl": "Mijn veelvoorkomende fouten", "fr": "Mes erreurs fréquentes",
                            "de": "Meine häufigen Fehler", "es": "Mis errores frecuentes",
                            "it": "I miei errori frequenti"},
