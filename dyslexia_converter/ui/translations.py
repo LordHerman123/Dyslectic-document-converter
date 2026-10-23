@@ -2022,7 +2022,6 @@ T: dict[str, dict[str, str]] = {
     # ---------------------------------------------------------------- the size of a picture (focus mode)
     "Picture size": {"nl": "Grootte van de afbeelding", "fr": "Taille de l'image", "de": "Bildgröße",
                      "es": "Tamaño de la imagen", "it": "Dimensione dell'immagine"},
-    "Smaller": {"nl": "Kleiner", "fr": "Plus petite", "de": "Kleiner", "es": "Más pequeña", "it": "Più piccola"},
     "Width of the picture, as a share of the text width": {
         "nl": "Breedte van de afbeelding, als deel van de tekstbreedte",
         "fr": "Largeur de l'image, en part de la largeur du texte",

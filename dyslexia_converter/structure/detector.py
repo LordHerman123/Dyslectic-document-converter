@@ -752,7 +752,9 @@ class StructureDetector:
             elif _is_upper_heading(text) and nlines == 1 and b.source == "ocr" or \
                     _is_upper_heading(text) and nlines == 1 and b.font_size >= bs:
                 b.kind = BlockKind.HEADING
-            elif numbered and b.source == "ocr" and len(words) <= 8 and not text.endswith("."):
+            elif numbered and b.source == "ocr" and len(words) <= 8 and not text.endswith(".") \
+                    and re.match(r"\S+\s+[^\W\d_]", text):
+                # (the number is followed by a word: "2 Method"; not "2 -1 oh Se", the read-out labels of a chart)
                 b.kind = BlockKind.HEADING
             elif getattr(b, "_italic", False) and nlines == 1 and len(words) <= 12 and SUBSECTION_RE.match(text) \
                     and not text.endswith(TERMINAL):

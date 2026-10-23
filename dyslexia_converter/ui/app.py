@@ -697,9 +697,9 @@ class ConverterApp:
                                        on_submit=self.on_add_word)
         self.words_view = ft.Row(spacing=6, run_spacing=6, wrap=True)
         self._fill_words()
-        self.mistake_field = ft.TextField(label=t("As it appears (for example scientifi c)"), width=260,
+        self.mistake_field = ft.TextField(label=t("As it appears (for example scientifi c)"), width=340,
                                           on_submit=self.on_add_mistake)
-        self.mistake_fix = ft.TextField(label=t("Should be (empty: only mark it)"), width=230,
+        self.mistake_fix = ft.TextField(label=t("Should be (empty: only mark it)"), width=300,
                                         on_submit=self.on_add_mistake)
         self.mistakes_view = ft.Column(spacing=2)
         self._fill_mistakes()

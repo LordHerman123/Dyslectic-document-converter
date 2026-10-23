@@ -230,18 +230,128 @@ def _numbering_formats(d) -> dict[tuple[str, int], str]:
     return out
 
 
+_M = "{http://schemas.openxmlformats.org/officeDocument/2006/math}"
+
+
+def _omml(el, kind: str = "base") -> list[tuple[str, str]]:
+    """A Word equation (OMML) as text in pieces of (text, "base" / "sup" / "sub"): x with a raised 2, a fraction as
+    (a+b)/(c−d), a root, sum or integral with its limits, brackets, accents and matrices written out. Nothing of it
+    is left out."""
+    tag = el.tag.rsplit("}", 1)[-1]
+
+    def part(name: str, k: str = kind) -> list[tuple[str, str]]:
+        child = el.find(_M + name)
+        return _omml(child, k) if child is not None else []
+
+    def val(prop: str, name: str, default: str) -> str:
+        node = el.find(f"{_M}{prop}/{_M}{name}")
+        return node.get(_M + "val", default) if node is not None else default
+
+    def grouped(pieces: list[tuple[str, str]]) -> list[tuple[str, str]]:
+        """Brackets around more than one sign (the numerator of a fraction, what a root holds)."""
+        if len("".join(t for t, _ in pieces).strip()) <= 1:
+            return pieces
+        return [("(", kind)] + pieces + [(")", kind)]
+
+    if tag == "t":  # (Word's angle brackets are CJK brackets; the maths ones are in the maths font)
+        return [((el.text or "").replace("\u3008", "\u27e8").replace("\u3009", "\u27e9"), kind)]
+    if tag.endswith("Pr"):
+        return []  # how it looks (sizes, characters), not what it says
+    if tag == "f":
+        if val("fPr", "type", "bar") == "noBar":  # a binomial coefficient (n over k, no line): no division
+            return part("num") + [(" ", kind)] + part("den")
+        return grouped(part("num")) + [("/", kind)] + grouped(part("den"))
+    if tag in ("sSup", "sSub", "sSubSup", "sPre"):
+        out = part("e")
+        if tag == "sPre":
+            out = []
+        out += part("sub", "sub") + part("sup", "sup")
+        return out + (part("e") if tag == "sPre" else [])
+    if tag == "rad":
+        degree = part("deg", "sup")
+        return degree + [("√", kind)] + grouped(part("e"))
+    if tag == "d":
+        begin, end, sep = (val("dPr", name, default).replace("\u3008", "\u27e8").replace("\u3009", "\u27e9")
+                           for name, default in (("begChr", "("), ("endChr", ")"), ("sepChr", "|")))
+        items = [_omml(e, kind) for e in el.findall(_M + "e")]
+        out = [(begin, kind)]
+        for i, item in enumerate(items):
+            out += ([(sep + " " if sep in ",;" else f" {sep} ", kind)] if i else []) + item
+        return out + [(end, kind)]
+    if tag == "nary":
+        return [(val("naryPr", "chr", "∫"), kind)] + part("sub", "sub") + part("sup", "sup") + [(" ", kind)] + \
+            part("e")
+    if tag == "func":
+        return part("fName") + [(" ", kind)] + part("e")
+    if tag in ("acc", "bar"):
+        mark = val("accPr", "chr", "\u0302") if tag == "acc" else "\u0305"
+        body = part("e")
+        return body + [(mark, kind)] if body else body
+    if tag in ("limLow", "limUpp"):
+        return part("e") + part("lim", "sub" if tag == "limLow" else "sup")
+    if tag in ("eqArr", "m"):
+        rows = el.findall(_M + "e") if tag == "eqArr" else el.findall(_M + "mr")
+        out = [("[", kind)] if tag == "m" else []
+        for i, row in enumerate(rows):
+            cells = [row] if tag == "eqArr" else row.findall(_M + "e")
+            out += ([("; ", kind)] if i else [])
+            for j, c in enumerate(cells):
+                out += ([(", ", kind)] if j else []) + _omml(c, kind)
+        return out + ([("]", kind)] if tag == "m" else [])
+    out: list[tuple[str, str]] = []
+    for child in el:
+        out += _omml(child, kind)
+    return out
+
+
+def _docx_runs(p) -> tuple[str, list[StyleRange]]:
+    """The text of a Word paragraph with its inline styles, Word equations included (as maths, in their place)."""
+    from docx.text.run import Run
+
+    text, styles = "", []
+
+    def equation(el) -> None:
+        nonlocal text
+        pieces = [(t, k) for t, k in _omml(el) if t]
+        if not pieces:
+            return
+        if text and not text[-1].isspace():
+            text += " "
+        for t, k in pieces:
+            styles.append(StyleRange(len(text), len(text) + len(t), superscript=k == "sup", subscript=k == "sub",
+                                     math=True))
+            text += t
+
+    def run(r) -> None:
+        nonlocal text
+        r = Run(r, p)
+        t = r.text
+        if t:
+            f = r.font
+            if r.bold or r.italic or f.superscript or f.subscript:
+                styles.append(StyleRange(len(text), len(text) + len(t), bold=bool(r.bold), italic=bool(r.italic),
+                                         superscript=bool(f.superscript), subscript=bool(f.subscript)))
+            text += t
+
+    for child in p._p:
+        if child.tag == _W + "r":
+            run(child)
+        elif child.tag in (_W + "hyperlink", _W + "ins", _W + "smartTag", _W + "fldSimple"):
+            for r in child.iter(_W + "r"):
+                run(r)
+        elif child.tag == _M + "oMath":
+            equation(child)
+        elif child.tag == _M + "oMathPara":
+            for i, eq in enumerate(child.iter(_M + "oMath")):
+                if i:
+                    text += "; "
+                equation(eq)
+    return text, styles
+
+
 def _docx_paragraph(p, d, b: _Builder, formats: dict, counters: dict) -> None:
     style = (p.style.name if p.style is not None else "") or ""
-    text, styles = "", []
-    for run in p.runs:
-        t = run.text
-        if t:
-            f = run.font
-            if run.bold or run.italic or f.superscript or f.subscript:
-                styles.append(StyleRange(len(text), len(text) + len(t), bold=bool(run.bold),
-                                         italic=bool(run.italic), superscript=bool(f.superscript),
-                                         subscript=bool(f.subscript)))
-            text += t
+    text, styles = _docx_runs(p)
     for pic in _docx_pictures(p, d):
         b.add(BlockKind.IMAGE, "", image=pic)
     low = style.lower()
