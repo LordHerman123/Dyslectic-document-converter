@@ -695,7 +695,8 @@ class ConverterApp:
         self.review_list = ft.Column(spacing=8)  # the page scrolls as a whole
         self.word_field = ft.TextField(label=t("Add a word to your dictionary"), width=280,
                                        on_submit=self.on_add_word)
-        self.words_view = self.text(", ".join(sorted(self.custom_words.words)) or t("(none yet)"), 13)
+        self.words_view = ft.Row(spacing=6, run_spacing=6, wrap=True)
+        self._fill_words()
         self.mistake_field = ft.TextField(label=t("As it appears (for example scientifi c)"), width=260,
                                           on_submit=self.on_add_mistake)
         self.mistake_fix = ft.TextField(label=t("Should be (empty: only mark it)"), width=230,
@@ -3129,13 +3130,38 @@ class ConverterApp:
     async def _add_word(self, word: str) -> None:
         """Add a word to the user's dictionary and redo the corrections with it."""
         self.custom_words.add(word)
-        self.words_view.value = ", ".join(sorted(self.custom_words.words))
+        self._fill_words()
         if self.session and self.session.document.ocr_used:
             self.session.recompute_corrections(self.settings)
             self.refresh_review()
             await self.rerender()
         self.page.update()
         self.notify(self.t("'{word}' added to your dictionary.", word=word))
+
+    def _fill_words(self) -> None:
+        """Show the reader's own dictionary words, each with a button to take it out again."""
+        t = self.t
+        self.words_view.controls = [
+            ft.Container(ft.Row([self.text(w, 14),
+                                 ft.IconButton(ft.Icons.CLOSE, tooltip=t("Remove"), data=w, icon_size=16,
+                                               on_click=self.on_remove_word)], spacing=0, tight=True),
+                         padding=ft.Padding.only(left=10), border_radius=16,
+                         border=ft.Border.all(1, ft.Colors.OUTLINE_VARIANT))
+            for w in sorted(self.custom_words.words, key=str.lower)] or [self.text(t("(none yet)"), 13)]
+
+    async def on_remove_word(self, e) -> None:
+        """Take a word out of the reader's dictionary and redo the corrections without it."""
+        word = e.control.data
+        self.custom_words.remove(word)
+        self._fill_words()
+        if self.session:
+            if self.session.document.ocr_used:
+                self.session.recompute_corrections(self.settings)
+            self.session.apply_word_fixes()
+            self.refresh_review()
+            await self.rerender()
+        self.page.update()
+        self.notify(self.t("'{word}' removed from your dictionary.", word=word))
 
     def _fill_mistakes(self) -> None:
         """Show the reader's list of mistakes: each entry, what it becomes, and a button to take it out."""

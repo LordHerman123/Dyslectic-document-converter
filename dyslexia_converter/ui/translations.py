@@ -2233,6 +2233,10 @@ T: dict[str, dict[str, str]] = {
         "nl": "'{word}' toegevoegd aan je lijst met fouten.", "fr": "« {word} » ajouté à votre liste d'erreurs.",
         "de": "„{word}“ zu Ihrer Fehlerliste hinzugefügt.", "es": "«{word}» añadido a su lista de errores.",
         "it": "'{word}' aggiunto al tuo elenco di errori."},
+    "'{word}' removed from your dictionary.": {
+        "nl": "'{word}' verwijderd uit je woordenboek.", "fr": "« {word} » retiré de votre dictionnaire.",
+        "de": "„{word}“ aus Ihrem Wörterbuch entfernt.", "es": "«{word}» eliminado de su diccionario.",
+        "it": "'{word}' rimosso dal tuo dizionario."},
     "{n} to check": {"nl": "{n} na te kijken", "fr": "{n} à vérifier", "de": "{n} zu prüfen", "es": "{n} que revisar",
                      "it": "{n} da controllare"},
     "{k} / {n} to check": {"nl": "{k} / {n} na te kijken", "fr": "{k} / {n} à vérifier", "de": "{k} / {n} zu prüfen",

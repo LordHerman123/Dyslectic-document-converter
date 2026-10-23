@@ -531,3 +531,21 @@ async def _list_of_mistakes(app, path):
 
 def test_app_check_list_of_mistakes(headless, paper):
     headless(lambda app: _list_of_mistakes(app, paper))
+
+
+async def _remove_a_dictionary_word(app, path):
+    """A word added to the reader's own dictionary can be taken out again in the OCR review screen."""
+    app.word_field.value = "Grünwald"
+    await app.on_add_word(None)
+    assert "Grünwald" in app.custom_words.words and len(app.words_view.controls) == 1
+
+    class Remove:
+        control = type("C", (), {"data": "Grünwald"})()
+    await app.on_remove_word(Remove())
+    from dyslexia_converter.transform.spelling import CustomWords
+    assert "Grünwald" not in CustomWords().words  # gone from the stored list too
+    assert app.words_view.controls[0].value  # "(none yet)"
+
+
+def test_app_check_remove_dictionary_word(headless, paper):
+    headless(lambda app: _remove_a_dictionary_word(app, paper))
