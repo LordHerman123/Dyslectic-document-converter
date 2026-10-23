@@ -29,7 +29,7 @@ from ..fonts import FONT_CHOICES, get_family
 from ..quality import Quality
 from ..render import preview
 from ..settings import PRESET_DISCLAIMER, PRESETS, FormatSettings, SettingsStore
-from ..transform.spelling import CustomWords
+from ..transform.spelling import CustomWords, MistakeList
 from .check_panel import CheckPanel
 from .focus import FocusMode
 from .reflow import ReflowMode
@@ -99,6 +99,7 @@ class ConverterApp:
         self.key_checks: dict = {}  # key id -> the last connection check (a CheckResult, or "busy")
         self._new_check = None  # (key, result) of the check of the key typed in "Add a key"
         self.custom_words = CustomWords()
+        self.mistakes = MistakeList()  # the reader's own list of mistakes that come back
         self.session: Optional[pipeline.Session] = None
         self.source_path: Optional[str] = None
         self.converted_pdf: Optional[bytes] = None
@@ -695,11 +696,25 @@ class ConverterApp:
         self.word_field = ft.TextField(label=t("Add a word to your dictionary"), width=280,
                                        on_submit=self.on_add_word)
         self.words_view = self.text(", ".join(sorted(self.custom_words.words)) or t("(none yet)"), 13)
+        self.mistake_field = ft.TextField(label=t("As it appears (for example scientifi c)"), width=260,
+                                          on_submit=self.on_add_mistake)
+        self.mistake_fix = ft.TextField(label=t("Should be (empty: only mark it)"), width=230,
+                                        on_submit=self.on_add_mistake)
+        self.mistakes_view = ft.Column(spacing=2)
+        self._fill_mistakes()
         return self.page_body(t("OCR corrections"), t("Corrections use a local dictionary. The original OCR text is "
                                                       "kept, so every correction can be undone."), [
             self.card(t("My dictionary (names, technical terms, abbreviations)"), [
                 ft.Row([self.word_field, ft.OutlinedButton(t("Add"), on_click=self.on_add_word)], wrap=True),
                 self.words_view], ft.Icons.MENU_BOOK_OUTLINED),
+            self.card(t("My common mistakes"), [
+                self.text(t("Mistakes that come back in your documents. With what it should be, it is corrected "
+                            "in every document (you can undo it in the list below); without, it is marked as a "
+                            "word to check. Words split after fi, fl or ff (scientifi c) are joined "
+                            "automatically."), 13, color=ft.Colors.ON_SURFACE_VARIANT),
+                ft.Row([self.mistake_field, self.mistake_fix,
+                        ft.OutlinedButton(t("Add"), on_click=self.on_add_mistake)], wrap=True),
+                self.mistakes_view], ft.Icons.SPELLCHECK),
             ft.Row([ft.Container(self.review_summary, expand=True),
                     ft.OutlinedButton(t("Undo all corrections"), icon=ft.Icons.UNDO, on_click=self.on_undo_all)],
                    vertical_alignment=ft.CrossAxisAlignment.CENTER),
@@ -726,7 +741,8 @@ class ConverterApp:
                 "disabled": t("Off")}.get(self.settings.ocr_correction, self.settings.ocr_correction)
         self.review_summary.value = t("{done} correction(s) applied, {pending} waiting for your review. Mode: {mode}.",
                                       done=len(done) + len(mine), pending=len(pending), mode=mode)
-        source_names = {"dictionary": t("dictionary"), "ai": "AI", "user": t("typed by you")}
+        source_names = {"dictionary": t("dictionary"), "ai": "AI", "user": t("typed by you"),
+                        "ligature": t("split after fi, fl or ff"), "list": t("your list of mistakes")}
         for c in pending + mine + done + rejected:
             before, word, after = session.correction_sentence(c)
             actions = []
@@ -745,7 +761,7 @@ class ConverterApp:
             # the pencil: retype the sentence yourself when neither the scan nor the suggestion is right
             actions.append(ft.TextButton(t("Edit"), icon=ft.Icons.EDIT_OUTLINED, data=c.id,
                                          tooltip=t("Type the text yourself"), on_click=self.on_edit_text))
-            if c.source != "user":
+            if c.source not in ("user", "ligature", "list"):
                 actions.append(ft.TextButton(t("'{word}' is correct - add to dictionary", word=c.original),
                                              data=c.original, on_click=self.on_add_word_from_review))
             info = status if c.source == "user" else \
@@ -1874,7 +1890,8 @@ class ConverterApp:
         try:
             self.session = await self.in_thread(
                 lambda: pipeline.load(self.source_path, self.settings, progress=progress,
-                                      custom_words=self.custom_words, pages=self._page_range()))
+                                      custom_words=self.custom_words, pages=self._page_range(),
+                                      mistakes=self.mistakes))
         except ProtectedFile as ex:  # copy protection or a password: say what it is and what to do
             self.busy(False, self.t("Could not read {name}.", name=name))
             if ex.kind == "password":
@@ -2024,7 +2041,8 @@ class ConverterApp:
         t = self.t
         return {"unclear": t("Unclear in the scan"), "unknown": t("Not in the dictionary"),
                 "split": t("The sentence may go on in the next paragraph"),
-                "number": t("A number unlike the others in its column: compare it with the original")}.get(why, "")
+                "number": t("A number unlike the others in its column: compare it with the original"),
+                "listed": t("On your list of common mistakes")}.get(why, "")
 
     async def refresh_quality(self) -> None:
         """Rate the conversion again (after converting or correcting words) and show the notice."""
@@ -3118,6 +3136,41 @@ class ConverterApp:
             await self.rerender()
         self.page.update()
         self.notify(self.t("'{word}' added to your dictionary.", word=word))
+
+    def _fill_mistakes(self) -> None:
+        """Show the reader's list of mistakes: each entry, what it becomes, and a button to take it out."""
+        t = self.t
+        self.mistakes_view.controls = [
+            ft.Row([self.text(wrong, 14, weight=ft.FontWeight.BOLD),
+                    ft.Icon(ft.Icons.ARROW_FORWARD, size=16),
+                    self.text(right or t("(only marked)"), 14),
+                    ft.IconButton(ft.Icons.DELETE_OUTLINE, tooltip=t("Remove"), data=wrong, icon_size=18,
+                                  on_click=self.on_remove_mistake)], spacing=6, wrap=True)
+            for wrong, right in self.mistakes.entries] or [self.text(t("(none yet)"), 13)]
+
+    async def on_add_mistake(self, e) -> None:
+        """Add the typed mistake (and what it should be) to the list, and apply it to the open document."""
+        wrong = (self.mistake_field.value or "").strip()
+        if not wrong:
+            return
+        self.mistakes.add(wrong, self.mistake_fix.value or "")
+        self.mistake_field.value, self.mistake_fix.value = "", ""
+        await self._mistakes_changed()
+        self.notify(self.t("'{word}' added to your list of mistakes.", word=wrong))
+
+    async def on_remove_mistake(self, e) -> None:
+        """Take a mistake off the list (its corrections in the open document go too)."""
+        self.mistakes.remove(e.control.data)
+        await self._mistakes_changed()
+
+    async def _mistakes_changed(self) -> None:
+        """The list changed: show it, and correct or mark the open document again."""
+        self._fill_mistakes()
+        if self.session:
+            self.session.apply_word_fixes()
+            self.refresh_review()
+            await self.rerender()
+        self.page.update()
 
 
 def _blank_png() -> bytes:

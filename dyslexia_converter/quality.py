@@ -80,7 +80,8 @@ def _words(text: str) -> list[tuple[int, int]]:
 
 def _fixed(doc: Document, block_id: str) -> list[tuple[int, int]]:
     """Ranges of a block's text the reader corrected (or chose a fix for): no longer uncertain."""
-    return [(c.start, c.end) for c in doc.corrections_for(block_id) if c.applied and c.source in ("user", "check")]
+    return [(c.start, c.end) for c in doc.corrections_for(block_id)
+            if c.applied and c.source in ("user", "check", "ligature", "list")]
 
 
 def _level(ocr_words: int, unsure: int, ocr: bool, formulas: float, split: float, unusual: bool) -> Rating:

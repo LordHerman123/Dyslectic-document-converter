@@ -508,3 +508,26 @@ async def _check_the_whole_document(app, path):
 
 def test_app_check_quick_checking(headless, paper):
     headless(lambda app: _check_the_whole_document(app, paper))
+
+
+async def _list_of_mistakes(app, path):
+    """The reader adds a common mistake in the OCR review screen: it is kept, applied to the open document (marked
+    as a word to check when it has no fix), shown in the list, and can be taken out again."""
+    app.source_path = str(path)
+    await app.load_document()
+    word = next(w for b in app.session.document.blocks for w in (b.text or "").split() if len(w) > 6 and w.isalpha())
+    app.mistake_field.value, app.mistake_fix.value = word, ""
+    await app.on_add_mistake(None)
+    assert app.mistakes.entries == [(word, "")] and app.mistake_field.value == ""
+    assert any(why == "listed" for marks in app.session.quality().unsure.values() for *_, why in marks)
+    assert len(app.mistakes_view.controls) == 1
+
+    class Remove:
+        control = type("C", (), {"data": word})()
+    await app.on_remove_mistake(Remove())
+    assert app.mistakes.entries == [] and not any(
+        why == "listed" for marks in app.session.quality().unsure.values() for *_, why in marks)
+
+
+def test_app_check_list_of_mistakes(headless, paper):
+    headless(lambda app: _list_of_mistakes(app, paper))
