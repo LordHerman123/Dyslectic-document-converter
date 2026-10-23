@@ -24,9 +24,11 @@ from .quality import Quality, assess
 from .render.compose import ComposeResult, compose
 from .settings import FormatSettings
 from .structure.detector import StructureDetector
-from .transform.spelling import (CustomWords, Dictionary, OcrCorrector, dehyphenator, detect_language,
-                                 split_word_candidates, word_rejoiner)
+from .transform.spelling import (CustomWords, Dictionary, MistakeList, OcrCorrector, dehyphenator,
+                                 detect_language, ligature_gaps, split_word_candidates, word_rejoiner)
 
+# corrections made from the text itself: words split after fi / fl / ff, and the reader's own list of mistakes
+WORD_FIXES = ("ligature", "list")
 # end of a sentence: . ! ? (optionally followed by a closing quote/bracket) and then a space
 SENTENCE_END_RE = re.compile(r"[.!?][\"'”’)\]]*\s+")
 # a full stop after these is not the end of a sentence
@@ -82,6 +84,8 @@ class Session:
     # a Word or EPUB file laid out as pages (PDF) for the Original view; None for a PDF (shown as it is)
     original_pdf: Optional[bytes] = field(default=None, repr=False)
     _layout_pieces: dict = field(default_factory=dict, repr=False)
+    # the reader's own list of mistakes that come back ("scientifi c"): fixed or marked in every document
+    mistakes: MistakeList = field(default_factory=MistakeList)
 
     # ------------------------------------------------------------ the whole-document AI check
     def view(self) -> Document:
@@ -275,6 +279,9 @@ class Session:
             elif c.source == "check" and c.id[6:] in renamed and c.block_id in moved:
                 self.document.corrections.append(replace(c, id="check-" + renamed[c.id[6:]],
                                                          block_id=moved[c.block_id]))
+        undone = {(moved[c.block_id], c.original) for c in old.corrections
+                  if c.source in WORD_FIXES and c.status == "rejected" and c.block_id in moved}
+        self.apply_word_fixes(undone)
 
     # ------------------------------------------------------------ corrections
     def recompute_corrections(self, settings: FormatSettings) -> None:
@@ -292,7 +299,46 @@ class Session:
             if old is not None and old.status in ("accepted", "rejected") and old.replacement == c.replacement:
                 c.status = old.status
         # text the user typed in themselves, and fixes they chose from the AI check, are always kept
-        doc.corrections = fresh + [c for c in doc.corrections if c.source in ("user", "check")]
+        doc.corrections = fresh + [c for c in doc.corrections if c.source in ("user", "check") + WORD_FIXES]
+
+    def apply_word_fixes(self, undone: Optional[set] = None) -> None:
+        """Words split after fi / fl / ff ("scientifi c") and the reader's own list of mistakes, as corrections
+        (the text itself is kept; each can be undone in the review, and stays undone). Done again after the list
+        changes. ``undone``: (block id, original text) of fixes the reader took back before a rebuild."""
+        doc = self.document
+        undone = set(undone or ()) | {(c.block_id, c.original) for c in doc.corrections
+                                      if c.source in WORD_FIXES and c.status == "rejected"}
+        doc.corrections = [c for c in doc.corrections if c.source not in WORD_FIXES]
+        dictionary = Dictionary([doc.language or "en"], self.custom_words)
+        for b in doc.blocks:
+            if b.kind in (BlockKind.TABLE, BlockKind.IMAGE, BlockKind.FURNITURE) or not b.text:
+                continue
+            others = [(c.start, c.end) for c in doc.corrections_for(b.id)]
+            found = [(a, z, r, "list") for a, z, r in self.mistakes.find(b.text) if r]
+            found += [(a, z, r, "ligature") for a, z, r in ligature_gaps(b.text, dictionary)
+                      if not any(x < z and a < y for x, y, _, _ in found)]
+            for a, z, replacement, source in found:
+                if any(x < z and a < y for x, y in others):
+                    continue  # the reader's own correction, or another, is there already
+                original = b.text[a:z]
+                doc.corrections.append(Correction(
+                    id=f"{source}-{b.id}-{a}", block_id=b.id, start=a, end=z, original=original,
+                    replacement=replacement, confidence=0.95, source=source,
+                    status="rejected" if (b.id, original) in undone else "auto"))
+
+    def listed_marks(self, doc: Document) -> dict[str, list[tuple[int, int, str]]]:
+        """Where the entries of the reader's list that are only to mark (not to fix) appear: block id -> (start,
+        end, "listed"), for the words to check."""
+        out: dict[str, list[tuple[int, int, str]]] = {}
+        if not any(not r for _, r in self.mistakes.entries):
+            return out
+        for b in doc.blocks:
+            if b.kind in (BlockKind.TABLE, BlockKind.IMAGE, BlockKind.FURNITURE) or not b.text:
+                continue
+            for a, z, r in self.mistakes.find(b.text):
+                if not r:
+                    out.setdefault(b.id, []).append((a, z, "listed"))
+        return out
 
     def set_correction(self, correction_id: str, status: str) -> None:
         """Set the status of one correction ("accepted", "rejected", ...) by its id."""
@@ -610,7 +656,12 @@ class Session:
         """How much to trust the conversion (document and pages) and the words to check: see :mod:`quality`.
         Words the reader corrected are not to check any more."""
         doc = doc or self.view()
-        return assess(doc, Dictionary([doc.language], self.custom_words).known)
+        q = assess(doc, Dictionary([doc.language], self.custom_words).known)
+        for bid, marks in self.listed_marks(doc).items():  # the reader's own list: to check, also when sure
+            have = q.unsure.setdefault(bid, [])
+            have += [m for m in marks if not any(a < m[1] and m[0] < z for a, z, _ in have)]
+            have.sort()
+        return q
 
     def export(self, fmt: str, settings: FormatSettings) -> bytes:
         """The document in an output format: "pdf", "printable_pdf", "docx", "epub", "txt" or "md" (bytes)."""
@@ -809,7 +860,7 @@ def _text_layer_sample(path: str, max_pages: int = 6) -> str:
 
 
 def _load_structured(path: str, settings: FormatSettings, progress: Optional[ProgressFn],
-                     custom_words: Optional[CustomWords]) -> Session:
+                     custom_words: Optional[CustomWords], mistakes: Optional[MistakeList] = None) -> Session:
     """A Word or EPUB file: its own structure is read directly (no text recognition or layout guessing needed)."""
     if progress:
         progress("Reading the document", 0.2)
@@ -820,8 +871,10 @@ def _load_structured(path: str, settings: FormatSettings, progress: Optional[Pro
         sample = " ".join(b.text for b in doc.blocks[:80] if b.text)
         if len(sample) > 200:
             doc.language = detect_language(sample)
-    session = Session(doc, custom_words or CustomWords(), original_pdf=original)
+    session = Session(doc, custom_words or CustomWords(), original_pdf=original,
+                      mistakes=mistakes or MistakeList())
     session._build = lambda orders=None, extra=(): (doc, {})  # the reading order is the file's own
+    session.apply_word_fixes()
     if progress:
         progress("Done", 1.0)
     return session
@@ -829,12 +882,14 @@ def _load_structured(path: str, settings: FormatSettings, progress: Optional[Pro
 
 def load(path: str | Path, settings: Optional[FormatSettings] = None, ocr_engine: Optional[OcrEngine] = None,
          progress: Optional[ProgressFn] = None, custom_words: Optional[CustomWords] = None,
-         use_ocr: bool = True, pages: Optional[tuple[int, int]] = None) -> Session:
-    """Extract and structure a PDF, Word (.docx) or EPUB file. The source file is only read, never written."""
+         use_ocr: bool = True, pages: Optional[tuple[int, int]] = None,
+         mistakes: Optional[MistakeList] = None) -> Session:
+    """Extract and structure a PDF, Word (.docx) or EPUB file. The source file is only read, never written.
+    ``mistakes``: the reader's own list of mistakes to fix or mark (by default the one stored for the user)."""
     settings = settings or FormatSettings()
     path = str(path)
     if is_structured(path):
-        return _load_structured(path, settings, progress, custom_words)
+        return _load_structured(path, settings, progress, custom_words, mistakes)
     engine = (ocr_engine or default_engine()) if use_ocr else None
     ocr_langs = ["en", "nl"] if settings.ocr_language == "auto" else [settings.ocr_language]
     if settings.ocr_language == "auto":
@@ -891,12 +946,13 @@ def load(path: str | Path, settings: Optional[FormatSettings] = None, ocr_engine
         return doc, detector.layout_pieces
 
     doc, layout_pieces = build()
-    session = Session(doc, custom)
+    session = Session(doc, custom, mistakes=mistakes or MistakeList())
     session._build, session._layout_pieces = build, layout_pieces
     if doc.ocr_used:
         if progress:
             progress("Checking OCR text against the dictionary", 0.95)
         session.recompute_corrections(settings)
+    session.apply_word_fixes()
     if progress:
         progress("Done", 1.0)
     return session

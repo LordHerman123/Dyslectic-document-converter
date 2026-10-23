@@ -5,6 +5,7 @@ import zipfile
 from PIL import Image
 
 from dyslexia_converter import pipeline
+from dyslexia_converter.extract.structured import read_structured
 from dyslexia_converter.model import BlockKind
 from dyslexia_converter.render import preview
 from dyslexia_converter.settings import FormatSettings
@@ -196,3 +197,29 @@ def test_pdf_loading_is_unchanged(paper):
     """A PDF still goes through the PDF reader, and is shown as itself."""
     s = pipeline.load(paper, FormatSettings())
     assert s.original_pdf is None and s.document.blocks
+
+
+def test_word_equations_are_kept_as_maths(tmp_path):
+    """Equations made with Word's equation editor are read in their place as maths text (they were left out):
+    powers raised, indices lowered, a fraction with brackets around more than one sign."""
+    import docx
+    from docx.oxml import parse_xml
+
+    m = 'xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"'
+
+    def r(t):
+        return f"<m:r><m:t>{t}</m:t></m:r>"
+    d = docx.Document()
+    p = d.add_paragraph("The energy is ")
+    p._p.append(parse_xml(f"<m:oMath {m}>{r('E=m')}<m:sSup><m:e>{r('c')}</m:e><m:sup>{r('2')}</m:sup></m:sSup>"
+                          "</m:oMath>"))
+    p.add_run(", and the mean is ")
+    p._p.append(parse_xml(f"<m:oMath {m}><m:f><m:num>{r('a+b')}</m:num><m:den>{r('2')}</m:den></m:f></m:oMath>"))
+    p.add_run(".")
+    d.save(tmp_path / "eq.docx")
+    doc, _ = read_structured(tmp_path / "eq.docx")
+    [b] = [b for b in doc.blocks if b.text]
+    assert b.text == "The energy is E=mc2, and the mean is (a+b)/2."
+    two = b.text.index("2,")
+    assert any(s.superscript and s.math and s.start == two for s in b.styles)
+    assert all(s.math for s in b.styles if s.start >= b.text.index("E=") and s.end <= two + 1)

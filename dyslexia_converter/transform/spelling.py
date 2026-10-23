@@ -509,6 +509,78 @@ def split_word_candidates(text: str, dictionary: Dictionary) -> list[tuple[int, 
     return out
 
 
+_LIGATURE_LETTERS = {"\ufb00": "ff", "\ufb01": "fi", "\ufb02": "fl", "\ufb03": "ffi", "\ufb04": "ffl"}
+# a piece ending in fi / fl / ff (or such a ligature), a space, and the rest of the word in small letters
+_LIGATURE_GAP = re.compile(r"(?<![^\W\d_])([^\W\d_]*(?:(?i:fi|fl|ff)|[\ufb00-\ufb04])) ([a-z\u00df-\u00ff]+)(?![^\W\d_])")
+
+
+def ligature_gaps(text: str, dictionary: Dictionary) -> list[tuple[int, int, str]]:
+    """Words a PDF split right after the letters fi, fl or ff ("scientifi c", "signifi cant", "fl ow"): those are
+    often one printed sign (a ligature) and the space after it is not in the text. (start, end, the joined word)
+    where taking out the space makes a known word and the pieces are not both words ("staff of" stays)."""
+    def plain(w: str) -> str:
+        return "".join(_LIGATURE_LETTERS.get(ch, ch) for ch in w)
+
+    out = []
+    for m in _LIGATURE_GAP.finditer(text):
+        left, right = m.group(1), m.group(2)
+        joined = plain(left + right)
+        # (a piece that is only the ligature, "fl ow", is no word of its own)
+        whole = plain(left).lower() not in ("fi", "fl", "ff", "ffi", "ffl") and dictionary.known(plain(left))
+        if not dictionary.known(joined) or (whole and dictionary.known(right)):
+            continue
+        out.append((m.start(), m.end(), left + right))
+    return out
+
+
+class MistakeList:
+    """The reader's own list of mistakes that come back in their documents ("scientifi c"), stored as a plain text
+    file, one per line: the text as it appears, a tab and what it should be, or only the text (then it is marked
+    for checking, not changed)."""
+
+    def __init__(self, path: Optional[Path] = None):
+        """Load the list (empty when the file does not exist)."""
+        self.path = path or (app_data_dir() / "mistakes.txt")
+        self.entries: list[tuple[str, str]] = []
+        try:
+            for line in self.path.read_text(encoding="utf-8").splitlines():
+                wrong, _, right = line.partition("\t")
+                if wrong.strip():
+                    self.entries.append((wrong.strip(), right.strip()))
+        except OSError:
+            pass
+
+    def add(self, wrong: str, right: str = "") -> None:
+        """Add (or change) an entry and save; ``right`` empty: only mark it for checking."""
+        wrong, right = " ".join(wrong.split()), " ".join(right.split())
+        if not wrong:
+            return
+        self.entries = [e for e in self.entries if e[0].lower() != wrong.lower()] + [(wrong, right)]
+        self._save()
+
+    def remove(self, wrong: str) -> None:
+        """Take an entry out and save."""
+        self.entries = [e for e in self.entries if e[0] != wrong]
+        self._save()
+
+    def _save(self) -> None:
+        """Write the entries, one per line."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text("".join(f"{w}\t{r}\n" for w, r in self.entries), encoding="utf-8")
+
+    def find(self, text: str) -> list[tuple[int, int, str]]:
+        """Where entries appear in ``text`` as whole words, in any case: (start, end, what it should be, in the case
+        of the text found; "" for an entry that is only marked). Spaces in an entry match any run of spaces."""
+        out: list[tuple[int, int, str]] = []
+        for wrong, right in self.entries:
+            pattern = r"\s+".join(re.escape(part) for part in wrong.split())
+            for m in re.finditer(r"(?<![\w])" + pattern + r"(?![\w])", text, re.IGNORECASE):
+                if any(a < m.end() and m.start() < b for a, b, _ in out):
+                    continue
+                out.append((m.start(), m.end(), match_case(m.group(), right) if right else ""))
+        return sorted(out)
+
+
 def dehyphenator(dictionary: Dictionary):
     """Decide whether ``left-`` + ``right`` at a line break is one word."""
 

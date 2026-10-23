@@ -415,12 +415,9 @@ T: dict[str, dict[str, str]] = {
     "Detect automatically": {"nl": "Automatisch herkennen", "fr": "Détecter automatiquement",
                              "de": "Automatisch erkennen", "es": "Detectar automáticamente",
                              "it": "Rileva automaticamente"},
-    "Detect automatically (found: {language})": {
-        "nl": "Automatisch herkennen (gevonden: {language})",
-        "fr": "Détecter automatiquement (trouvé : {language})",
-        "de": "Automatisch erkennen (erkannt: {language})",
-        "es": "Detectar automáticamente (detectado: {language})",
-        "it": "Rileva automaticamente (rilevato: {language})"},
+    "Automatic: {language}": {"nl": "Automatisch: {language}", "fr": "Automatique : {language}",
+                              "de": "Automatisch: {language}", "es": "Automático: {language}",
+                              "it": "Automatico: {language}"},
     "Detected from the text of each PDF. Choose a language if the guess is wrong: it sets the dictionary for OCR, "
     "spelling fixes and rejoining split words.": {
         "nl": "Wordt herkend aan de tekst van elke pdf. Kies een taal als de gok fout is: die bepaalt het "
@@ -2022,7 +2019,6 @@ T: dict[str, dict[str, str]] = {
     # ---------------------------------------------------------------- the size of a picture (focus mode)
     "Picture size": {"nl": "Grootte van de afbeelding", "fr": "Taille de l'image", "de": "Bildgröße",
                      "es": "Tamaño de la imagen", "it": "Dimensione dell'immagine"},
-    "Smaller": {"nl": "Kleiner", "fr": "Plus petite", "de": "Kleiner", "es": "Más pequeña", "it": "Più piccola"},
     "Width of the picture, as a share of the text width": {
         "nl": "Breedte van de afbeelding, als deel van de tekstbreedte",
         "fr": "Largeur de l'image, en part de la largeur du texte",
@@ -2189,6 +2185,55 @@ T: dict[str, dict[str, str]] = {
     "Next word to check": {"nl": "Volgend woord om na te kijken", "fr": "Mot suivant à vérifier",
                            "de": "Nächstes zu prüfendes Wort", "es": "Palabra siguiente que revisar",
                            "it": "Parola successiva da controllare"},
+    "As it appears": {"nl": "Zoals het er staat", "fr": "Tel qu'il apparaît", "de": "Wie es erscheint",
+                      "es": "Tal como aparece", "it": "Come appare"},
+    "for example scientifi c": {"nl": "bijvoorbeeld scientifi c", "fr": "par exemple scientifi c",
+                                "de": "zum Beispiel scientifi c", "es": "por ejemplo scientifi c",
+                                "it": "per esempio scientifi c"},
+    "Should be": {"nl": "Moet zijn", "fr": "Devrait être", "de": "Sollte sein", "es": "Debería ser",
+                  "it": "Dovrebbe essere"},
+    "empty: only mark it": {"nl": "leeg: alleen markeren", "fr": "vide : seulement le marquer",
+                            "de": "leer: nur markieren", "es": "vacío: solo marcarlo", "it": "vuoto: solo segnalarlo"},
+    "My common mistakes": {"nl": "Mijn veelvoorkomende fouten", "fr": "Mes erreurs fréquentes",
+                           "de": "Meine häufigen Fehler", "es": "Mis errores frecuentes",
+                           "it": "I miei errori frequenti"},
+    "Mistakes that come back in your documents. With what it should be, it is corrected in every document (you can undo it in the list below); without, it is marked as a word to check. Words split after fi, fl or ff (scientifi c) are joined automatically.": {
+        "nl": "Fouten die steeds terugkomen in je documenten. Met wat het moet zijn, wordt het in elk document "
+              "verbeterd (je kunt het ongedaan maken in de lijst hieronder); zonder wordt het gemarkeerd als woord om "
+              "na te kijken. Woorden die gesplitst zijn na fi, fl of ff (scientifi c) worden automatisch "
+              "samengevoegd.",
+        "fr": "Des erreurs qui reviennent dans vos documents. Avec ce qu'il devrait être, il est corrigé dans chaque "
+              "document (vous pouvez l'annuler dans la liste ci-dessous) ; sans, il est marqué comme mot à vérifier. "
+              "Les mots coupés après fi, fl ou ff (scientifi c) sont réunis automatiquement.",
+        "de": "Fehler, die in Ihren Dokumenten immer wieder vorkommen. Mit dem, was es sein sollte, wird es in jedem "
+              "Dokument korrigiert (in der Liste unten rückgängig zu machen); ohne wird es als zu prüfendes Wort "
+              "markiert. Nach fi, fl oder ff getrennte Wörter (scientifi c) werden automatisch zusammengefügt.",
+        "es": "Errores que se repiten en sus documentos. Con lo que debería ser, se corrige en cada documento (puede "
+              "deshacerlo en la lista de abajo); sin ello, se marca como palabra que revisar. Las palabras partidas "
+              "después de fi, fl o ff (scientifi c) se unen automáticamente.",
+        "it": "Errori che si ripetono nei tuoi documenti. Con ciò che dovrebbe essere, viene corretto in ogni "
+              "documento (puoi annullarlo nell'elenco qui sotto); senza, viene segnalato come parola da controllare. "
+              "Le parole divise dopo fi, fl o ff (scientifi c) vengono unite automaticamente."},
+    "split after fi, fl or ff": {"nl": "gesplitst na fi, fl of ff", "fr": "coupé après fi, fl ou ff",
+                                 "de": "getrennt nach fi, fl oder ff", "es": "partida después de fi, fl o ff",
+                                 "it": "divisa dopo fi, fl o ff"},
+    "your list of mistakes": {"nl": "je lijst met fouten", "fr": "votre liste d'erreurs",
+                              "de": "Ihre Fehlerliste", "es": "su lista de errores", "it": "il tuo elenco di errori"},
+    "On your list of common mistakes": {"nl": "Staat op je lijst met veelvoorkomende fouten",
+                                        "fr": "Dans votre liste d'erreurs fréquentes",
+                                        "de": "Auf Ihrer Liste häufiger Fehler",
+                                        "es": "En su lista de errores frecuentes",
+                                        "it": "Nel tuo elenco di errori frequenti"},
+    "(only marked)": {"nl": "(alleen gemarkeerd)", "fr": "(seulement marqué)", "de": "(nur markiert)",
+                      "es": "(solo marcado)", "it": "(solo segnalato)"},
+    "'{word}' added to your list of mistakes.": {
+        "nl": "'{word}' toegevoegd aan je lijst met fouten.", "fr": "« {word} » ajouté à votre liste d'erreurs.",
+        "de": "„{word}“ zu Ihrer Fehlerliste hinzugefügt.", "es": "«{word}» añadido a su lista de errores.",
+        "it": "'{word}' aggiunto al tuo elenco di errori."},
+    "'{word}' removed from your dictionary.": {
+        "nl": "'{word}' verwijderd uit je woordenboek.", "fr": "« {word} » retiré de votre dictionnaire.",
+        "de": "„{word}“ aus Ihrem Wörterbuch entfernt.", "es": "«{word}» eliminado de su diccionario.",
+        "it": "'{word}' rimosso dal tuo dizionario."},
     "{n} to check": {"nl": "{n} na te kijken", "fr": "{n} à vérifier", "de": "{n} zu prüfen", "es": "{n} que revisar",
                      "it": "{n} da controllare"},
     "{k} / {n} to check": {"nl": "{k} / {n} na te kijken", "fr": "{k} / {n} à vérifier", "de": "{k} / {n} zu prüfen",
